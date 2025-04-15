@@ -9,6 +9,7 @@ class BaseTrainer:
     def __init__(self, config):
         self.config = config
         self.device = get_device()
+        print('Using device:', self.device)
         self.init_wandb()
         self.stats_collector = None
     

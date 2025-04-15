@@ -1,5 +1,7 @@
 import torchvision
 import torchvision.transforms as transforms
+import torch
+
 
 def get_mnist_dataloaders(batch_size):
     transform = transforms.Compose([
