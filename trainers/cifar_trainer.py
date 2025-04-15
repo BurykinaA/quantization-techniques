@@ -48,12 +48,15 @@ class CIFARTrainer(BaseTrainer):
             self.model = self.model.to(self.device)
             
             if self.config.quant_type == 'qat':
-                # Prepare for QAT after moving to GPU
-                self.model.train()  # Ensure training mode
+                # Set to eval mode for fusion
+                self.model.eval()
                 modules_to_fuse = self.model.modules_to_fuse()
                 self.model = torch.ao.quantization.fuse_modules(self.model, modules_to_fuse)
                 self.model.qconfig = get_qconfig_for_bitwidth(self.config.bitwidth)
+                # Prepare for QAT
                 torch.ao.quantization.prepare_qat(self.model, inplace=True)
+                # Set back to training mode
+                self.model.train()
     
     def calibrate_model(self):
         """Calibrate the model with training data for PTQ"""

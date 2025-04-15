@@ -33,13 +33,19 @@ class MNISTTrainer(BaseTrainer):
             # For QAT or no quantization, start from scratch
             self.model = resnet18(pretrained=False, num_classes=10)
             
+            # First move to GPU if available
+            self.model = self.model.to(self.device)
+            
             if self.config.quant_type == 'qat':
+                # Set to eval mode for fusion
                 self.model.eval()
                 modules_to_fuse = self.model.modules_to_fuse()
                 self.model = torch.ao.quantization.fuse_modules(self.model, modules_to_fuse)
                 self.model.qconfig = get_qconfig_for_bitwidth(self.config.bitwidth)
-                self.model.train()
+                # Prepare for QAT
                 torch.ao.quantization.prepare_qat(self.model, inplace=True)
+                # Set back to training mode
+                self.model.train()
         
         if self.config.quant_type != 'ptq':
             self.model = self.model.to(self.device) 
