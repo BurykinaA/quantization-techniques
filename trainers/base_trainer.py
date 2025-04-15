@@ -3,12 +3,14 @@ import torch.nn as nn
 import wandb
 from utils.quantization import get_qconfig_for_bitwidth, get_device
 from model.resnet import resnet18
+from utils.stats_collector import StatsCollector
 
 class BaseTrainer:
     def __init__(self, config):
         self.config = config
         self.device = get_device()
         self.init_wandb()
+        self.stats_collector = None
     
     def init_wandb(self):
         wandb.init(
@@ -44,6 +46,9 @@ class BaseTrainer:
         correct = 0
         total = 0
         
+        # Create new stats collector for this epoch
+        self.stats_collector = StatsCollector(self.model)
+        
         for batch_idx, (inputs, targets) in enumerate(self.train_loader):
             if self.config.quant_type != 'ptq':
                 inputs, targets = inputs.to(self.device), targets.to(self.device)
@@ -61,20 +66,32 @@ class BaseTrainer:
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
             
+            # Update stats collector
+            self.stats_collector.increment_batch()
+            
             if batch_idx % 100 == 0:
+                step = epoch * len(self.train_loader) + batch_idx
                 wandb.log({
                     "batch_loss": loss.item(),
                     "batch_accuracy": 100. * correct / total
-                })
+                }, step=step)
+                
+                # Log activation and weight statistics
+                self.stats_collector.log_stats(step, prefix='train/')
         
         epoch_loss = running_loss / len(self.train_loader)
         epoch_acc = 100. * correct / total
         
+        # Log epoch metrics
         wandb.log({
             "epoch": epoch,
             "train_loss": epoch_loss,
             "train_accuracy": epoch_acc
         })
+        
+        # Clean up hooks
+        if self.stats_collector:
+            self.stats_collector.remove_hooks()
         
         return epoch_loss, epoch_acc
 
@@ -87,6 +104,9 @@ class BaseTrainer:
         correct = 0
         total = 0
         
+        # Create new stats collector for evaluation
+        self.stats_collector = StatsCollector(self.model)
+        
         with torch.no_grad():
             for inputs, targets in self.test_loader:
                 if self.config.quant_type not in ['ptq', 'qat']:
@@ -96,9 +116,26 @@ class BaseTrainer:
                 _, predicted = outputs.max(1)
                 total += targets.size(0)
                 correct += predicted.eq(targets).sum().item()
+                
+                # Update stats collector
+                self.stats_collector.increment_batch()
         
         accuracy = 100. * correct / total
-        wandb.log({"test_accuracy": accuracy})
+        
+        # Log test metrics and statistics
+        wandb.log({
+            "test_accuracy": accuracy,
+            "test_total": total,
+            "test_correct": correct
+        })
+        
+        # Log final activation and weight statistics
+        self.stats_collector.log_stats(0, prefix='test/')
+        
+        # Clean up hooks
+        if self.stats_collector:
+            self.stats_collector.remove_hooks()
+        
         return accuracy
 
     def train(self):
