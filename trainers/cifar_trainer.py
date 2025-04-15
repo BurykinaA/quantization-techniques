@@ -12,7 +12,7 @@ class CIFARTrainer(BaseTrainer):
     
     def prepare_model(self):
         if self.config.quant_type == 'ptq':
-            # PTQ needs to stay on CPU
+            # PTQ needs to stay on CPU and use pretrained weights
             self.model = resnet18(pretrained=False, num_classes=10)
             
             # Load pretrained weights from local file
@@ -23,40 +23,40 @@ class CIFARTrainer(BaseTrainer):
                     "Please ensure the weights file is in the datasets directory."
                 )
             
+            # Load and adjust weights
             state_dict = torch.load(pretrained_path, map_location=self.device)
+            if 'conv1.weight' in state_dict:
+                self.model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
             
-            if 'fc.weight' in state_dict and state_dict['fc.weight'].shape[0] != 10:
-                state_dict.pop('fc.weight', None)
-                state_dict.pop('fc.bias', None)
-            
+            # Load weights
             msg = self.model.load_state_dict(state_dict, strict=False)
-            print(f"Loaded pretrained weights: {msg}")
+            print(f"Loaded pretrained weights for PTQ: {msg}")
             
-            # PTQ specific preparation
+            # PTQ preparation
             self.model.eval()
             modules_to_fuse = self.model.modules_to_fuse()
             self.model = torch.ao.quantization.fuse_modules(self.model, modules_to_fuse)
             self.model.qconfig = get_qconfig_for_bitwidth(self.config.bitwidth)
             torch.ao.quantization.prepare(self.model, inplace=True)
-            
             self.calibrate_model()
-        else:
-            # For QAT or no quantization
+        
+        elif self.config.quant_type == 'qat':
+            # For QAT, start with fresh model
             self.model = resnet18(pretrained=False, num_classes=10)
-            
-            # First move to GPU if available
             self.model = self.model.to(self.device)
             
-            if self.config.quant_type == 'qat':
-                # Set to eval mode for fusion
-                self.model.eval()
-                modules_to_fuse = self.model.modules_to_fuse()
-                self.model = torch.ao.quantization.fuse_modules(self.model, modules_to_fuse)
-                self.model.qconfig = get_qconfig_for_bitwidth(self.config.bitwidth)
-                # Prepare for QAT
-                torch.ao.quantization.prepare_qat(self.model, inplace=True)
-                # Set back to training mode
-                self.model.train()
+            # Prepare for QAT
+            self.model.eval()  # Temporarily set to eval for fusion
+            modules_to_fuse = self.model.modules_to_fuse()
+            self.model = torch.ao.quantization.fuse_modules(self.model, modules_to_fuse)
+            self.model.qconfig = get_qconfig_for_bitwidth(self.config.bitwidth)
+            torch.ao.quantization.prepare_qat(self.model, inplace=True)
+            self.model.train()  # Set back to training mode
+        
+        else:
+            # Regular training without quantization
+            self.model = resnet18(pretrained=False, num_classes=10)
+            self.model = self.model.to(self.device)
     
     def calibrate_model(self):
         """Calibrate the model with training data for PTQ"""
