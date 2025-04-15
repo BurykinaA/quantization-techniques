@@ -48,13 +48,19 @@ class MNISTTrainer(BaseTrainer):
             self.model = resnet18(pretrained=False, num_classes=10)
             self.model = self.model.to(self.device)
             
-            # Prepare for QAT
-            self.model.eval()  # Temporarily set to eval for fusion
+            # First fuse modules in eval mode
+            self.model.eval()
             modules_to_fuse = self.model.modules_to_fuse()
             self.model = torch.ao.quantization.fuse_modules(self.model, modules_to_fuse)
+            
+            # Set qconfig
             self.model.qconfig = get_qconfig_for_bitwidth(self.config.bitwidth)
+            
+            # Set to train mode BEFORE prepare_qat
+            self.model.train()
+            
+            # Prepare for QAT
             torch.ao.quantization.prepare_qat(self.model, inplace=True)
-            self.model.train()  # Set back to training mode
         
         else:
             # Regular training without quantization
