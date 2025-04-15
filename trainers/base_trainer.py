@@ -15,6 +15,7 @@ class BaseTrainer:
             print("\nWarning: Running QAT on CPU. This will be slow.")
             print("Consider using a GPU for faster training.\n")
         
+        print('Using device:', self.device)
         self.init_wandb()
         self.stats_collector = None
     
