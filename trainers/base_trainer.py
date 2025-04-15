@@ -9,6 +9,12 @@ class BaseTrainer:
     def __init__(self, config):
         self.config = config
         self.device = get_device()
+        
+        # Add device check
+        if self.config.quant_type == 'qat' and self.device.type == 'cpu':
+            print("\nWarning: Running QAT on CPU. This will be slow.")
+            print("Consider using a GPU for faster training.\n")
+        
         self.init_wandb()
         self.stats_collector = None
     
