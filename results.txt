@@ -1,0 +1,124 @@
+# =========
+# Final Test Accuracy: 80.47%
+# wandb: Waiting for W&B process to finish... (success).
+# wandb: 
+# wandb: Run history:
+# wandb: test_accuracy ▁
+# wandb:  test_correct ▁
+# wandb:    test_total ▁
+# wandb: 
+# wandb: Run summary:
+# wandb: test_accuracy 80.47
+# wandb:  test_correct 8047
+# wandb:    test_total 10000
+# wandb: 
+# wandb: 🚀 View run devout-cherry-15 at: https://wandb.ai/odu1/quantization-experiments/runs/8wyo9t2x
+# wandb: ️⚡ View job at https://wandb.ai/odu1/quantization-experiments/jobs/QXJ0aWZhY3RDb2xsZWN0aW9uOjYxMzMyMDQ3Ng==/version_details/v7
+# wandb: Synced 6 W&B file(s), 0 media file(s), 2 artifact file(s) and 0 other file(s)
+# wandb: Find logs at: ./wandb/run-20250415_121009-8wyo9t2x/logs
+# wandb: WARNING Step only supports monotonically increasing values, use define_metric to set a custom x axis. For details see: https://wandb.me/define-metric
+# wandb: WARNING (User provided step: 0 is less than current step: 1. Dropping entry: {'_timestamp': 1744719906.0660117}).
+# wandb: WARNING (User provided step: 0 is less than current step: 1. Dropping entry: {'_timestamp': 1744719906.0661676}).
+
+# === Final Results ===
+# Test Accuracy: 80.47%
+
+
+-------------
+
+
+Using device: cuda
+wandb: Currently logged in as: alina4268 (odu1). Use `wandb login --relogin` to force relogin
+wandb: wandb version 0.19.9 is available!  To upgrade, please run:
+wandb:  $ pip install wandb --upgrade
+wandb: Tracking run with wandb version 0.15.12
+wandb: Run data is saved locally in /home/coder/project/wandb/run-20250415_122521-is0qb119
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run elated-snowball-16
+wandb: ⭐️ View project at https://wandb.ai/odu1/quantization-experiments
+wandb: 🚀 View run at https://wandb.ai/odu1/quantization-experiments/runs/is0qb119
+/home/coder/.local/lib/python310-conda-cuda-torch21/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/coder/.local/lib/python310-conda-cuda-torch21/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+Loaded pretrained weights for PTQ: <All keys matched successfully>
+Final Test Accuracy: 92.09%
+wandb: Waiting for W&B process to finish... (success).
+wandb: 
+wandb: Run history:
+wandb: test_accuracy ▁
+wandb:  test_correct ▁
+wandb:    test_total ▁
+wandb: 
+wandb: Run summary:
+wandb: test_accuracy 92.09
+wandb:  test_correct 9209
+wandb:    test_total 10000
+wandb: 
+wandb: 🚀 View run elated-snowball-16 at: https://wandb.ai/odu1/quantization-experiments/runs/is0qb119
+wandb: ️⚡ View job at https://wandb.ai/odu1/quantization-experiments/jobs/QXJ0aWZhY3RDb2xsZWN0aW9uOjYxMzMyMDQ3Ng==/version_details/v7
+wandb: Synced 6 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20250415_122521-is0qb119/logs
+wandb: WARNING Step only supports monotonically increasing values, use define_metric to set a custom x axis. For details see: https://wandb.me/define-metric
+wandb: WARNING (User provided step: 0 is less than current step: 1. Dropping entry: {'_timestamp': 1744720550.5687382}).
+wandb: WARNING (User provided step: 0 is less than current step: 1. Dropping entry: {'_timestamp': 1744720550.568919}).
+
+=== Final Results ===
+Test Accuracy: 92.09%
+===================
+
+
+
+----------------------------------
+
+
+(base) coder@production-env-5f445a8838554f40a7a9358345fc7bf3:~/project$ ./run_cifar.sh
+
+=== Experiment Configuration ===
+Dataset: cifar
+Quantization: ptq
+Bitwidth: 4
+Epochs: 1
+=============================
+
+Using device: cuda
+wandb: Currently logged in as: alina4268 (odu1). Use `wandb login --relogin` to force relogin
+wandb: wandb version 0.19.9 is available!  To upgrade, please run:
+wandb:  $ pip install wandb --upgrade
+wandb: Tracking run with wandb version 0.15.12
+wandb: Run data is saved locally in /home/coder/project/wandb/run-20250415_124119-i3jhtzou
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run dulcet-moon-17
+wandb: ⭐️ View project at https://wandb.ai/odu1/quantization-experiments
+wandb: 🚀 View run at https://wandb.ai/odu1/quantization-experiments/runs/i3jhtzou
+/home/coder/.local/lib/python310-conda-cuda-torch21/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
+  warnings.warn(
+/home/coder/.local/lib/python310-conda-cuda-torch21/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=None`.
+  warnings.warn(msg)
+Loaded pretrained weights for PTQ: <All keys matched successfully>
+Final Test Accuracy: 88.19%
+wandb: Waiting for W&B process to finish... (success).
+wandb: 
+wandb: Run history:
+wandb: test_accuracy ▁
+wandb:  test_correct ▁
+wandb:    test_total ▁
+wandb: 
+wandb: Run summary:
+wandb: test_accuracy 88.19
+wandb:  test_correct 8819
+wandb:    test_total 10000
+wandb: 
+wandb: 🚀 View run dulcet-moon-17 at: https://wandb.ai/odu1/quantization-experiments/runs/i3jhtzou
+wandb: ️⚡ View job at https://wandb.ai/odu1/quantization-experiments/jobs/QXJ0aWZhY3RDb2xsZWN0aW9uOjYxMzMyMDQ3Ng==/version_details/v7
+wandb: Synced 6 W&B file(s), 0 media file(s), 0 artifact file(s) and 0 other file(s)
+wandb: Find logs at: ./wandb/run-20250415_124119-i3jhtzou/logs
+wandb: WARNING Step only supports monotonically increasing values, use define_metric to set a custom x axis. For details see: https://wandb.me/define-metric
+wandb: WARNING (User provided step: 0 is less than current step: 1. Dropping entry: {'_timestamp': 1744721282.5799706}).
+wandb: WARNING (User provided step: 0 is less than current step: 1. Dropping entry: {'_timestamp': 1744721282.5803006}).
+
+=== Final Results ===
+Test Accuracy: 88.19%
+===================
+
+
