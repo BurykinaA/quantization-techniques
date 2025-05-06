@@ -12,14 +12,14 @@ from ADC.train_utils import train_model
 
 def run_experiment():
     # --- Configuration ---
-    num_epochs_exp = 5  # Adjust as needed
-    batch_size_train = 64
-    batch_size_test = 1000
+    num_epochs_exp = 20  # Adjust as needed
+    batch_size_train = 1024
+    batch_size_test = 1024
     learning_rate = 0.001
 
     # Quantization parameters
-    bx_val = 4
-    bw_val = 4
+    bx_val = 8
+    bw_val = 8
     ba_val = 8  # For ADC
     k_val = 4   # For ADC
 

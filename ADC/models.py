@@ -1,7 +1,7 @@
 from torch import nn
 from ADC.quantized_layers import LinearADC, LinearQuant
 
-# Original MLP (Full Precision or for general use)
+
 class MLP(nn.Module):
     def __init__(self):
         super(MLP, self).__init__()
@@ -16,6 +16,7 @@ class MLP(nn.Module):
     def forward(self, x):
         x = x.view(x.size(0), -1)
         return self.layers(x) 
+
 
 class MLPADC(nn.Module):
     def __init__(self, bx=8, bw=8, ba=8, k=4):
@@ -32,6 +33,7 @@ class MLPADC(nn.Module):
         x = x.view(x.size(0), -1) 
         return self.layers(x)
     
+
 class MLPQuant(nn.Module):
     def __init__(self, bx=8, bw=8):
         super(MLPQuant, self).__init__()
