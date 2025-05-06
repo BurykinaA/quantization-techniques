@@ -23,7 +23,7 @@ def run_experiment():
     bw_val = 8
     ba_val = 8  # For ADC
     k_val = 4   # For ADC
-    lambda_k_val = 0.001 # Coefficient for Kurtosis penalty
+    lambda_k_val = 0.0005 # Coefficient for Kurtosis penalty
     ashift_mode = True # For MLPADCAshift experiments
 
     # Setup device
