@@ -118,32 +118,95 @@ def run_experiment():
     
     print(f"\nExperiment results saved to: {csv_filename}")
 
-    # --- Plotting Loss Curves ---
-    plt.figure(figsize=(12, 8))
+    # --- Plotting Section ---
     epochs_range = range(1, num_epochs_exp + 1)
+    
+    # Define colors for consistency
+    colors = {
+        "MLP": "blue",
+        "MLPADC": "green",
+        "MLPQuant": "red"
+    }
+
+    # --- Plot 1: Individual Accuracy Plots ---
+    model_data_for_plotting = {
+        "MLP (Baseline)": (train_accs_mlp, test_accs_mlp, colors["MLP"], "N/A"),
+        f"MLPADC (bx={bx_val},bw={bw_val},ba={ba_val},k={k_val})": (train_accs_adc, test_accs_adc, colors["MLPADC"], f"bx={bx_val},bw={bw_val},ba={ba_val},k={k_val}"),
+        f"MLPQuant (bx={bx_val},bw={bw_val})": (train_accs_quant, test_accs_quant, colors["MLPQuant"], f"bx={bx_val},bw={bw_val}")
+    }
+
+    for model_name_full, (train_accs, test_accs, color, params_str_short) in model_data_for_plotting.items():
+        if train_accs and test_accs:
+            plt.figure(figsize=(10, 6))
+            plt.plot(epochs_range, train_accs, label=f'{model_name_full} Train Accuracy', linestyle='-', marker='o', color=color)
+            plt.plot(epochs_range, test_accs, label=f'{model_name_full} Test Accuracy', linestyle='--', color=color)
+            plt.title(f'Accuracy vs. Epochs - {model_name_full}')
+            plt.xlabel('Epoch')
+            plt.ylabel('Accuracy (%)')
+            plt.legend()
+            plt.grid(True)
+            # Sanitize model_name_full for filename
+            safe_model_name = model_name_full.replace(" ", "_").replace("(", "").replace(")", "").replace("=", "").replace(",", "")
+            individual_plot_filename = f'./results/accuracy_{safe_model_name}_{timestamp}.png'
+            plt.savefig(individual_plot_filename)
+            print(f"Individual accuracy plot saved to: {individual_plot_filename}")
+            plt.close() # Close the figure to free memory
+
+    # --- Plot 2: Combined Accuracy Comparison Plot ---
+    plt.figure(figsize=(14, 9))
+    
+    # MLP Accuracy
+    if train_accs_mlp and test_accs_mlp:
+        plt.plot(epochs_range, train_accs_mlp, label='MLP Train Accuracy', linestyle='-', marker='o', color=colors["MLP"])
+        plt.plot(epochs_range, test_accs_mlp, label='MLP Test Accuracy', linestyle='--', color=colors["MLP"])
+
+    # MLPADC Accuracy
+    if train_accs_adc and test_accs_adc:
+        plt.plot(epochs_range, train_accs_adc, label=f'MLPADC ({bx_val},{bw_val},{ba_val},{k_val}) Train Accuracy', linestyle='-', marker='s', color=colors["MLPADC"])
+        plt.plot(epochs_range, test_accs_adc, label=f'MLPADC ({bx_val},{bw_val},{ba_val},{k_val}) Test Accuracy', linestyle='--', color=colors["MLPADC"])
+
+    # MLPQuant Accuracy
+    if train_accs_quant and test_accs_quant:
+        plt.plot(epochs_range, train_accs_quant, label=f'MLPQuant ({bx_val},{bw_val}) Train Accuracy', linestyle='-', marker='d', color=colors["MLPQuant"])
+        plt.plot(epochs_range, test_accs_quant, label=f'MLPQuant ({bx_val},{bw_val}) Test Accuracy', linestyle='--', color=colors["MLPQuant"])
+        
+    plt.title('Model Accuracy Comparison')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy (%)')
+    plt.legend()
+    plt.grid(True)
+    comparison_plot_filename = f'./results/accuracy_comparison_all_models_{timestamp}.png'
+    plt.savefig(comparison_plot_filename)
+    print(f"Combined accuracy plot saved to: {comparison_plot_filename}")
+    plt.close()
+
+    # --- Plot 3: Combined Loss Curves (Kept from previous version) ---
+    loss_plot_filename = f'./results/loss_curves_{timestamp}.png' # Ensure this filename is defined earlier or use a new one
+    plt.figure(figsize=(12, 8))
 
     # MLP Losses
     if train_losses_mlp and test_losses_mlp:
-        plt.plot(epochs_range, train_losses_mlp, label='MLP Train Loss', linestyle='-', marker='o')
-        plt.plot(epochs_range, test_losses_mlp, label='MLP Test Loss', linestyle='--', marker='x')
+        plt.plot(epochs_range, train_losses_mlp, label='MLP Train Loss', linestyle='-', marker='o', color=colors["MLP"])
+        plt.plot(epochs_range, test_losses_mlp, label='MLP Test Loss', linestyle='--', marker='x', color=colors["MLP"])
 
     # MLPADC Losses
     if train_losses_adc and test_losses_adc:
-        plt.plot(epochs_range, train_losses_adc, label=f'MLPADC ({bx_val},{bw_val},{ba_val},{k_val}) Train Loss', linestyle='-', marker='s')
-        plt.plot(epochs_range, test_losses_adc, label=f'MLPADC ({bx_val},{bw_val},{ba_val},{k_val}) Test Loss', linestyle='--', marker='^')
+        plt.plot(epochs_range, train_losses_adc, label=f'MLPADC ({bx_val},{bw_val},{ba_val},{k_val}) Train Loss', linestyle='-', marker='s', color=colors["MLPADC"])
+        plt.plot(epochs_range, test_losses_adc, label=f'MLPADC ({bx_val},{bw_val},{ba_val},{k_val}) Test Loss', linestyle='--', marker='^', color=colors["MLPADC"])
 
     # MLPQuant Losses
     if train_losses_quant and test_losses_quant:
-        plt.plot(epochs_range, train_losses_quant, label=f'MLPQuant ({bx_val},{bw_val}) Train Loss', linestyle='-', marker='d')
-        plt.plot(epochs_range, test_losses_quant, label=f'MLPQuant ({bx_val},{bw_val}) Test Loss', linestyle='--', marker='+')
+        plt.plot(epochs_range, train_losses_quant, label=f'MLPQuant ({bx_val},{bw_val}) Train Loss', linestyle='-', marker='d', color=colors["MLPQuant"])
+        plt.plot(epochs_range, test_losses_quant, label=f'MLPQuant ({bx_val},{bw_val}) Test Loss', linestyle='--', marker='+', color=colors["MLPQuant"])
         
-    plt.title('Model Loss Curves')
+    plt.title('Model Loss Curves Comparison')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.legend()
     plt.grid(True)
-    plt.savefig(plot_filename)
-    print(f"Loss curves plot saved to: {plot_filename}")
+    plt.savefig(loss_plot_filename)
+    print(f"Loss curves plot saved to: {loss_plot_filename}")
+    plt.close() # Close the figure
     # plt.show() # Uncomment to display the plot
 
 if __name__ == '__main__':
