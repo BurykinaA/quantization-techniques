@@ -31,7 +31,7 @@ def calibrate_model(model, calib_loader, device):
     model.eval() # Set back to eval mode or train() will be called by the main loop again
 
 
-def train_model(model, optimizer, train_loader, test_loader, criterion, device, num_epochs=20, model_name="Model", calib_loader=None):
+def train_model(model, optimizer, train_loader, test_loader, criterion, device, num_epochs=20, model_name="Model", calib_loader=None, lambda_kurtosis=0.0):
     train_losses = []
     train_accuracies = []
     test_losses = []
@@ -75,7 +75,23 @@ def train_model(model, optimizer, train_loader, test_loader, criterion, device, 
 
             optimizer.zero_grad()
             outputs = model(inputs)
-            loss = criterion(outputs, labels)
+
+            # Add kurtosis penalty if lambda_kurtosis is set
+            if lambda_kurtosis > 0:
+                kurtosis_penalty = 0.0
+                for name, param in model.named_parameters():
+                    if param.requires_grad and param.dim() > 1: # Apply to weight tensors (e.g., fc.weight)
+                        W = param
+                        mu_W = torch.mean(W)
+                        sigma_W = torch.std(W)
+                        if sigma_W > 1e-5: # Avoid division by zero or very small std
+                            kappa_l = torch.mean(torch.pow((W - mu_W) / sigma_W, 4))
+                            kurtosis_penalty += kappa_l
+                loss = criterion(outputs, labels)
+                loss += lambda_kurtosis * kurtosis_penalty
+            else:
+                loss = criterion(outputs, labels)
+
             loss.backward()
             optimizer.step()
 

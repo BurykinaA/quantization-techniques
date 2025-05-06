@@ -1,5 +1,5 @@
 from torch import nn
-from ADC.quantized_layers import LinearADC, LinearQuant
+from ADC.quantized_layers import LinearADC, LinearQuant, LinearADCAshift
 
 
 class MLP(nn.Module):
@@ -33,6 +33,22 @@ class MLPADC(nn.Module):
         x = x.view(x.size(0), -1) 
         return self.layers(x)
     
+
+class MLPADCAshift(nn.Module):
+    def __init__(self, bx=8, bw=8, ba=8, k=4, ashift_enabled=True):
+        super(MLPADCAshift, self).__init__()
+        self.layers = nn.Sequential(
+            LinearADCAshift(784, 256, bx, bw, ba, k, ashift_enabled=ashift_enabled),
+            nn.ReLU(),
+            LinearADCAshift(256, 128, bx, bw, ba, k, ashift_enabled=ashift_enabled),
+            nn.ReLU(),
+            LinearADCAshift(128, 10, bx, bw, ba, k, ashift_enabled=ashift_enabled)
+        )
+
+    def forward(self, x):
+        x = x.view(x.size(0), -1) 
+        return self.layers(x)
+
 
 class MLPQuant(nn.Module):
     def __init__(self, bx=8, bw=8):

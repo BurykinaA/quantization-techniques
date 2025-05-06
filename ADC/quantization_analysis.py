@@ -5,6 +5,7 @@ import numpy as np
 import os
 from ADC.ste import ste_round, ste_floor # Import from your ste.py
 from ADC.quantizers import ADCQuantizer, ADCQuantizerAshift
+from scipy.stats import laplace # For Laplace distribution
 
 
 def quantize_uniform_core(x, n_bits, round_fn, data_min_val, data_max_val):
@@ -50,25 +51,76 @@ def quantize_elementwise(data, n_bits, quant_type, round_fn):
     return quantize_uniform_core(data, n_bits, round_fn, min_val, max_val)
 
 
-def generate_normal_data(num_samples, mean=0.0, std=0.1):
-    return torch.randn(num_samples) * std + mean, f"Normal (μ={mean:.2f}, σ={std:.2f})"
+def generate_normal_data_for_weights(num_samples, mean=0.0, std=0.05): # Renamed for clarity
+    return torch.randn(num_samples) * std + mean, f"Normal Weights (μ={mean:.2f}, σ={std:.2f})"
 
-def generate_exponential_data(num_samples, rate=1.0):
-    return torch.distributions.Exponential(rate).sample((num_samples,)), f"Exponential (rate={rate:.1f})"
+def generate_laplace_data_for_weights(num_samples, loc=0.0, scale=0.03): # scale is b for Laplace
+    # Scale chosen to have a somewhat comparable spread to normal std=0.05
+    # Variance of Laplace is 2*scale^2. Std dev = sqrt(2)*scale.
+    # For std_dev ~ 0.05, sqrt(2)*scale = 0.05 => scale = 0.05/sqrt(2) ~ 0.035
+    return torch.tensor(laplace.rvs(loc=loc, scale=scale, size=num_samples), dtype=torch.float32), \
+           f"Laplace Weights (loc={loc:.2f}, scale={scale:.3f})"
+
+def generate_clipped_sum_normals_data_for_weights(num_samples, 
+                                                 mean1=-0.05, std1=0.03, 
+                                                 mean2=0.05, std2=0.03, 
+                                                 clip_std_factor=1.5):
+    n_half = num_samples // 2
+    dist1 = torch.randn(n_half) * std1 + mean1
+    dist2 = torch.randn(num_samples - n_half) * std2 + mean2
+    
+    # Clip tails
+    clip_min1, clip_max1 = mean1 - clip_std_factor * std1, mean1 + clip_std_factor * std1
+    clip_min2, clip_max2 = mean2 - clip_std_factor * std2, mean2 + clip_std_factor * std2
+    
+    dist1_clipped = torch.clamp(dist1, clip_min1, clip_max1)
+    dist2_clipped = torch.clamp(dist2, clip_min2, clip_max2)
+    
+    # For sum, we can take samples from each and sum, or just create a mixed distribution
+    # The description implies "sum of 2 normal that after the sum will not have their left and right tails"
+    # This interpretation is a bit ambiguous. Let's create a bimodal-like distribution by concatenating
+    # two normals that are themselves somewhat "flattened" by clipping, or more directly,
+    # a sum that results in a flatter top.
+    # A simpler approach to get a "flatter" distribution is to reduce kurtosis.
+    # For this example, let's try a sum that might spread out.
+    # Or, to ensure no extreme tails after sum, we could sum and then clip the sum.
+    # Let's try a bimodal by concatenation of two slightly offset distributions,
+    # which might not be exactly "sum of 2 normals" but achieves a flatter, wider shape.
+    # Re-interpreting: "sum of 2 normal that after the sum will not have their left and right tails"
+    # This could mean (N1_clipped + N2_clipped) / 2 or similar.
+    # For simplicity and to ensure a different shape: let's try a mixture.
+    
+    # Alternative interpretation for "sum of 2 normal that after the sum will not have their left and right tails"
+    # Generate N(0, sigma_base), then transform it to be flatter.
+    # For now, let's make a bimodal by concatenating two slightly offset distributions.
+    # This aims for a distribution with more mass at the edges of a central region.
+    offset = 0.06
+    std_base = 0.02
+    w1 = torch.randn(n_half) * std_base - offset
+    w2 = torch.randn(num_samples - n_half) * std_base + offset
+    weights = torch.cat((w1, w2))
+    # Further clip the combined distribution to ensure no extreme tails after forming bimodal
+    final_clip_val = offset + 2.5 * std_base
+    weights = torch.clamp(weights, -final_clip_val, final_clip_val)
+
+    return weights, f"Bimodal-like Weights (No extreme tails)"
 
 
-def run_product_quantization_comparison(bw=4, bx=4, ba=8, k_adc=4, num_samples=10000):
-    print(f"\n--- Product Quantization Comparison ---")
+def generate_exponential_data_for_activations(num_samples, rate=1.0): # Renamed for clarity
+    return torch.distributions.Exponential(rate).sample((num_samples,)), f"Exponential Activations (rate={rate:.1f})"
+
+# --- Main Analysis Function ---
+def run_product_quantization_comparison(w_generator_fn, bw=4, bx=4, ba=8, k_adc=4, num_samples=10000, plot_suffix=""):
+    print(f"\n--- Product Quantization Comparison ({plot_suffix.replace('_', ' ')}) ---")
     print(f"Params: w_bits={bw}, x_bits={bx}, final_product_bits={ba}, adc_k={k_adc}, Samples={num_samples}")
 
-    w_orig, w_dist_name = generate_normal_data(num_samples, std=0.05)
-    x_orig, x_dist_name = generate_exponential_data(num_samples, rate=0.5) # Mean = 2
+    w_orig, w_dist_name = w_generator_fn(num_samples)
+    x_orig, x_dist_name = generate_exponential_data_for_activations(num_samples, rate=0.5) # Mean = 2
 
     # --- Method 1: Standard Quantization of Product ---
     w_std_dequant_for_prod, _ = quantize_elementwise(w_orig, n_bits=bw, quant_type='symmetric', round_fn=torch.round)
     x_std_dequant_for_prod, _ = quantize_elementwise(x_orig, n_bits=bx, quant_type='affine', round_fn=torch.round)
     product_for_std_quant = w_std_dequant_for_prod * x_std_dequant_for_prod
-    # Quantize the product itself to 'ba' bits using affine quantization and standard round
     _, product_std_quant_levels = quantize_elementwise(product_for_std_quant, n_bits=ba, quant_type='affine', round_fn=torch.round)
 
     # --- Method 2: ADC-Style (STE-Floor for w,x pre-quant), Original ADCQuantizer ---
@@ -86,29 +138,25 @@ def run_product_quantization_comparison(bw=4, bx=4, ba=8, k_adc=4, num_samples=1
     adc_orig_round_output_levels = adc_module_orig_round(product_input_to_adc_round)
     
     # --- Method 4: ADC-Ashift-Style (STE-Round for w,x pre-quant), ADCQuantizerAshift ---
-    # Use w_round_inter_dequant and x_round_inter_dequant (calculated for Method 3)
-    # product_input_to_adc_ashift_round is the same as product_input_to_adc_round
     adc_module_ashift_round = ADCQuantizerAshift(M=1, bx=bx, bw=bw, ba=ba, k=k_adc, ashift_enabled=True)
-    adc_ashift_round_output_levels = adc_module_ashift_round(product_input_to_adc_round) # Use product from STE-Round inputs
+    adc_ashift_round_output_levels = adc_module_ashift_round(product_input_to_adc_round) 
     
     print("\n  --- Product Bin Counts (all target 'ba' bits) ---")
     print(f"    Standard Product Quant (affine, round) bins: {len(torch.unique(product_std_quant_levels))}")
     print(f"    Orig. ADC (pre w,x STE-Floor) bins: {len(torch.unique(adc_orig_floor_output_levels))}")
     print(f"    Orig. ADC (pre w,x STE-Round) bins: {len(torch.unique(adc_orig_round_output_levels))}")
-    print(f"    Ashift ADC (pre w,x STE-Round) bins: {len(torch.unique(adc_ashift_round_output_levels))}") # Updated name
+    print(f"    Ashift ADC (pre w,x STE-Round) bins: {len(torch.unique(adc_ashift_round_output_levels))}")
     print(f"  --- Intermediate Quantized W/X Bin Counts ---")
-    print(f"    Intermediate W (symm, STE-Floor, {bw}-bit) bins: {len(torch.unique(w_floor_inter_levels))}") # For context for method 2
-    print(f"    Intermediate X (aff, STE-Floor, {bx}-bit) bins: {len(torch.unique(x_floor_inter_levels))}") # For context for method 2
-    print(f"    Intermediate W (symm, STE-Round, {bw}-bit) bins: {len(torch.unique(w_round_inter_levels))}") # For context for methods 3 & 4
-    print(f"    Intermediate X (aff, STE-Round, {bx}-bit) bins: {len(torch.unique(x_round_inter_levels))}") # For context for methods 3 & 4
+    print(f"    Intermediate W (symm, STE-Floor, {bw}-bit) bins: {len(torch.unique(w_floor_inter_levels))}")
+    print(f"    Intermediate X (aff, STE-Floor, {bx}-bit) bins: {len(torch.unique(x_floor_inter_levels))}")
+    print(f"    Intermediate W (symm, STE-Round, {bw}-bit) bins: {len(torch.unique(w_round_inter_levels))}")
+    print(f"    Intermediate X (aff, STE-Round, {bx}-bit) bins: {len(torch.unique(x_round_inter_levels))}")
 
-    # --- Visualization ---
     fig, axes = plt.subplots(4, 3, figsize=(20, 20)) 
-    title_str = (f"Product Quantization Bin Comparison ({ba}-bit output)\n"
+    title_str = (f"Product Quantization ({plot_suffix.replace('_', ' ')}) ({ba}-bit output)\n"
                  f"Inputs: w ({bw}b-symm), x ({bx}b-aff). ADC M=1, k={k_adc}")
     fig.suptitle(title_str, fontsize=15)
 
-    # Row 0: Originals 
     axes[0, 0].hist(w_orig.cpu().numpy(), bins=100, color='gray', alpha=0.7, density=True)
     axes[0, 0].set_title(f"Original W ({w_dist_name})")
     axes[0, 0].grid(True)
@@ -118,7 +166,6 @@ def run_product_quantization_comparison(bw=4, bx=4, ba=8, k_adc=4, num_samples=1
     axes[0, 1].grid(True)
     axes[0, 2].axis('off') 
 
-    # Helper for plotting levels (bins)
     def plot_levels(ax, levels_data, title, color, is_dequant_plot=False):
         unique_vals, counts = torch.unique(levels_data, return_counts=True)
         bar_width = 0.8 
@@ -143,20 +190,16 @@ def run_product_quantization_comparison(bw=4, bx=4, ba=8, k_adc=4, num_samples=1
         ax.set_ylabel("Normalized Freq. / Density")
         ax.grid(True)
 
-    # Row 1: Intermediately Quantized W, X (using STE-Round for ADC Ashift path example) 
     plot_levels(axes[1, 0], w_round_inter_dequant, f"Intermed. Quant W ({bw}b, STE-Round)\n(Dequantized)", 'darkslateblue', is_dequant_plot=True)
     plot_levels(axes[1, 1], x_round_inter_dequant, f"Intermed. Quant X ({bx}b, STE-Round)\n(Dequantized)", 'seagreen', is_dequant_plot=True)
     axes[1, 2].axis('off')
 
-
-    # Row 2: Product Quantized Levels (Bins) - Part 1
     plot_levels(axes[2, 0], product_std_quant_levels, f"Std. Product Quant Levels ({ba}-bit)\n(Affine, torch.round)", 'purple')
     plot_levels(axes[2, 1], adc_orig_floor_output_levels, f"Orig. ADC Output ({ba}-bit)\n(Pre w,x STE-Floor)", 'teal')
     axes[2, 2].axis('off') 
 
-    # Row 3: Product Quantized Levels (Bins) - Part 2
     plot_levels(axes[3, 0], adc_orig_round_output_levels, f"Orig. ADC Output ({ba}-bit)\n(Pre w,x STE-Round)", 'orangered')
-    plot_levels(axes[3, 1], adc_ashift_round_output_levels, f"Ashift ADC Output ({ba}-bit)\n(Pre w,x STE-Round)", 'saddlebrown') # Updated title
+    plot_levels(axes[3, 1], adc_ashift_round_output_levels, f"Ashift ADC Output ({ba}-bit)\n(Pre w,x STE-Round)", 'saddlebrown') 
     axes[3, 2].axis('off')
     
     for ax_row in axes:
@@ -166,10 +209,24 @@ def run_product_quantization_comparison(bw=4, bx=4, ba=8, k_adc=4, num_samples=1
     plt.tight_layout(rect=[0, 0, 1, 0.92]) 
     output_dir = os.path.join("ADC", "analysis_results")
     os.makedirs(output_dir, exist_ok=True)
-    plot_filename = os.path.join(output_dir, f"product_quant_compare_w{bw}x{bx}_out{ba}_k{k_adc}.png")
+    # Include plot_suffix in filename
+    filename_core = f"product_quant_compare_w{bw}x{bx}_out{ba}_k{k_adc}"
+    plot_filename = os.path.join(output_dir, f"{filename_core}{plot_suffix}.png")
     plt.savefig(plot_filename)
     print(f"\nPlot saved to {plot_filename}")
     plt.close()
+
+
+if __name__ == '__main__':
+    common_params = {'bw': 4, 'bx': 4, 'ba': 8, 'k_adc': 4, 'num_samples': 10000}
+    
+    run_product_quantization_comparison(generate_normal_data_for_weights, **common_params, plot_suffix="_normal_weights")
+    run_product_quantization_comparison(generate_laplace_data_for_weights, **common_params, plot_suffix="_laplace_weights")
+    run_product_quantization_comparison(generate_clipped_sum_normals_data_for_weights, **common_params, plot_suffix="_bimodal_weights")
+    
+    # Example with different bitwidths
+    # common_params_lowbit = {'bw': 3, 'bx': 3, 'ba': 4, 'k_adc': 2, 'num_samples': 10000}
+    # run_product_quantization_comparison(generate_normal_data_for_weights, **common_params_lowbit, plot_suffix="_normal_weights_lowbit")
 
 
     
