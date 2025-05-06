@@ -1,3 +1,24 @@
+# --------------------------------------------------------------
+# Основные функции:
+#
+# - load_activations(layer_name, stats_dir) — загружает активации слоя из .npy-файла
+# - get_all_layer_names(stats_dir) — возвращает список имён всех слоёв по .npy-файлам
+# - filter_layers_by_type(layer_names, layer_type) — фильтрует имена слоёв по типу (conv, bn, relu, pool, linear)
+# - summarize_layer_types(stats_dir) — возвращает словарь с группировкой слоёв по типу
+#
+# Визуализация:
+#
+# - plot_histogram(layer_name, stats_dir, nbins, percentile) — строит гистограмму значений активаций (с возможной раскраской хвостов)
+# - plot_channel_boxplot(layer_name, stats_dir, max_channels) — boxplot значений по каналам (только для Conv2d)
+# - plot_channel_stats(layer_name, stats_dir) — график среднего и стандартного отклонения по каналам (Conv2d)
+#
+# Анализ:
+#
+# - compute_sparsity(layer_name, stats_dir, eps) — вычисляет долю почти нулевых значений (по каналам или суммарно)
+# --------------------------------------------------------------
+
+
+
 import os
 import numpy as np
 import plotly.graph_objects as go
