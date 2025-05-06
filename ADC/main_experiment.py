@@ -3,6 +3,9 @@ import torch.optim as optim
 from torch import nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
+import csv
+import os
+from datetime import datetime
 
 from ADC.models import MLPADC, MLPQuant # Assuming MLP is not part of this specific experiment comparison
 from ADC.train_utils import train_model
@@ -64,27 +67,44 @@ def run_experiment():
         calib_loader=train_loader # Pass train_loader for calibration phase
     )
 
-    # --- Results Logging ---
-    print("\n\n--- Experiment Results ---")
-    print(f"Parameters: bx={bx_val}, bw={bw_val}, ba={ba_val} (ADC), k={k_val} (ADC), Epochs={num_epochs_exp}")
-
-    if test_accs_adc:
-        print("\nMLPADC Performance:")
-        print(f"  Final Train Accuracy: {train_accs_adc[-1]:.2f}%")
-        print(f"  Final Test Accuracy:  {test_accs_adc[-1]:.2f}%")
-        print(f"  Final Train Loss:     {train_losses_adc[-1]:.4f}")
-        print(f"  Final Test Loss:      {test_losses_adc[-1]:.4f}")
-    else:
-        print("\nMLPADC Performance: No results recorded.")
+    # --- Results Logging to CSV ---
+    # Create results directory if it doesn't exist
+    os.makedirs('./results', exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_filename = f'./results/experiment_results_{timestamp}.csv'
+    
+    with open(csv_filename, 'w', newline='') as csvfile:
+        csvwriter = csv.writer(csvfile)
+        # Write header
+        csvwriter.writerow(['Model', 'Parameters', 'Train Accuracy', 'Test Accuracy', 'Train Loss', 'Test Loss'])
         
-    if test_accs_quant:
-        print("\nMLPQuant (Standard Quantization) Performance:")
-        print(f"  Final Train Accuracy: {train_accs_quant[-1]:.2f}%")
-        print(f"  Final Test Accuracy:  {test_accs_quant[-1]:.2f}%")
-        print(f"  Final Train Loss:     {train_losses_quant[-1]:.4f}")
-        print(f"  Final Test Loss:      {test_losses_quant[-1]:.4f}")
-    else:
-        print("\nMLPQuant Performance: No results recorded.")
+        # Write MLPADC results
+        if test_accs_adc:
+            csvwriter.writerow([
+                'MLPADC', 
+                f'bx={bx_val}, bw={bw_val}, ba={ba_val}, k={k_val}, Epochs={num_epochs_exp}',
+                f'{train_accs_adc[-1]:.2f}%',
+                f'{test_accs_adc[-1]:.2f}%',
+                f'{train_losses_adc[-1]:.4f}',
+                f'{test_losses_adc[-1]:.4f}'
+            ])
+        else:
+            csvwriter.writerow(['MLPADC', f'bx={bx_val}, bw={bw_val}, ba={ba_val}, k={k_val}, Epochs={num_epochs_exp}', 'No results', 'No results', 'No results', 'No results'])
+        
+        # Write MLPQuant results
+        if test_accs_quant:
+            csvwriter.writerow([
+                'MLPQuant',
+                f'bx={bx_val}, bw={bw_val}, Epochs={num_epochs_exp}',
+                f'{train_accs_quant[-1]:.2f}%',
+                f'{test_losses_quant[-1]:.4f}',
+                f'{test_accs_quant[-1]:.2f}%',
+                f'{train_losses_quant[-1]:.4f}'
+            ])
+        else:
+            csvwriter.writerow(['MLPQuant', f'bx={bx_val}, bw={bw_val}, Epochs={num_epochs_exp}', 'No results', 'No results', 'No results', 'No results'])
+    
+    print(f"\nExperiment results saved to: {csv_filename}")
 
 if __name__ == '__main__':
     run_experiment()
