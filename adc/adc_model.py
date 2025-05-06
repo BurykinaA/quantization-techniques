@@ -25,8 +25,7 @@ class ADCNoiseModel(BaseDriftNoiseModel):
         
         # Compute ADC step size (delta)
         max_value = self.M * (2**self.bx - 1) * (2**self.bw - 1)
-        self.delta = max_value / (2**self.ba - 1)
-        
+        self.delta = max_value / ((2**self.ba - 1) * self.k)        
         # Simulate ADC quantization
         output = hidden_states.matmul(weights.t())
         if bias is not None:
