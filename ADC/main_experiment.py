@@ -25,7 +25,7 @@ def run_experiment():
     bw_val = 8
     ba_val = 8  # For ADC
     k_val = 4   # For ADC
-    lambda_k_val = 0.0005 # Coefficient for Kurtosis penalty
+    lambda_k_val = 0.001 # Coefficient for Kurtosis penalty
     ashift_mode = True # For MLPADCAshift experiments
 
     # Setup device
@@ -88,7 +88,7 @@ def run_experiment():
     torch.save(model_adc.state_dict(), adc_weights_filename)
     print(f"Saved {adc_model_name} weights to: {adc_weights_filename}")
 
-    # # --- Experiment with MLPQuant (Standard Quantization) ---
+    # --- Experiment with MLPQuant (Standard Quantization) ---
     print("\n--- Experiment with MLPQuant (Standard Quantization) ---")
     model_quant = MLPQuant(bx=bx_val, bw=bw_val)
     optimizer_quant = optim.Adam(model_quant.parameters(), lr=learning_rate)
@@ -104,7 +104,7 @@ def run_experiment():
     torch.save(model_quant.state_dict(), quant_weights_filename)
     print(f"Saved {quant_model_name} weights to: {quant_weights_filename}")
 
-    # # --- Experiment with MLPADC + Weight Reshaping ---
+    # --- Experiment with MLPADC + Weight Reshaping ---
     print("\n--- Experiment with MLPADC + Weight Reshaping ---")
     model_w_reshape = MLPADC(bx=bx_val, bw=bw_val, ba=ba_val, k=k_val) 
     optimizer_w_reshape = optim.Adam(model_w_reshape.parameters(), lr=learning_rate)
@@ -121,7 +121,7 @@ def run_experiment():
     torch.save(model_w_reshape.state_dict(), adc_wr_weights_filename)
     print(f"Saved {adc_wr_model_name} weights to: {adc_wr_weights_filename}")
 
-    # # --- Experiment with MLPADCAshift ---
+    # --- Experiment with MLPADCAshift ---
     print("\n--- Experiment with MLPADCAshift ---")
     model_adc_ashift = MLPADCAshift(bx=bx_val, bw=bw_val, ba=ba_val, k=k_val, ashift_enabled=ashift_mode)
     optimizer_adc_ashift = optim.Adam(model_adc_ashift.parameters(), lr=learning_rate)
@@ -137,7 +137,7 @@ def run_experiment():
     torch.save(model_adc_ashift.state_dict(), ashift_weights_filename)
     print(f"Saved {ashift_model_name} weights to: {ashift_weights_filename}")
 
-    # # --- Experiment with MLPADCAshift + Weight Reshaping ---
+    # --- Experiment with MLPADCAshift + Weight Reshaping ---
     print("\n--- Experiment with MLPADCAshift + Weight Reshaping ---")
     model_adc_ashift_wr = MLPADCAshift(bx=bx_val, bw=bw_val, ba=ba_val, k=k_val, ashift_enabled=ashift_mode)
     optimizer_adc_ashift_wr = optim.Adam(model_adc_ashift_wr.parameters(), lr=learning_rate)
