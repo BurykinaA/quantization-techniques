@@ -11,6 +11,8 @@ import matplotlib.pyplot as plt
 from ADC.models import MLP, MLPADC, MLPQuant, MLPADCAshift # Assuming MLP is not part of this specific experiment comparison
 from ADC.train_utils import train_model
 
+RESULTS_DIR = './results_experiment' # Define the constant for the results directory
+
 def run_experiment():
     # --- Configuration ---
     num_epochs_exp = 20  # Adjust as needed
@@ -47,7 +49,7 @@ def run_experiment():
     criterion = nn.CrossEntropyLoss()
 
     # Create results directory if it doesn't exist (moved earlier for weight saving)
-    os.makedirs('./results', exist_ok=True)
+    os.makedirs(RESULTS_DIR, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # Helper function to sanitize model names for filenames
@@ -66,7 +68,7 @@ def run_experiment():
         model_name=mlp_model_name,
         # No calib_loader needed for baseline MLP
     )
-    mlp_weights_filename = f'./results/model_{sanitize_filename(mlp_model_name)}_weights_{timestamp}.pth'
+    mlp_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(mlp_model_name)}_weights_{timestamp}.pth'
     torch.save(model_mlp.state_dict(), mlp_weights_filename)
     print(f"Saved {mlp_model_name} weights to: {mlp_weights_filename}")
 
@@ -82,7 +84,7 @@ def run_experiment():
         model_name=adc_model_name,
         calib_loader=train_loader # Pass train_loader for calibration phase
     )
-    adc_weights_filename = f'./results/model_{sanitize_filename(adc_model_name)}_weights_{timestamp}.pth'
+    adc_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(adc_model_name)}_weights_{timestamp}.pth'
     torch.save(model_adc.state_dict(), adc_weights_filename)
     print(f"Saved {adc_model_name} weights to: {adc_weights_filename}")
 
@@ -98,7 +100,7 @@ def run_experiment():
         model_name=quant_model_name,
         calib_loader=train_loader # Pass train_loader for calibration phase
     )
-    quant_weights_filename = f'./results/model_{sanitize_filename(quant_model_name)}_weights_{timestamp}.pth'
+    quant_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(quant_model_name)}_weights_{timestamp}.pth'
     torch.save(model_quant.state_dict(), quant_weights_filename)
     print(f"Saved {quant_model_name} weights to: {quant_weights_filename}")
 
@@ -115,7 +117,7 @@ def run_experiment():
         calib_loader=train_loader, 
         lambda_kurtosis=lambda_k_val 
     )
-    adc_wr_weights_filename = f'./results/model_{sanitize_filename(adc_wr_model_name)}_weights_{timestamp}.pth'
+    adc_wr_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(adc_wr_model_name)}_weights_{timestamp}.pth'
     torch.save(model_w_reshape.state_dict(), adc_wr_weights_filename)
     print(f"Saved {adc_wr_model_name} weights to: {adc_wr_weights_filename}")
 
@@ -131,7 +133,7 @@ def run_experiment():
         model_name=ashift_model_name,
         calib_loader=train_loader 
     )
-    ashift_weights_filename = f'./results/model_{sanitize_filename(ashift_model_name)}_weights_{timestamp}.pth'
+    ashift_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(ashift_model_name)}_weights_{timestamp}.pth'
     torch.save(model_adc_ashift.state_dict(), ashift_weights_filename)
     print(f"Saved {ashift_model_name} weights to: {ashift_weights_filename}")
 
@@ -148,15 +150,15 @@ def run_experiment():
         calib_loader=train_loader,
         lambda_kurtosis=lambda_k_val 
     )
-    ashift_wr_weights_filename = f'./results/model_{sanitize_filename(ashift_wr_model_name)}_weights_{timestamp}.pth'
+    ashift_wr_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(ashift_wr_model_name)}_weights_{timestamp}.pth'
     torch.save(model_adc_ashift_wr.state_dict(), ashift_wr_weights_filename)
     print(f"Saved {ashift_wr_model_name} weights to: {ashift_wr_weights_filename}")
 
     # --- Results Logging to CSV ---
     # Create results directory if it doesn't exist - MOVED EARLIER
     # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") - MOVED EARLIER
-    csv_filename = f'./results/experiment_results_{timestamp}.csv'
-    plot_filename = f'./results/loss_curves_{timestamp}.png'
+    csv_filename = f'{RESULTS_DIR}/experiment_results_{timestamp}.csv'
+    plot_filename = f'{RESULTS_DIR}/loss_curves_{timestamp}.png'
     
     with open(csv_filename, 'w', newline='') as csvfile:
         csvwriter = csv.writer(csvfile)
@@ -227,7 +229,7 @@ def run_experiment():
             plt.grid(True)
             # Sanitize model_name_full for filename
             safe_model_name = sanitize_filename(model_name_full) # Use helper
-            individual_plot_filename = f'./results/accuracy_{safe_model_name}_{timestamp}.png'
+            individual_plot_filename = f'{RESULTS_DIR}/accuracy_{safe_model_name}_{timestamp}.png'
             plt.savefig(individual_plot_filename)
             print(f"Individual accuracy plot saved to: {individual_plot_filename}")
             plt.close() # Close the figure to free memory
@@ -270,7 +272,7 @@ def run_experiment():
     plt.ylabel('Accuracy (%)')
     plt.legend()
     plt.grid(True)
-    comparison_plot_filename = f'./results/accuracy_comparison_all_models_{timestamp}.png'
+    comparison_plot_filename = f'{RESULTS_DIR}/accuracy_comparison_all_models_{timestamp}.png'
     plt.savefig(comparison_plot_filename)
     print(f"Combined accuracy plot saved to: {comparison_plot_filename}")
     plt.close()
@@ -303,13 +305,13 @@ def run_experiment():
     plt.ylabel('Accuracy (%)')
     plt.legend(loc='lower right')
     plt.grid(True)
-    specific_comparison_plot_filename = f'./results/accuracy_comparison_specific_adc_models_{timestamp}.png'
+    specific_comparison_plot_filename = f'{RESULTS_DIR}/accuracy_comparison_specific_adc_models_{timestamp}.png'
     plt.savefig(specific_comparison_plot_filename)
     print(f"Specific ADC models accuracy plot saved to: {specific_comparison_plot_filename}")
     plt.close()
 
     # --- Plot 3: Combined Loss Curves (Kept from previous version) ---
-    loss_plot_filename = f'./results/loss_curves_{timestamp}.png' # Ensure this filename is defined earlier or use a new one
+    loss_plot_filename = f'{RESULTS_DIR}/loss_curves_{timestamp}.png' # Ensure this filename is defined earlier or use a new one
     plt.figure(figsize=(12, 8))
 
     # MLP Losses
