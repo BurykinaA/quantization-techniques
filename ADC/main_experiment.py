@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from ADC.models import MLP, MLPADC, MLPQuant, MLPADCAshift # Assuming MLP is not part of this specific experiment comparison
 from ADC.train_utils import train_model
 
-RESULTS_DIR = './results_experiment' # Define the constant for the results directory
+RESULTS_DIR = './results_4_bit' # Define the constant for the results directory
 
 def run_experiment():
     # --- Configuration ---
@@ -21,8 +21,8 @@ def run_experiment():
     learning_rate = 0.001
 
     # Quantization parameters
-    bx_val = 8
-    bw_val = 8
+    bx_val = 4
+    bw_val = 4
     ba_val = 8  # For ADC
     k_val = 4   # For ADC
     lambda_k_val = 0.001 # Coefficient for Kurtosis penalty
