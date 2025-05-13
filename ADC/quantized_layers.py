@@ -246,4 +246,68 @@ class LinearQuant(nn.Linear):
             
         out = nn.functional.linear(x_dequant, w_dequant, self.bias)
         return out
+
+
+class Conv2dADC(nn.Conv2d):
+    def __init__(self,
+                 in_channels, 
+                 out_channels, 
+                 kernel_size, 
+                 stride=1, 
+                 padding=0, 
+                 dilation=1, 
+                 groups=1, 
+                 bias=True, 
+                 padding_mode='zeros', 
+                 device=None, 
+                 dtype=None,
+                 bx=8,
+                 bw=8,
+                 ba=8,
+                 k=4):
+        super(Conv2dADC, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode, device, dtype)
+        self.bx = bx
+        self.bw = bw
+        self.ba = ba
+        self.k = k
+        self.x_quantizer = AffineQuantizerPerTensor(bx)
+        self.w_quantizer = SymmetricQuantizerPerTensor(bw)
+        self.adc_quantizer = ADCQuantizer(M=in_channels*kernel_size[0]*kernel_size[1], bx=bx, bw=bw, ba=ba, k=k)
+    
+    def dequantize(self, yq):
+        # yq: out x H_out x W_out
+        # self.weight: out x in x H_out x W_out
+        y = yq * self.adc_quantizer.delta
+        out = y - self.x_quantizer.zero_point / self.w_quantizer.scale * (self.weight.sum(axis=(1, 2, 3)))[None, :, None, None]
+        out = out * self.x_quantizer.scale * self.w_quantizer.scale
+        return out
+    
+    def train(self, mode=True):
+        super().train(mode)
+        if (mode == True):
+            self.x_quantizer.enable()
+            self.w_quantizer.enable()
+        else:
+            self.x_quantizer.disable()
+            self.w_quantizer.disable()
+        return self
+    def eval(self, mode=True):
+        super().eval(mode)
+        self.train(not mode)
+        return self
+    def forward(self, x):
+        x = self.x_quantizer(x)
+        w = self.w_quantizer(self.weight)
+        y_for_adc = torch.nn.functional.conv2d(input, 
+                                               self.weight, 
+                                               bias=self.bias, 
+                                               stride=self.stride, 
+                                               padding=self.padding, 
+                                               dilation=self.dilation, 
+                                               groups=self.groups)
+        yq_adc = self.adc_quantizer(y_for_adc)
+        out = self.dequantize(self, yq_adc)
+        if self.bias is not None:
+            out += self.bias
+        return out
     
