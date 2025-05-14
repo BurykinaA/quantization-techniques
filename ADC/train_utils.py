@@ -1,6 +1,7 @@
 import torch
 import time
 from torch import nn # For criterion
+from tqdm import tqdm
 
 def calibrate_model(model, calib_loader, device):
     model.train() # Set to train mode for observers to work
@@ -16,7 +17,8 @@ def calibrate_model(model, calib_loader, device):
     with torch.no_grad(): # No gradients needed for calibration
         for i, (inputs, _) in enumerate(calib_loader):
             inputs = inputs.to(device)
-            model(inputs.view(inputs.size(0), -1)) # Forward pass to update observers
+            model(inputs)
+            #model(inputs.view(inputs.size(0), -1)) # Forward pass to update observers
             if i >= 20:  # Calibrate on a few batches (e.g., 20 batches)
                 break
     
@@ -69,9 +71,9 @@ def train_model(model, optimizer, train_loader, test_loader, criterion, device, 
         correct_train = 0
         total_train = 0
         
-        for inputs, labels in train_loader:
+        for inputs, labels in tqdm(train_loader, desc=f"Training epoch {epoch + 1}/{num_epochs}"):
             inputs, labels = inputs.to(device), labels.to(device)
-            inputs = inputs.view(inputs.size(0), -1)
+            #inputs = inputs.view(inputs.size(0), -1)
 
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -110,9 +112,9 @@ def train_model(model, optimizer, train_loader, test_loader, criterion, device, 
         correct_test = 0
         total_test = 0
         with torch.no_grad():
-            for inputs, labels in test_loader:
+            for inputs, labels in tqdm(test_loader, desc=f"Validation epoch {epoch+1} / {num_epochs}"):
                 inputs, labels = inputs.to(device), labels.to(device)
-                inputs = inputs.view(inputs.size(0), -1)
+                #inputs = inputs.view(inputs.size(0), -1)
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
                 test_loss += loss.item() * inputs.size(0)

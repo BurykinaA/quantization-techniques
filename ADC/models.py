@@ -99,14 +99,18 @@ class BasicBlock(nn.Module):
 class BasicBlockADC(nn.Module):
     expansion = 1
 
-    def __init__(self, in_channels, out_channels, stride=1, downsample=None):
+    def __init__(self, in_channels, out_channels, stride=1, downsample=None, bx=8, bw=8, ba=8, k=4):
         super(BasicBlockADC, self).__init__()
-        self.conv1 = nn.Conv2dADC(in_channels, out_channels, kernel_size=3,
-                               stride=stride, padding=1, bias=False)
+        self.bx = bx
+        self.bw = bw
+        self.ba = ba
+        self.k = k
+        self.conv1 = Conv2dADC(in_channels, out_channels, kernel_size=3,
+                               stride=stride, padding=1, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k)
         self.bn1 = nn.BatchNorm2d(out_channels)
         
-        self.conv2 = nn.Conv2dADC(out_channels, out_channels, kernel_size=3,
-                               stride=1, padding=1, bias=False)
+        self.conv2 = Conv2dADC(out_channels, out_channels, kernel_size=3,
+                               stride=1, padding=1, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k)
         self.bn2 = nn.BatchNorm2d(out_channels)
         
         self.relu = nn.ReLU(inplace=True)
@@ -184,13 +188,17 @@ class ResNetCIFAR(nn.Module):
         return x
 
 class ResNetCIFAR_ADC(nn.Module):
-    def __init__(self, block, layers, num_classes=10):
+    def __init__(self, block, layers, num_classes=10, bx=8, bw=8, ba=8, k=4):
         super(ResNetCIFAR_ADC, self).__init__()
         self.in_channels = 64
+        self.bx = bx
+        self.bw = bw
+        self.ba = ba
+        self.k = k
 
         # CIFAR: input 3x32x32 → 64x32x32
-        self.conv1 = nn.Conv2dADC(3, 64, kernel_size=3, stride=1,
-                               padding=1, bias=False)
+        self.conv1 = Conv2dADC(3, 64, kernel_size=3, stride=1,
+                               padding=1, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
 
@@ -201,11 +209,11 @@ class ResNetCIFAR_ADC(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.LinearADC(512 * block.expansion, num_classes)
+        self.fc = LinearADC(512 * block.expansion, num_classes, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k)
 
         # Weight init
         for m in self.modules():
-            if isinstance(m, nn.Conv2dADC):
+            if isinstance(m, Conv2dADC):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
@@ -216,16 +224,16 @@ class ResNetCIFAR_ADC(nn.Module):
 
         if stride != 1 or self.in_channels != out_channels * block.expansion:
             downsample = nn.Sequential(
-                nn.Conv2dADC(self.in_channels, out_channels * block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
+                Conv2dADC(self.in_channels, out_channels * block.expansion,
+                          kernel_size=1, stride=stride, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k),
                 nn.BatchNorm2d(out_channels * block.expansion)
             )
 
-        layers = [block(self.in_channels, out_channels, stride, downsample)]
+        layers = [block(self.in_channels, out_channels, stride, downsample, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k)]
         self.in_channels = out_channels * block.expansion
 
         for _ in range(1, blocks):
-            layers.append(block(self.in_channels, out_channels))
+            layers.append(block(self.in_channels, out_channels, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k))
 
         return nn.Sequential(*layers)
 
@@ -246,5 +254,5 @@ def resnet18_cifar(num_classes=10):
     return ResNetCIFAR(BasicBlock, [2, 2, 2, 2], num_classes=num_classes)
 
 
-def resnet18_cifar_adc(num_classes=10):
-    return ResNetCIFAR_ADC(BasicBlockADC, [2, 2, 2, 2], num_classes=num_classes)
+def resnet18_cifar_adc(num_classes=10, bx=8, bw=8, ba=8, k=4):
+    return ResNetCIFAR_ADC(BasicBlockADC, [2, 2, 2, 2], num_classes=num_classes, bx=bx, bw=bw, ba=ba, k=k)

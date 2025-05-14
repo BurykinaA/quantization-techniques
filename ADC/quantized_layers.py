@@ -257,7 +257,7 @@ class Conv2dADC(nn.Conv2d):
                  padding=0, 
                  dilation=1, 
                  groups=1, 
-                 bias=True, 
+                 bias=None, 
                  padding_mode='zeros', 
                  device=None, 
                  dtype=None,
@@ -272,7 +272,11 @@ class Conv2dADC(nn.Conv2d):
         self.k = k
         self.x_quantizer = AffineQuantizerPerTensor(bx)
         self.w_quantizer = SymmetricQuantizerPerTensor(bw)
-        self.adc_quantizer = ADCQuantizer(M=in_channels*kernel_size[0]*kernel_size[1], bx=bx, bw=bw, ba=ba, k=k)
+        if type(kernel_size) == int:
+            Mv = in_channels*(kernel_size**2)
+        else:
+            Mv = in_channels*kernel_size[0]*kernel_size[1]
+        self.adc_quantizer = ADCQuantizer(M=Mv, bx=bx, bw=bw, ba=ba, k=k)
     
     def dequantize(self, yq):
         # yq: out x H_out x W_out
@@ -296,17 +300,17 @@ class Conv2dADC(nn.Conv2d):
         self.train(not mode)
         return self
     def forward(self, x):
-        x = self.x_quantizer(x)
-        w = self.w_quantizer(self.weight)
-        y_for_adc = torch.nn.functional.conv2d(input, 
-                                               self.weight, 
+        xq = self.x_quantizer(x)
+        wq = self.w_quantizer(self.weight)
+        y_for_adc = torch.nn.functional.conv2d(xq, 
+                                               wq, 
                                                bias=self.bias, 
                                                stride=self.stride, 
                                                padding=self.padding, 
                                                dilation=self.dilation, 
                                                groups=self.groups)
         yq_adc = self.adc_quantizer(y_for_adc)
-        out = self.dequantize(self, yq_adc)
+        out = self.dequantize(yq_adc)
         if self.bias is not None:
             out += self.bias
         return out
