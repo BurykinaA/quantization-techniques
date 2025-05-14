@@ -6,53 +6,37 @@ from ADC.ste import ste_round, ste_floor
 class AffineQuantizerPerTensor(nn.Module):
     def __init__(self, bx=8):
         super().__init__()
-        self.observer = MinMaxObserver(dtype=torch.quint8, qscheme=torch.per_tensor_affine, 
-                                       quant_min=0, quant_max=2**bx - 1)
-        
-        # Register scale and zero_point as buffers with initial placeholder values.
-        # Their types will be preserved when updated.
-        self.register_buffer('scale', torch.tensor(1.0)) 
-        self.register_buffer('zero_point', torch.tensor(0, dtype=torch.int32)) # Observers often return int32 zero_point
-        
-        # Flag to indicate if parameters have been calculated
-        self.params_calculated = False
+        self.observer = MinMaxObserver(dtype=torch.quint8, qscheme=torch.per_tensor_affine, quant_min=0, quant_max=2**bx - 1)
+        self.scale = None
+        self.zero_point = None
         self.bx = bx
-        self.enabled = True # Controls observer if model.training is False
+        self.enabled = True
 
     def enable(self):
         self.enabled = True
-        # self.params_calculated = False # Optionally reset if re-enabling means re-calibrating
 
     def disable(self):
         self.enabled = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.training and self.enabled: 
-            self.observer(x.detach()) 
-            _s, _zp = self.observer.calculate_qparams()
-            # Update the buffers in-place using copy_()
-            self.scale.copy_(_s)
-            self.zero_point.copy_(_zp.to(self.zero_point.dtype)) # Ensure correct dtype for zero_point
-            self.params_calculated = True
+        if self.training and self.enabled: # Observe only during training and when enabled
+            self.observer(x.detach()) # Detach to prevent observer influencing gradients
+            self.scale, self.zero_point = self.observer.calculate_qparams()
 
-        if not self.params_calculated:
-            if not self.training and self.enabled: # If in eval mode but observer is explicitly enabled
-                print(f"Warning: {self.__class__.__name__} at eval, observer enabled, but params not calculated. Running observer once.")
-                self.observer(x.detach())
-                _s, _zp = self.observer.calculate_qparams()
-                self.scale.copy_(_s)
-                self.zero_point.copy_(_zp.to(self.zero_point.dtype))
-                self.params_calculated = True
-                if not self.params_calculated: # Should not happen if observer ran
-                    raise RuntimeError(f"{self.__class__.__name__} failed to calculate params even with observer pass at eval.")
-            else: # Not training, observer disabled, and params were never calculated (e.g. model loaded without training)
-                raise RuntimeError(f"{self.__class__.__name__} must be calibrated (observer run during training or 'enabled' at eval) or have scale/zp loaded from a trained state_dict. Current scale/zp are at initial/default values.")
+        if self.scale is None or self.zero_point is None:
+            # If not training or not enabled, and params not set, try to calculate them once
+            # This can happen if model is loaded directly to eval mode without prior training/calibration
+            if not self.training and self.enabled:
+                 self.observer(x.detach())
+                 self.scale, self.zero_point = self.observer.calculate_qparams()
+            else:
+                raise RuntimeError("Quantizer must be calibrated (observer enabled during a forward pass) before use or have scale/zp loaded.")
 
-        # Use the buffer values for quantization
-        current_scale = self.scale.to(x.device)
-        current_zero_point = self.zero_point.to(x.device)
 
-        xq = ste_round(x / current_scale + current_zero_point)
+        scale = self.scale.to(x.device)
+        zero_point = self.zero_point.to(scale.dtype).to(x.device)
+
+        xq = ste_round(x / scale + zero_point)
         xq = torch.clamp(xq, self.observer.quant_min, self.observer.quant_max)
         return xq
 
@@ -60,64 +44,36 @@ class AffineQuantizerPerTensor(nn.Module):
 class SymmetricQuantizerPerTensor(nn.Module):
     def __init__(self, bw=8):
         super().__init__()
-        # For symmetric, quant_min/max should span zero. qint8 is appropriate.
-        # Max value for bw=1, qint8 range [-1, 0] can be tricky. If levels are {-1, 1}, this observer might not be ideal.
-        # Let's assume standard symmetric range:
-        q_min_val = -(2**(bw-1)) if bw > 1 else -1 
-        q_max_val = (2**(bw-1))-1 if bw > 1 else (0 if bw == 1 else 0) # for bw=1, torch default is often [-1,0] or [-128,127] with specific mapping.
-                                                                   # Using a narrow range for bw=1 like -1,0 can be problematic if inputs are positive.
-                                                                   # It's safer to ensure the observer range covers expected input magnitudes.
-        if bw == 1: # Special handling for binary weights, common to be {-alpha, alpha} mapped to {-1,1} or {0,1} levels.
-                    # For simplicity here, we'll assume it can map to -1, 0 or -1, 1.
-            q_min_val = -1
-            q_max_val = 1 # Allow it to see positive values too, scale will adjust.
-            # If you truly want {-1, 0} levels, then q_max_val = 0.
-
-        self.observer = MinMaxObserver(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric, 
-                                       quant_min=q_min_val, quant_max=q_max_val)
-        
-        self.register_buffer('scale', torch.tensor(1.0))
-        # zero_point for symmetric should ideally be 0 after observer.
-        self.register_buffer('zero_point', torch.tensor(0, dtype=torch.int32)) 
-        
-        self.params_calculated = False
+        maxval = 2 ** (bw - 1) - 1
+        self.observer = MinMaxObserver(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric, quant_min=-maxval, quant_max=maxval) # Changed to qint8 for symmetric
+        self.scale = None
+        self.zero_point = None # Symmetric quantizers ideally have zero_point = 0
         self.bw = bw
         self.enabled = True
 
     def enable(self):
         self.enabled = True
-        # self.params_calculated = False
 
     def disable(self):
         self.enabled = False
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if self.training and self.enabled:
+        if self.training and self.enabled: # Observe only during training and when enabled
             self.observer(x.detach())
-            _s, _zp = self.observer.calculate_qparams()
-            self.scale.copy_(_s)
-            # For torch.per_tensor_symmetric, _zp should be 0.
-            self.zero_point.copy_(_zp.to(self.zero_point.dtype)) 
-            self.params_calculated = True
+            self.scale, self.zero_point = self.observer.calculate_qparams() # zero_point should be 0 for symmetric
 
-        if not self.params_calculated:
+        if self.scale is None:
             if not self.training and self.enabled:
-                print(f"Warning: {self.__class__.__name__} at eval, observer enabled, but params not calculated. Running observer once.")
-                self.observer(x.detach())
-                _s, _zp = self.observer.calculate_qparams()
-                self.scale.copy_(_s)
-                self.zero_point.copy_(_zp.to(self.zero_point.dtype))
-                self.params_calculated = True
-                if not self.params_calculated:
-                    raise RuntimeError(f"{self.__class__.__name__} failed to calculate params even with observer pass at eval.")
+                 self.observer(x.detach())
+                 self.scale, self.zero_point = self.observer.calculate_qparams()
             else:
-                raise RuntimeError(f"{self.__class__.__name__} must be calibrated or have scale/zp loaded. Current scale is at initial/default value and observer is disabled.")
+                raise RuntimeError("Quantizer must be calibrated (observer enabled during a forward pass) before use or have scale/zp loaded.")
 
-        current_scale = self.scale.to(x.device)
-        # zero_point is typically not used in the symmetric formula, but we ensure it's available.
-        # current_zero_point = self.zero_point.to(x.device) 
+        scale = self.scale.to(x.device)
+        # For truly symmetric, zero_point from MinMaxObserver might not be exactly 0 if using quint8 scheme by mistake.
+        # However, per_tensor_symmetric qscheme should handle this. We mostly care about scale.
 
-        xq = ste_round(x / current_scale) # zero_point is omitted for symmetric quantization formula
+        xq = ste_round(x / scale)
         xq = torch.clamp(xq, self.observer.quant_min, self.observer.quant_max)
         return xq
 
