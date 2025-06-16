@@ -11,7 +11,7 @@ def get_config():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    return {
+    config = {
         "results_dir": './results_resnet18',
         "num_epochs": 3,
         "batch_size_train": 512,
@@ -28,6 +28,13 @@ def get_config():
         "num_classes": 10,
         "device": device,
     }
+    
+    config["scheduler_params"] = {
+        "type": "CosineAnnealingLR",
+        "T_max": config["num_epochs"]
+    }
+
+    return config
 
 def setup_dataloaders(batch_size_train, batch_size_test):
     """Sets up and returns the CIFAR10 dataloaders."""

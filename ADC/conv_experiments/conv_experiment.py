@@ -8,7 +8,7 @@ from ADC.train_utils import train_model
 from ADC.conv_experiments.conv_experiment_setup import get_config, setup_dataloaders, define_experiments, sanitize_filename
 
 
-def run_single_experiment(exp_config, loaders, criterion, device, num_epochs, lr, results_dir, timestamp):
+def run_single_experiment(exp_config, loaders, criterion, device, num_epochs, lr, scheduler_params, results_dir, timestamp):
     """Runs a single experiment and saves the weights."""
     model_name = exp_config['name']
     print(f"\n--- Training {model_name} ---")
@@ -21,12 +21,19 @@ def run_single_experiment(exp_config, loaders, criterion, device, num_epochs, lr
     
     optimizer = optim.Adam(model.parameters(), lr=lr)
     
+    if scheduler_params.get('type') == 'CosineAnnealingLR':
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=scheduler_params['T_max'])
+        print(f"Using CosineAnnealingLR scheduler with T_max={scheduler_params['T_max']}")
+    else:
+        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=num_epochs, gamma=1.0) # Dummy scheduler
+        print("Warning: No valid scheduler specified. Learning rate will be constant.")
+
     train_args = exp_config.get('train_args', {})
     if train_args.get('calib_loader') is True:
         train_args['calib_loader'] = train_loader
 
     train_losses, train_accs, test_losses, test_accs = train_model(
-        model, optimizer, train_loader, test_loader, criterion, device,
+        model, optimizer, scheduler, train_loader, test_loader, criterion, device,
         num_epochs=num_epochs,
         model_name=model_name,
         **train_args
@@ -69,6 +76,7 @@ def main_train():
             device=config['device'],
             num_epochs=config['num_epochs'],
             lr=config['learning_rate'],
+            scheduler_params=config['scheduler_params'],
             results_dir=config['results_dir'],
             timestamp=timestamp
         )
