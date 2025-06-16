@@ -2,13 +2,13 @@ import torch
 import os
 import re
 import matplotlib.pyplot as plt
-from ADC.models import MLP, MLPADC, MLPQuant, MLPADCAshift
+from ADC.models import MLP, MLPADC, MLPQuant, MLPADCAshift, resnet18_cifar, resnet18_cifar_adc
 
 # Determine device (primarily for loading, plotting is on CPU)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device for model loading (if applicable): {device}")
 
-RESULTS_DIR = './results'
+RESULTS_DIR = './results_resnet18'
 PLOTS_OUTPUT_DIR = os.path.join(RESULTS_DIR, 'weight_distributions')
 os.makedirs(PLOTS_OUTPUT_DIR, exist_ok=True)
 
@@ -85,6 +85,28 @@ def get_model_instance_and_params(filename_key):
         match = re.fullmatch(r"MLP_Baseline", filename_key)
         if match:
             model_type_str = "MLP"
+    
+    # if not model_type_str:
+    #     match = re.fullmatch(r"ResNet18_ADC", filename_key)
+    #     if match:
+    #         model_type_str = "R18ADC"
+    #         params['bx'] = 8 #int(match.group(1))
+    #         params['bw'] = 8 #int(match.group(2))
+    #         params['ba'] = 8 #int(match.group(3))
+    #         params['k'] = 4 #int(match.group(4))
+    
+    # if not model_type_str:
+    #     match = re.fullmatch(r"ResNet18_Baseline", filename_key)
+    #     if match:
+    #         model_type_str = "R18"
+    if not model_type_str:
+        match = re.fullmatch(r"ResNet18ADCplusW-Reshape_.+", filename_key)
+        if match:
+            model_type_str = "R18W_Reshape"
+            params['bx'] = 8 #int(match.group(1))
+            params['bw'] = 8 #int(match.group(2))
+            params['ba'] = 8 #int(match.group(3))
+            params['k'] = 4 #int(match.group(4))
 
     if not model_type_str:
         print(f"Warning: Could not parse model type or params for key '{filename_key}'. Skipping.")
@@ -100,6 +122,10 @@ def get_model_instance_and_params(filename_key):
         model = MLPQuant(**params)
     elif model_type_str == "MLPADCAshift":
         model = MLPADCAshift(**params)
+    elif model_type_str == "R18":
+        model = resnet18_cifar(10)
+    elif model_type_str in ["R18W_Reshape", "R18ADC"]:
+        model = resnet18_cifar_adc(10, **params)
     
     if model is None:
         print(f"Warning: Failed to instantiate model for key '{filename_key}' with parsed type '{model_type_str}'. Skipping.")
