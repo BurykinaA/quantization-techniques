@@ -104,10 +104,10 @@ def define_experiments(config):
 
 
     experiments = [
-        adc_exp,
-        baseline_exp,
-        adc_w_reshape_exp,
-        # adc_ashift_exp,
+        # adc_exp,
+        # baseline_exp,
+        # adc_w_reshape_exp,
+        adc_ashift_exp,
         # adc_ashift_w_reshape_exp,
     ]
-    return experiments 
+    return experiments
