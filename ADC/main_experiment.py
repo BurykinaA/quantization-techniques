@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 from ADC.models import MLP, MLPADC, MLPQuant, MLPADCAshift # Assuming MLP is not part of this specific experiment comparison
 from ADC.train_utils import train_model
 
-RESULTS_DIR = './results_4_bit' # Define the constant for the results directory
+RESULTS_DIR = './results_4_bit_right' # Define the constant for the results directory
 
 def run_experiment():
     # --- Configuration ---

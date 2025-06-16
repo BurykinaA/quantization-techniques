@@ -30,7 +30,7 @@ except ImportError:
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device for model loading and forward pass: {device}")
 
-RESULTS_DIR = './results_4_bit'
+RESULTS_DIR = './results_4_bit_right'
 PLOTS_WEIGHTS_OUTPUT_DIR = os.path.join(RESULTS_DIR, 'weight_distributions')
 PLOTS_ACTIVATIONS_OUTPUT_DIR = os.path.join(RESULTS_DIR, 'activation_distributions')
 FASHION_MNIST_DATA_DIR = './data' # Directory to store FashionMNIST data
@@ -203,19 +203,42 @@ def plot_distributions():
             # --- Attempt to set quantizers to inference mode ---
             print(f"Attempting to set quantizers' 'enabled' flag to False for {model_display_name}...")
             quantizer_modules_adjusted = 0
+            
+            # First, enable all quantizers for calibration if needed
+            needs_calibration = False
             for module_name, sub_module in model.named_modules():
                 if CUSTOM_QUANTIZER_TYPES_TO_DISABLE_OBSERVER and isinstance(sub_module, CUSTOM_QUANTIZER_TYPES_TO_DISABLE_OBSERVER):
                     if hasattr(sub_module, 'enabled'):
-                        sub_module.enabled = False
-                        print(f"  Set sub_module.enabled = False on {module_name} (type: {type(sub_module).__name__})")
+                        if not sub_module.params_calculated:
+                            needs_calibration = True
+                            sub_module.enabled = True
+                            print(f"  Enabled {module_name} for calibration (type: {type(sub_module).__name__})")
+                        else:
+                            sub_module.enabled = False
+                            print(f"  Set sub_module.enabled = False on {module_name} (type: {type(sub_module).__name__})")
                         quantizer_modules_adjusted += 1
                     else:
                         print(f"  Warning: Module {module_name} (type: {type(sub_module).__name__}) is a custom quantizer but lacks 'enabled' attribute.")
-            
-            if quantizer_modules_adjusted > 0:
-                print(f"Adjusted {quantizer_modules_adjusted} quantizer module(s) (set their 'enabled' flag to False).")
-            else:
-                print(f"No specific quantizer modules (AffineQuantizerPerTensor, SymmetricQuantizerPerTensor) requiring 'enabled=False' were found/adjusted.")
+
+            # Calibrate if needed
+            if needs_calibration:
+                print("Calibrating quantizers with validation data...")
+                model.train()  # Set to training mode for calibration
+                with torch.no_grad():
+                    for batch_idx, (data_val, target_val) in enumerate(val_loader):
+                        if batch_idx >= NUM_ACTIVATION_BATCHES:
+                            break
+                        data_val = data_val.to(device)
+                        if isinstance(model, MLP) and data_val.dim() > 2:
+                            data_val = data_val.view(data_val.size(0), -1)
+                        model(data_val)
+                
+                # Now disable all quantizers for inference
+                for module_name, sub_module in model.named_modules():
+                    if CUSTOM_QUANTIZER_TYPES_TO_DISABLE_OBSERVER and isinstance(sub_module, CUSTOM_QUANTIZER_TYPES_TO_DISABLE_OBSERVER):
+                        if hasattr(sub_module, 'enabled'):
+                            sub_module.enabled = False
+                            print(f"  Set sub_module.enabled = False on {module_name} after calibration")
 
             # --- Plot Weight Distributions ---
             layer_weights_data = []
