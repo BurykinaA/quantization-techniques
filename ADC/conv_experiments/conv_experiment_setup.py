@@ -13,7 +13,7 @@ def get_config():
 
     return {
         "results_dir": './results_resnet18',
-        "num_epochs": 20,
+        "num_epochs": 3,
         "batch_size_train": 512,
         "batch_size_test": 512,
         "learning_rate": 0.0003,

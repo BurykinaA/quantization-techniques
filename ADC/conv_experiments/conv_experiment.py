@@ -82,7 +82,7 @@ def main_train():
         'timestamp': timestamp
     }, results_path)
     print(f"\nTraining complete. All results saved to {results_path}")
-    print(f"To evaluate, run: python ADC/conv_evaluate.py --timestamp {timestamp}")
+    print(f"To evaluate, run: python ADC/conv_experiments/conv_evaluate.py --timestamp {timestamp}")
 
 
 if __name__ == '__main__':
