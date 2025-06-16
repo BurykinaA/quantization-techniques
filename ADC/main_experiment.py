@@ -8,180 +8,104 @@ import os
 from datetime import datetime
 import matplotlib.pyplot as plt
 
-from ADC.models import MLP, MLPADC, MLPQuant, MLPADCAshift # Assuming MLP is not part of this specific experiment comparison
+from ADC.models import MLP, MLPADC, MLPQuant, MLPADCAshift
 from ADC.train_utils import train_model
 
-RESULTS_DIR = './results_4_bit_right' # Define the constant for the results directory
+def get_config():
+    """Returns a dictionary of experiment configurations."""
+    return {
+        "results_dir": './results_4_bit_right',
+        "num_epochs": 20,
+        "batch_size_train": 1024,
+        "batch_size_test": 1024,
+        "learning_rate": 0.001,
+        "quant_params": {
+            "bx": 4,
+            "bw": 4,
+            "ba": 8,
+            "k": 4,
+        },
+        "lambda_k_val": 0.001,
+        "ashift_mode": True,
+        "device": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+    }
 
-def run_experiment():
-    # --- Configuration ---
-    num_epochs_exp = 20  # Adjust as needed
-    batch_size_train = 1024
-    batch_size_test = 1024
-    learning_rate = 0.001
-
-    # Quantization parameters
-    bx_val = 4
-    bw_val = 4
-    ba_val = 8  # For ADC
-    k_val = 4   # For ADC
-    lambda_k_val = 0.001 # Coefficient for Kurtosis penalty
-    ashift_mode = True # For MLPADCAshift experiments
-
-    # Setup device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-
-    # --- Data Loading ---
+def setup_dataloaders(batch_size_train, batch_size_test):
+    """Sets up and returns the FashionMNIST dataloaders."""
     transform_fm = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.2860,), (0.3530,)) # FashionMNIST mean/std
     ])
 
-    train_dataset_fm = datasets.FashionMNIST('./data', train=True, download=True, transform=transform_fm)
-    test_dataset_fm = datasets.FashionMNIST('./data', train=False, download=True, transform=transform_fm)
+    train_dataset = datasets.FashionMNIST('./data', train=True, download=True, transform=transform_fm)
+    test_dataset = datasets.FashionMNIST('./data', train=False, download=True, transform=transform_fm)
 
-    train_loader = DataLoader(train_dataset_fm, batch_size=batch_size_train, shuffle=True)
-    test_loader = DataLoader(test_dataset_fm, batch_size=batch_size_test, shuffle=False)
-    # For calibration, we can use a portion of the training loader or the full one.
-    # Using train_loader itself for calibration in train_model if no specific calib_loader is passed.
-
-    criterion = nn.CrossEntropyLoss()
-
-    # Create results directory if it doesn't exist (moved earlier for weight saving)
-    os.makedirs(RESULTS_DIR, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # Helper function to sanitize model names for filenames
-    def sanitize_filename(name):
-        return name.replace(" ", "_").replace("(", "").replace(")", "").replace("=", "").replace(",", "").replace("+", "plus")
-
-    # --- Experiment with MLP (Baseline) ---
-    print("\n--- Experiment with MLP (Baseline) ---")
-    model_mlp = MLP()
-    optimizer_mlp = optim.Adam(model_mlp.parameters(), lr=learning_rate)
-    mlp_model_name = "MLP (Baseline)"
-
-    train_losses_mlp, train_accs_mlp, test_losses_mlp, test_accs_mlp = train_model(
-        model_mlp, optimizer_mlp, train_loader, test_loader, criterion, device,
-        num_epochs=num_epochs_exp,
-        model_name=mlp_model_name,
-        # No calib_loader needed for baseline MLP
-    )
-    mlp_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(mlp_model_name)}_weights_{timestamp}.pth'
-    torch.save(model_mlp.state_dict(), mlp_weights_filename)
-    print(f"Saved {mlp_model_name} weights to: {mlp_weights_filename}")
-
-    # --- Experiment with MLPADC ---
-    print("\n--- Experiment with MLPADC ---")
-    model_adc = MLPADC(bx=bx_val, bw=bw_val, ba=ba_val, k=k_val)
-    optimizer_adc = optim.Adam(model_adc.parameters(), lr=learning_rate)
-    adc_model_name = f"MLPADC (bx={bx_val}, bw={bw_val}, ba={ba_val}, k={k_val})"
+    train_loader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False)
     
-    train_losses_adc, train_accs_adc, test_losses_adc, test_accs_adc = train_model(
-        model_adc, optimizer_adc, train_loader, test_loader, criterion, device,
-        num_epochs=num_epochs_exp, 
-        model_name=adc_model_name,
-        calib_loader=train_loader # Pass train_loader for calibration phase
-    )
-    adc_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(adc_model_name)}_weights_{timestamp}.pth'
-    torch.save(model_adc.state_dict(), adc_weights_filename)
-    print(f"Saved {adc_model_name} weights to: {adc_weights_filename}")
+    return train_loader, test_loader
 
-    # --- Experiment with MLPQuant (Standard Quantization) ---
-    print("\n--- Experiment with MLPQuant (Standard Quantization) ---")
-    model_quant = MLPQuant(bx=bx_val, bw=bw_val)
-    optimizer_quant = optim.Adam(model_quant.parameters(), lr=learning_rate)
-    quant_model_name = f"MLPQuant (bx={bx_val}, bw={bw_val})"
+def sanitize_filename(name):
+    """Sanitizes a string to be used as a filename."""
+    return name.replace(" ", "_").replace("(", "").replace(")", "").replace("=", "").replace(",", "").replace("+", "plus")
 
-    train_losses_quant, train_accs_quant, test_losses_quant, test_accs_quant = train_model(
-        model_quant, optimizer_quant, train_loader, test_loader, criterion, device,
-        num_epochs=num_epochs_exp, 
-        model_name=quant_model_name,
-        calib_loader=train_loader # Pass train_loader for calibration phase
-    )
-    quant_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(quant_model_name)}_weights_{timestamp}.pth'
-    torch.save(model_quant.state_dict(), quant_weights_filename)
-    print(f"Saved {quant_model_name} weights to: {quant_weights_filename}")
+def run_single_experiment(exp_config, loaders, criterion, device, num_epochs, lr, results_dir, timestamp):
+    """Runs a single experiment based on the provided configuration."""
+    model_name = exp_config['name']
+    print(f"\n--- Experiment with {model_name} ---")
 
-    # --- Experiment with MLPADC + Weight Reshaping ---
-    print("\n--- Experiment with MLPADC + Weight Reshaping ---")
-    model_w_reshape = MLPADC(bx=bx_val, bw=bw_val, ba=ba_val, k=k_val) 
-    optimizer_w_reshape = optim.Adam(model_w_reshape.parameters(), lr=learning_rate)
-    adc_wr_model_name = f"MLPADC+W-Reshape (bx={bx_val},bw={bw_val},ba={ba_val},k={k_val},lk={lambda_k_val})"
-
-    train_losses_wr, train_accs_wr, test_losses_wr, test_accs_wr = train_model(
-        model_w_reshape, optimizer_w_reshape, train_loader, test_loader, criterion, device,
-        num_epochs=num_epochs_exp,
-        model_name=adc_wr_model_name, 
-        calib_loader=train_loader, 
-        lambda_kurtosis=lambda_k_val 
-    )
-    adc_wr_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(adc_wr_model_name)}_weights_{timestamp}.pth'
-    torch.save(model_w_reshape.state_dict(), adc_wr_weights_filename)
-    print(f"Saved {adc_wr_model_name} weights to: {adc_wr_weights_filename}")
-
-    # --- Experiment with MLPADCAshift ---
-    print("\n--- Experiment with MLPADCAshift ---")
-    model_adc_ashift = MLPADCAshift(bx=bx_val, bw=bw_val, ba=ba_val, k=k_val, ashift_enabled=ashift_mode)
-    optimizer_adc_ashift = optim.Adam(model_adc_ashift.parameters(), lr=learning_rate)
-    ashift_model_name = f"MLPADCAshift (ashift={ashift_mode}, bx={bx_val}, bw={bw_val}, ba={ba_val}, k={k_val})"
+    train_loader, test_loader = loaders
     
-    train_losses_ashift, train_accs_ashift, test_losses_ashift, test_accs_ashift = train_model(
-        model_adc_ashift, optimizer_adc_ashift, train_loader, test_loader, criterion, device,
-        num_epochs=num_epochs_exp, 
-        model_name=ashift_model_name,
-        calib_loader=train_loader 
-    )
-    ashift_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(ashift_model_name)}_weights_{timestamp}.pth'
-    torch.save(model_adc_ashift.state_dict(), ashift_weights_filename)
-    print(f"Saved {ashift_model_name} weights to: {ashift_weights_filename}")
-
-    # --- Experiment with MLPADCAshift + Weight Reshaping ---
-    print("\n--- Experiment with MLPADCAshift + Weight Reshaping ---")
-    model_adc_ashift_wr = MLPADCAshift(bx=bx_val, bw=bw_val, ba=ba_val, k=k_val, ashift_enabled=ashift_mode)
-    optimizer_adc_ashift_wr = optim.Adam(model_adc_ashift_wr.parameters(), lr=learning_rate)
-    ashift_wr_model_name = f"MLPADCAshift+W-Reshape (ashift={ashift_mode}, bx={bx_val},bw={bw_val},ba={ba_val},k={k_val},lk={lambda_k_val})"
-
-    train_losses_ashift_wr, train_accs_ashift_wr, test_losses_ashift_wr, test_accs_ashift_wr = train_model(
-        model_adc_ashift_wr, optimizer_adc_ashift_wr, train_loader, test_loader, criterion, device,
-        num_epochs=num_epochs_exp,
-        model_name=ashift_wr_model_name,
-        calib_loader=train_loader,
-        lambda_kurtosis=lambda_k_val 
-    )
-    ashift_wr_weights_filename = f'{RESULTS_DIR}/model_{sanitize_filename(ashift_wr_model_name)}_weights_{timestamp}.pth'
-    torch.save(model_adc_ashift_wr.state_dict(), ashift_wr_weights_filename)
-    print(f"Saved {ashift_wr_model_name} weights to: {ashift_wr_weights_filename}")
-
-    # --- Results Logging to CSV ---
-    # Create results directory if it doesn't exist - MOVED EARLIER
-    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S") - MOVED EARLIER
-    csv_filename = f'{RESULTS_DIR}/experiment_results_{timestamp}.csv'
-    plot_filename = f'{RESULTS_DIR}/loss_curves_{timestamp}.png'
+    model_class = exp_config['model_class']
+    model_args = exp_config.get('model_args', {})
+    model = model_class(**model_args).to(device)
     
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    
+    train_args = exp_config.get('train_args', {})
+    # Use the actual train_loader if calibration is requested
+    if train_args.get('calib_loader') is True:
+        train_args['calib_loader'] = train_loader
+
+    train_losses, train_accs, test_losses, test_accs = train_model(
+        model, optimizer, train_loader, test_loader, criterion, device,
+        num_epochs=num_epochs,
+        model_name=model_name,
+        **train_args
+    )
+    
+    weights_filename = f'{results_dir}/model_{sanitize_filename(model_name)}_weights_{timestamp}.pth'
+    torch.save(model.state_dict(), weights_filename)
+    print(f"Saved {model_name} weights to: {weights_filename}")
+
+    return {
+        "name": model_name,
+        "params_str": exp_config['params_str'],
+        "train_losses": train_losses,
+        "train_accs": train_accs,
+        "test_losses": test_losses,
+        "test_accs": test_accs,
+    }
+
+def log_results_to_csv(all_results, num_epochs, csv_filename):
+    """Logs the results of all experiments to a single CSV file."""
     with open(csv_filename, 'w', newline='') as csvfile:
         csvwriter = csv.writer(csvfile)
-        # Write header
-        csvwriter.writerow(['Model Name', 'Epoch', 
-                           'Train Loss', 'Train Accuracy', 
-                           'Test Loss', 'Test Accuracy', 
-                           'Parameters'])
+        csvwriter.writerow(['Model Name', 'Epoch', 'Train Loss', 'Train Accuracy', 'Test Loss', 'Test Accuracy', 'Parameters'])
         
-        models_results = {
-            mlp_model_name: (train_losses_mlp, train_accs_mlp, test_losses_mlp, test_accs_mlp, "N/A"),
-            adc_model_name: (train_losses_adc, train_accs_adc, test_losses_adc, test_accs_adc, f"bx={bx_val}, bw={bw_val}, ba={ba_val}, k={k_val}"),
-            quant_model_name: (train_losses_quant, train_accs_quant, test_losses_quant, test_accs_quant, f"bx={bx_val}, bw={bw_val}"),
-            adc_wr_model_name: (train_losses_wr, train_accs_wr, test_losses_wr, test_accs_wr, f"bx={bx_val},bw={bw_val},ba={ba_val},k={k_val},lk={lambda_k_val}"),
-            ashift_model_name: (train_losses_ashift, train_accs_ashift, test_losses_ashift, test_accs_ashift, f"ashift={ashift_mode}, bx={bx_val}, bw={bw_val}, ba={ba_val}, k={k_val}"),
-            ashift_wr_model_name: (train_losses_ashift_wr, train_accs_ashift_wr, test_losses_ashift_wr, test_accs_ashift_wr, f"ashift={ashift_mode}, bx={bx_val},bw={bw_val},ba={ba_val},k={k_val},lk={lambda_k_val}")
-        }
+        for result in all_results:
+            model_name = result['name']
+            params_str = result['params_str']
+            train_losses = result['train_losses']
+            train_accs = result['train_accs']
+            test_losses = result['test_losses']
+            test_accs = result['test_accs']
 
-        for model_name, (train_losses, train_accs, test_losses, test_accs, params_str) in models_results.items():
-            if not train_losses: # Handle cases where training might not have run
-                csvwriter.writerow([model_name, 'N/A', 'No results', 'No results', 'No results', 'No results', params_str if params_str != "N/A" else "Epochs=" + str(num_epochs_exp)])
+            if not train_losses:
+                csvwriter.writerow([model_name, 'N/A', 'No results', 'No results', 'No results', 'No results', params_str])
                 continue
-            for epoch in range(num_epochs_exp):
+            
+            for epoch in range(num_epochs):
                 csvwriter.writerow([
                     model_name,
                     epoch + 1,
@@ -189,170 +113,182 @@ def run_experiment():
                     f'{train_accs[epoch]:.2f}%' if epoch < len(train_accs) else 'N/A',
                     f'{test_losses[epoch]:.4f}' if epoch < len(test_losses) else 'N/A',
                     f'{test_accs[epoch]:.2f}%' if epoch < len(test_accs) else 'N/A',
-                    params_str if params_str != "N/A" else "Epochs=" + str(num_epochs_exp)
+                    params_str
                 ])
-    
     print(f"\nExperiment results saved to: {csv_filename}")
 
-    # --- Plotting Section ---
-    epochs_range = range(1, num_epochs_exp + 1)
+def define_experiments(config):
+    """Defines all experiments to be run."""
+    q_params = config['quant_params']
+    bx, bw, ba, k = q_params['bx'], q_params['bw'], q_params['ba'], q_params['k']
+    lk = config['lambda_k_val']
+    ashift = config['ashift_mode']
+    num_epochs = config['num_epochs']
+
+    experiments = [
+        {
+            'name': "MLP (Baseline)",
+            'model_class': MLP,
+            'train_args': {},
+            'params_str': f"Epochs={num_epochs}",
+        },
+        {
+            'name': f"MLPADC (bx={bx}, bw={bw}, ba={ba}, k={k})",
+            'model_class': MLPADC,
+            'model_args': {'bx': bx, 'bw': bw, 'ba': ba, 'k': k},
+            'train_args': {'calib_loader': True},
+            'params_str': f"bx={bx}, bw={bw}, ba={ba}, k={k}",
+        },
+        {
+            'name': f"MLPQuant (bx={bx}, bw={bw})",
+            'model_class': MLPQuant,
+            'model_args': {'bx': bx, 'bw': bw},
+            'train_args': {'calib_loader': True},
+            'params_str': f"bx={bx}, bw={bw}",
+        },
+        {
+            'name': f"MLPADC+W-Reshape (bx={bx},bw={bw},ba={ba},k={k},lk={lk})",
+            'model_class': MLPADC,
+            'model_args': {'bx': bx, 'bw': bw, 'ba': ba, 'k': k},
+            'train_args': {'calib_loader': True, 'lambda_kurtosis': lk},
+            'params_str': f"bx={bx},bw={bw},ba={ba},k={k},lk={lk}",
+        },
+        {
+            'name': f"MLPADCAshift (ashift={ashift}, bx={bx}, bw={bw}, ba={ba}, k={k})",
+            'model_class': MLPADCAshift,
+            'model_args': {'bx': bx, 'bw': bw, 'ba': ba, 'k': k, 'ashift_enabled': ashift},
+            'train_args': {'calib_loader': True},
+            'params_str': f"ashift={ashift}, bx={bx}, bw={bw}, ba={ba}, k={k}",
+        },
+        {
+            'name': f"MLPADCAshift+W-Reshape (ashift={ashift}, bx={bx},bw={bw},ba={ba},k={k},lk={lk})",
+            'model_class': MLPADCAshift,
+            'model_args': {'bx': bx, 'bw': bw, 'ba': ba, 'k': k, 'ashift_enabled': ashift},
+            'train_args': {'calib_loader': True, 'lambda_kurtosis': lk},
+            'params_str': f"ashift={ashift}, bx={bx},bw={bw},ba={ba},k={k},lk={lk}",
+        }
+    ]
+    return experiments
+
+def plot_results(all_results, num_epochs, results_dir, timestamp):
+    """Generates and saves plots for the experiment results."""
+    epochs_range = range(1, num_epochs + 1)
     
-    # Define colors for consistency
     colors = {
-        "MLP": "blue",
+        "MLP (Baseline)": "blue",
         "MLPADC": "green",
         "MLPQuant": "red",
-        "MLPADCWReshape": "purple", # Renamed from MLPQuantWReshape
+        "MLPADC+W-Reshape": "purple",
         "MLPADCAshift": "cyan",
-        "MLPADCAshiftWReshape": "magenta" 
+        "MLPADCAshift+W-Reshape": "magenta" 
     }
+    markers = {
+        "MLP (Baseline)": 'o',
+        "MLPADC": 's',
+        "MLPQuant": 'd',
+        "MLPADC+W-Reshape": 'x',
+        "MLPADCAshift": 'p',
+        "MLPADCAshift+W-Reshape": 'h'
+    }
+
+    # Helper to find the correct key for colors/markers dict
+    def get_dict_key(name):
+        for key in colors:
+            if key in name:
+                return key
+        return None
 
     # --- Plot 1: Individual Accuracy Plots ---
-    model_data_for_plotting = {
-        mlp_model_name: (train_accs_mlp, test_accs_mlp, colors["MLP"], "N/A"),
-        adc_model_name: (train_accs_adc, test_accs_adc, colors["MLPADC"], f"bx={bx_val},bw={bw_val},ba={ba_val},k={k_val}"),
-        quant_model_name: (train_accs_quant, test_accs_quant, colors["MLPQuant"], f"bx={bx_val},bw={bw_val}"),
-        adc_wr_model_name: (train_accs_wr, test_accs_wr, colors["MLPADCWReshape"], f"bx={bx_val},bw={bw_val},ba={ba_val},k={k_val},lk={lambda_k_val}"),
-        ashift_model_name: (train_accs_ashift, test_accs_ashift, colors["MLPADCAshift"], f"ashift={ashift_mode},bx={bx_val},bw={bw_val},ba={ba_val},k={k_val}"),
-        ashift_wr_model_name: (train_accs_ashift_wr, test_accs_ashift_wr, colors["MLPADCAshiftWReshape"], f"ashift={ashift_mode},bx={bx_val},bw={bw_val},ba={ba_val},k={k_val},lk={lambda_k_val}")
-    }
-
-    for model_name_full, (train_accs, test_accs, color, params_str_short) in model_data_for_plotting.items():
-        if train_accs and test_accs:
+    for result in all_results:
+        if result['train_accs'] and result['test_accs']:
             plt.figure(figsize=(10, 6))
-            plt.plot(epochs_range, train_accs, label=f'{model_name_full} Train Accuracy', linestyle='-', marker='o', color=color)
-            plt.plot(epochs_range, test_accs, label=f'{model_name_full} Test Accuracy', linestyle='--', color=color)
-            plt.title(f'Accuracy vs. Epochs - {model_name_full}')
+            dict_key = get_dict_key(result['name'])
+            color = colors.get(dict_key, 'gray')
+            plt.plot(epochs_range, result['train_accs'], label=f'{result["name"]} Train Accuracy', linestyle='-', marker='o', color=color)
+            plt.plot(epochs_range, result['test_accs'], label=f'{result["name"]} Test Accuracy', linestyle='--', color=color)
+            plt.title(f'Accuracy vs. Epochs - {result["name"]}')
             plt.xlabel('Epoch')
             plt.ylabel('Accuracy (%)')
             plt.legend()
             plt.grid(True)
-            # Sanitize model_name_full for filename
-            safe_model_name = sanitize_filename(model_name_full) # Use helper
-            individual_plot_filename = f'{RESULTS_DIR}/accuracy_{safe_model_name}_{timestamp}.png'
+            individual_plot_filename = f'{results_dir}/accuracy_{sanitize_filename(result["name"])}_{timestamp}.png'
             plt.savefig(individual_plot_filename)
             print(f"Individual accuracy plot saved to: {individual_plot_filename}")
-            plt.close() # Close the figure to free memory
+            plt.close()
 
-    # --- Plot 2: Combined Accuracy Comparison Plot ---
-    plt.figure(figsize=(14, 9))
+    # --- Plot 2: Combined Plots (Accuracy, Loss, Specific Accuracy) ---
+    plot_configs = [
+        {'type': 'Accuracy', 'y_label': 'Accuracy (%)', 'title': 'Model Accuracy Comparison'},
+        {'type': 'Loss', 'y_label': 'Loss', 'title': 'Model Loss Curves Comparison'},
+        {'type': 'Specific_ADC_Accuracy', 'y_label': 'Accuracy (%)', 'title': 'Specific ADC Model Accuracy Comparison'}
+    ]
+
+    for p_config in plot_configs:
+        plt.figure(figsize=(14, 9))
+        
+        for result in all_results:
+            is_adc_model = "MLPADC" in result['name'] or "MLPADCAshift" in result['name']
+            if p_config['type'] == 'Specific_ADC_Accuracy' and not is_adc_model:
+                continue
+
+            dict_key = get_dict_key(result['name'])
+            color = colors.get(dict_key, 'gray')
+            marker = markers.get(dict_key, '*')
+
+            if p_config['type'].endswith('Accuracy'):
+                train_data, test_data = result['train_accs'], result['test_accs']
+                train_label, test_label = 'Train Acc', 'Test Acc'
+            else: # Loss
+                train_data, test_data = result['train_losses'], result['test_losses']
+                train_label, test_label = 'Train Loss', 'Test Loss'
+            
+            if train_data and test_data:
+                plt.plot(epochs_range, train_data, label=f'{result["name"]} {train_label}', linestyle='-', marker=marker, color=color)
+                plt.plot(epochs_range, test_data, label=f'{result["name"]} {test_label}', linestyle='--', color=color)
+
+        plt.title(p_config['title'])
+        plt.xlabel('Epoch')
+        plt.ylabel(p_config['y_label'])
+        plt.legend(loc='lower right' if 'Specific' in p_config['type'] else 'best')
+        plt.grid(True)
+        filename = f'{results_dir}/{p_config["title"].lower().replace(" ", "_")}_{timestamp}.png'
+        plt.savefig(filename)
+        print(f"Plot saved to: {filename}")
+        plt.close()
+
+
+def run_experiment():
+    """Main function to run all experiments."""
+    config = get_config()
+    os.makedirs(config['results_dir'], exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # MLP Accuracy
-    if train_accs_mlp and test_accs_mlp:
-        plt.plot(epochs_range, train_accs_mlp, label='MLP Train Accuracy', linestyle='-', marker='o', color=colors["MLP"])
-        plt.plot(epochs_range, test_accs_mlp, label='MLP Test Accuracy', linestyle='--', color=colors["MLP"])
+    print(f"Using device: {config['device']}")
 
-    # MLPADC Accuracy
-    if train_accs_adc and test_accs_adc:
-        plt.plot(epochs_range, train_accs_adc, label=f'{adc_model_name} Train Accuracy', linestyle='-', marker='s', color=colors["MLPADC"])
-        plt.plot(epochs_range, test_accs_adc, label=f'{adc_model_name} Test Accuracy', linestyle='--', color=colors["MLPADC"])
-
-    # MLPQuant Accuracy
-    if train_accs_quant and test_accs_quant:
-        plt.plot(epochs_range, train_accs_quant, label=f'{quant_model_name} Train Accuracy', linestyle='-', marker='d', color=colors["MLPQuant"])
-        plt.plot(epochs_range, test_accs_quant, label=f'{quant_model_name} Test Accuracy', linestyle='--', color=colors["MLPQuant"])
-
-    # MLPADC + W-Reshape Accuracy
-    if train_accs_wr and test_accs_wr:
-        plt.plot(epochs_range, train_accs_wr, label=f'{adc_wr_model_name} Train Accuracy', linestyle='-', marker='x', color=colors["MLPADCWReshape"]) 
-        plt.plot(epochs_range, test_accs_wr, label=f'{adc_wr_model_name} Test Accuracy', linestyle='--', color=colors["MLPADCWReshape"]) 
-        
-    # MLPADCAshift Accuracy
-    if train_accs_ashift and test_accs_ashift:
-        plt.plot(epochs_range, train_accs_ashift, label=f'{ashift_model_name} Train Acc', linestyle='-', marker='p', color=colors["MLPADCAshift"])
-        plt.plot(epochs_range, test_accs_ashift, label=f'{ashift_model_name} Test Acc', linestyle='--', color=colors["MLPADCAshift"])
-
-    # MLPADCAshift + W-Reshape Accuracy
-    if train_accs_ashift_wr and test_accs_ashift_wr:
-        plt.plot(epochs_range, train_accs_ashift_wr, label=f'{ashift_wr_model_name} Train Acc', linestyle='-', marker='h', color=colors["MLPADCAshiftWReshape"])
-        plt.plot(epochs_range, test_accs_ashift_wr, label=f'{ashift_wr_model_name} Test Acc', linestyle='--', color=colors["MLPADCAshiftWReshape"])
-        
-    plt.title('Model Accuracy Comparison')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy (%)')
-    plt.legend()
-    plt.grid(True)
-    comparison_plot_filename = f'{RESULTS_DIR}/accuracy_comparison_all_models_{timestamp}.png'
-    plt.savefig(comparison_plot_filename)
-    print(f"Combined accuracy plot saved to: {comparison_plot_filename}")
-    plt.close()
-
-    # --- Plot 2b: Specific ADC Models Accuracy Comparison Plot ---
-    plt.figure(figsize=(14, 9))
+    train_loader, test_loader = setup_dataloaders(config['batch_size_train'], config['batch_size_test'])
+    criterion = nn.CrossEntropyLoss()
     
-    # MLPADC Accuracy
-    if train_accs_adc and test_accs_adc:
-        plt.plot(epochs_range, train_accs_adc, label=f'{adc_model_name} Train Accuracy', linestyle='-', marker='s', color=colors["MLPADC"])
-        plt.plot(epochs_range, test_accs_adc, label=f'{adc_model_name} Test Accuracy', linestyle='--', color=colors["MLPADC"])
+    experiments = define_experiments(config)
+    all_results = []
 
-    # MLPADCAshift Accuracy
-    if train_accs_ashift and test_accs_ashift:
-        plt.plot(epochs_range, train_accs_ashift, label=f'{ashift_model_name} Train Acc', linestyle='-', marker='p', color=colors["MLPADCAshift"])
-        plt.plot(epochs_range, test_accs_ashift, label=f'{ashift_model_name} Test Acc', linestyle='--', color=colors["MLPADCAshift"])
+    for exp_config in experiments:
+        result = run_single_experiment(
+            exp_config=exp_config,
+            loaders=(train_loader, test_loader),
+            criterion=criterion,
+            device=config['device'],
+            num_epochs=config['num_epochs'],
+            lr=config['learning_rate'],
+            results_dir=config['results_dir'],
+            timestamp=timestamp
+        )
+        all_results.append(result)
 
-    # MLPADCAshift + W-Reshape Accuracy
-    if train_accs_ashift_wr and test_accs_ashift_wr:
-        plt.plot(epochs_range, train_accs_ashift_wr, label=f'{ashift_wr_model_name} Train Acc', linestyle='-', marker='h', color=colors["MLPADCAshiftWReshape"])
-        plt.plot(epochs_range, test_accs_ashift_wr, label=f'{ashift_wr_model_name} Test Acc', linestyle='--', color=colors["MLPADCAshiftWReshape"])
+    csv_filename = f"{config['results_dir']}/experiment_results_{timestamp}.csv"
+    log_results_to_csv(all_results, config['num_epochs'], csv_filename)
 
-    # MLPADC + W-Reshape Accuracy
-    if train_accs_wr and test_accs_wr: 
-        plt.plot(epochs_range, train_accs_wr, label=f'{adc_wr_model_name} Train Accuracy', linestyle='-', marker='x', color=colors["MLPADCWReshape"])
-        plt.plot(epochs_range, test_accs_wr, label=f'{adc_wr_model_name} Test Accuracy', linestyle='--', color=colors["MLPADCWReshape"])
-        
-    plt.title('Specific ADC Model Accuracy Comparison')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy (%)')
-    plt.legend(loc='lower right')
-    plt.grid(True)
-    specific_comparison_plot_filename = f'{RESULTS_DIR}/accuracy_comparison_specific_adc_models_{timestamp}.png'
-    plt.savefig(specific_comparison_plot_filename)
-    print(f"Specific ADC models accuracy plot saved to: {specific_comparison_plot_filename}")
-    plt.close()
+    plot_results(all_results, config['num_epochs'], config['results_dir'], timestamp)
 
-    # --- Plot 3: Combined Loss Curves (Kept from previous version) ---
-    loss_plot_filename = f'{RESULTS_DIR}/loss_curves_{timestamp}.png' # Ensure this filename is defined earlier or use a new one
-    plt.figure(figsize=(12, 8))
-
-    # MLP Losses
-    if train_losses_mlp and test_losses_mlp:
-        plt.plot(epochs_range, train_losses_mlp, label='MLP Train Loss', linestyle='-', marker='o', color=colors["MLP"])
-        plt.plot(epochs_range, test_losses_mlp, label='MLP Test Loss', linestyle='--', marker='x', color=colors["MLP"])
-
-    # MLPADC Losses
-    if train_losses_adc and test_losses_adc:
-        plt.plot(epochs_range, train_losses_adc, label=f'{adc_model_name} Train Loss', linestyle='-', marker='s', color=colors["MLPADC"])
-        plt.plot(epochs_range, test_losses_adc, label=f'{adc_model_name} Test Loss', linestyle='--', marker='^', color=colors["MLPADC"])
-
-    # MLPQuant Losses
-    if train_losses_quant and test_losses_quant:
-        plt.plot(epochs_range, train_losses_quant, label=f'{quant_model_name} Train Loss', linestyle='-', marker='d', color=colors["MLPQuant"])
-        plt.plot(epochs_range, test_losses_quant, label=f'{quant_model_name} Test Loss', linestyle='--', marker='+', color=colors["MLPQuant"])
-
-    # MLPADC + W-Reshape Losses
-    if train_losses_wr and test_losses_wr:
-        plt.plot(epochs_range, train_losses_wr, label=f'{adc_wr_model_name} Train Loss', linestyle='-', marker='x', color=colors["MLPADCWReshape"]) 
-        plt.plot(epochs_range, test_losses_wr, label=f'{adc_wr_model_name} Test Loss', linestyle='--', marker='1', color=colors["MLPADCWReshape"]) 
-        
-    # MLPADCAshift Losses
-    if train_losses_ashift and test_losses_ashift:
-        plt.plot(epochs_range, train_losses_ashift, label=f'{ashift_model_name} Train Loss', linestyle='-', marker='p', color=colors["MLPADCAshift"])
-        plt.plot(epochs_range, test_losses_ashift, label=f'{ashift_model_name} Test Loss', linestyle='--', marker='2', color=colors["MLPADCAshift"])
-
-    # MLPADCAshift + W-Reshape Losses
-    if train_losses_ashift_wr and test_losses_ashift_wr:
-        plt.plot(epochs_range, train_losses_ashift_wr, label=f'{ashift_wr_model_name} Train Loss', linestyle='-', marker='h', color=colors["MLPADCAshiftWReshape"])
-        plt.plot(epochs_range, test_losses_ashift_wr, label=f'{ashift_wr_model_name} Test Loss', linestyle='--', marker='3', color=colors["MLPADCAshiftWReshape"])
-        
-    plt.title('Model Loss Curves Comparison')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(loss_plot_filename)
-    print(f"Loss curves plot saved to: {loss_plot_filename}")
-    plt.close() # Close the figure
-    # plt.show() # Uncomment to display the plot
 
 if __name__ == '__main__':
     run_experiment()
