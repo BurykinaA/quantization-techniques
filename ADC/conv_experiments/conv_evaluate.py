@@ -67,6 +67,7 @@ def plot_results(all_results, num_epochs, results_dir, timestamp):
             plt.figure(figsize=(10, 6))
             dict_key = get_dict_key(result['name'], colors)
             color = colors.get(dict_key, 'gray')
+            epochs_range = range(1, len( result['train_accs']) + 1)
             plt.plot(epochs_range, result['train_accs'], label=f'{result["name"]} Train Accuracy', linestyle='-', marker='o', color=color)
             plt.plot(epochs_range, result['test_accs'], label=f'{result["name"]} Test Accuracy', linestyle='--', color=color)
             plt.title(f'Accuracy vs. Epochs - {result["name"]}')
@@ -108,7 +109,9 @@ def plot_results(all_results, num_epochs, results_dir, timestamp):
             else: # Loss
                 train_data, test_data = result['train_losses'], result['test_losses']
                 train_label, test_label = 'Train Loss', 'Test Loss'
+
             
+            epochs_range = range(1, len( result['train_accs']) + 1)
             if train_data and test_data:
                 plt.plot(epochs_range, train_data, label=f'{result["name"]} {train_label}', linestyle='-', marker=marker, color=color)
                 plt.plot(epochs_range, test_data, label=f'{result["name"]} {test_label}', linestyle='--', color=color)
@@ -134,7 +137,7 @@ def main_evaluate(timestamp):
     
     data = torch.load(results_path)
     all_results = data['all_results']
-    num_epochs = data['num_epochs']
+    num_epochs = 200 #data['num_epochs']
     
     print(f"Evaluating experiment from timestamp: {timestamp}")
 
