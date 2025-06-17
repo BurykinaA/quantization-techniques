@@ -12,8 +12,8 @@ def get_config():
     print(f"Using device: {device}")
 
     config = {
-        "results_dir": './results_resnet18',
-        "num_epochs": 3,
+        "results_dir": './results_resnet18_new',
+        "num_epochs": 100,
         "batch_size_train": 512,
         "batch_size_test": 512,
         "learning_rate": 0.0003,
@@ -38,14 +38,26 @@ def get_config():
 
 def setup_dataloaders(batch_size_train, batch_size_test):
     """Sets up and returns the CIFAR10 dataloaders."""
-    transform_cifar = transforms.Compose([
+    # transform_cifar = transforms.Compose([
+    #     transforms.ToTensor(),
+    #     transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
+    #                          std=[0.2023, 0.1994, 0.2010])
+    # ])
+
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
-                             std=[0.2023, 0.1994, 0.2010])
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
     ])
 
-    train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_cifar)
-    test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_cifar)
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+    ])
+
+    train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+    test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False)
@@ -111,10 +123,10 @@ def define_experiments(config):
 
 
     experiments = [
-        # adc_exp,
-        # baseline_exp,
-        # adc_w_reshape_exp,
-        adc_ashift_exp,
+        adc_w_reshape_exp,
+        baseline_exp,
+        adc_exp,
+        # adc_ashift_exp,
         # adc_ashift_w_reshape_exp,
     ]
     return experiments
