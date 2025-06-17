@@ -43,6 +43,18 @@ def run_single_experiment(exp_config, loaders, criterion, device, num_epochs, lr
     torch.save(model.state_dict(), weights_filename)
     print(f"Saved {model_name} weights to: {weights_filename}")
 
+    try:
+        checkpoint_path = f'{results_dir}/checkpoint_{sanitize_filename(model_name)}_{timestamp}.pth'
+        torch.save({
+            'epoch': num_epochs,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+        }, checkpoint_path)
+        print(f"Saved checkpoint to: {checkpoint_path}")
+    except:
+        print("Error saving checkpoint")
+
     return {
         "name": model_name,
         "params_str": exp_config['params_str'],
