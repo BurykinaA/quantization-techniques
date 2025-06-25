@@ -89,6 +89,7 @@ def get_squad_dataloaders(batch_size=16, subset_size=None):
         # Let's label those examples!
         tokenized_examples["start_positions"] = []
         tokenized_examples["end_positions"] = []
+        tokenized_examples["example_id"] = []
 
         for i, offsets in enumerate(offset_mapping):
             # We will label impossible answers with the index of the CLS token.
@@ -101,6 +102,8 @@ def get_squad_dataloaders(batch_size=16, subset_size=None):
             # One example can give several spans, this is the index of the example containing this span of text.
             sample_index = sample_mapping[i]
             answers = examples["answers"][sample_index]
+            tokenized_examples["example_id"].append(examples["id"][sample_index])
+
             # If no answers are given, set the cls_index as answer.
             if len(answers["answer_start"]) == 0:
                 tokenized_examples["start_positions"].append(cls_index)

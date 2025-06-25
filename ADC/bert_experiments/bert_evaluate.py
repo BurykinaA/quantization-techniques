@@ -4,7 +4,7 @@ import numpy as np
 from tqdm.auto import tqdm
 import evaluate
 
-def postprocess_qa_predictions(examples, features, raw_predictions, n_best_size=20, max_answer_length=30):
+def postprocess_qa_predictions(examples, features, raw_predictions, tokenizer, n_best_size=20, max_answer_length=30):
     all_start_logits, all_end_logits = raw_predictions
     # Build a map from a feature to its corresponding example.
     example_id_to_index = {k: i for i, k in enumerate(examples["id"])}
@@ -36,7 +36,7 @@ def postprocess_qa_predictions(examples, features, raw_predictions, n_best_size=
             offset_mapping = features[feature_index]["offset_mapping"]
 
             # Update minimum null prediction.
-            cls_index = features[feature_index]["input_ids"].index(features[feature_index]["tokenizer"].cls_token_id)
+            cls_index = features[feature_index]["input_ids"].index(tokenizer.cls_token_id)
             feature_null_score = start_logits[cls_index] + end_logits[cls_index]
             if min_null_score is None or min_null_score < feature_null_score:
                 min_null_score = feature_null_score
@@ -85,9 +85,12 @@ def evaluate(model, dataloader, eval_examples, eval_features, device):
     all_end_logits = []
 
     for batch in tqdm(dataloader, desc="Evaluating"):
-        batch = {k: v.to(device) for k, v in batch.items()}
+        # The model doesn't need all the columns from the dataset for its forward pass
+        model_input_keys = ['input_ids', 'attention_mask', 'token_type_ids']
+        model_input = {key: batch[key].to(device) for key in model_input_keys if key in batch}
+
         with torch.no_grad():
-            outputs = model(**batch)
+            outputs = model(**model_input)
             start_logits = outputs.start_logits
             end_logits = outputs.end_logits
 
@@ -96,16 +99,11 @@ def evaluate(model, dataloader, eval_examples, eval_features, device):
 
     raw_predictions = (np.concatenate(all_start_logits), np.concatenate(all_end_logits))
     
-    # The following part is CPU-intensive and depends on the tokenizer used.
-    # We need to add the tokenizer to the features to make it accessible.
-    # This is a bit of a hack.
+    # We need the tokenizer for post-processing
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-    eval_features = eval_features.add_column("tokenizer", [tokenizer]*len(eval_features))
-    eval_features = eval_features.add_column("example_id", eval_examples["id"])
 
-
-    final_predictions = postprocess_qa_predictions(eval_examples, eval_features, raw_predictions)
+    final_predictions = postprocess_qa_predictions(eval_examples, eval_features, raw_predictions, tokenizer)
     metric = evaluate.load("squad")
     
     formatted_predictions = [{"id": k, "prediction_text": v} for k, v in final_predictions.items()]
