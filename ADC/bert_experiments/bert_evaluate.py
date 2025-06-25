@@ -2,7 +2,7 @@ import torch
 import collections
 import numpy as np
 from tqdm.auto import tqdm
-import evaluate
+import evaluate as evaluate_metric
 
 def postprocess_qa_predictions(examples, features, raw_predictions, tokenizer, n_best_size=20, max_answer_length=30):
     all_start_logits, all_end_logits = raw_predictions
@@ -104,7 +104,7 @@ def evaluate(model, dataloader, eval_examples, eval_features, device):
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
 
     final_predictions = postprocess_qa_predictions(eval_examples, eval_features, raw_predictions, tokenizer)
-    metric = evaluate.load("squad")
+    metric = evaluate_metric.load("squad")
     
     formatted_predictions = [{"id": k, "prediction_text": v} for k, v in final_predictions.items()]
     references = [{"id": ex["id"], "answers": ex["answers"]} for ex in eval_examples]
