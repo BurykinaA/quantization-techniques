@@ -49,8 +49,14 @@ def get_model(model_type, bx=8, bw=8, ba=8, k=4, ashift=False):
 
     return model
 
-def get_squad_dataloaders(batch_size=16):
+def get_squad_dataloaders(batch_size=16, subset_size=None):
     datasets = load_dataset("squad")
+
+    if subset_size is not None:
+        print(f"Using a subset of the data: {subset_size} examples.")
+        datasets["train"] = datasets["train"].select(range(subset_size))
+        datasets["validation"] = datasets["validation"].select(range(subset_size))
+
     tokenizer = AutoTokenizer.from_pretrained(MODEL_CHECKPOINT)
 
     # The preprocessing function needs to be applied in a batched way to leverage the tokenizer's speed
