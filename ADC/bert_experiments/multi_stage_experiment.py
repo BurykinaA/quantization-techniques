@@ -61,15 +61,16 @@ def main(args):
     # Data
     train_dataloader, eval_dataloader, eval_examples, eval_features = get_squad_dataloaders(args.batch_size, args.subset_size)
     
-    # --- STAGE 0: Load Initial FP Model ---
-    # В идеале, здесь нужно дообучить FP модель на SQUAD, если она не дообучена.
-    # Мы предполагаем, что `from_pretrained` уже дает нам хорошую стартовую точку.
-    # Если нет, нужно добавить сюда цикл обучения для FP модели.
+    # --- STAGE 0: Load Initial FP Model on CPU ---
     fp_model = AutoModelForQuestionAnswering.from_pretrained("bert-base-uncased")
-    fp_model.to(device)
     
     # --- STAGE 1: Quantization-Aware Training (QAT) ---
+    print("Preparing model for QAT stage...")
+    # Adapt model on CPU
     qat_model = adapt_model_for_stage(fp_model, 'qat', bw=args.bw, bx=args.bx, ba=args.ba, k=args.k)
+    # Move the entire adapted model to the target device BEFORE training
+    qat_model.to(device)
+    
     qat_model, qat_metrics = train_one_stage("QAT", qat_model, train_dataloader, eval_dataloader, eval_examples, eval_features, device, args)
     
     # Сохраняем модель после QAT
@@ -78,13 +79,24 @@ def main(args):
     print(f"QAT model saved to {qat_model_path}")
 
     # --- STAGE 2: ADC Fine-tuning (RAOQ) ---
-    # Загружаем модель с весами после QAT
-    adc_model_base = adapt_model_for_stage(AutoModelForQuestionAnswering.from_pretrained("bert-base-uncased"), 'qat', bw=args.bw, bx=args.bx, ba=args.ba, k=args.k)
-    adc_model_base.load_state_dict(torch.load(qat_model_path))
-    adc_model_base.to(device)
+    print("\nPreparing model for ADC stage...")
+    # 1. Загружаем веса QAT-модели. map_location=device гарантирует, что веса загрузятся сразу на нужное устройство.
+    # Сначала создаем "скелет" модели с той же структурой, что и была сохранена (т.е. QAT-структурой)
+    adc_model_base_skeleton = adapt_model_for_stage(
+        AutoModelForQuestionAnswering.from_pretrained("bert-base-uncased"),
+        'qat', bw=args.bw, bx=args.bx, ba=args.ba, k=args.k
+    )
+    # Теперь загружаем веса в этот скелет
+    adc_model_base_skeleton.load_state_dict(torch.load(qat_model_path, map_location=device))
+    adc_model_base_skeleton.to(device) # Убедимся, что модель на нужном устройстве
     
-    # Теперь заменяем QAT слои на ADC слои
-    adc_model = adapt_model_for_stage(adc_model_base, 'adc', bw=args.bw, bx=args.bx, ba=args.ba, k=args.k)
+    # 2. Теперь, когда у нас есть обученная QAT-модель на GPU, мы заменяем её QAT-слои на ADC-слои.
+    # Новые ADC-слои будут созданы на CPU, поэтому после этого шага модель будет "гибридной".
+    adc_model = adapt_model_for_stage(adc_model_base_skeleton, 'adc', bw=args.bw, bx=args.bx, ba=args.ba, k=args.k)
+    
+    # 3. Ключевой шаг: Снова перемещаем всю модель на целевое устройство, чтобы синхронизировать слои.
+    adc_model.to(device)
+
     adc_model, final_metrics = train_one_stage("ADC", adc_model, train_dataloader, eval_dataloader, eval_examples, eval_features, device, args)
 
     # --- Save final results ---
