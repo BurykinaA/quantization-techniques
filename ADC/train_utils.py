@@ -33,7 +33,7 @@ def calibrate_model(model, calib_loader, device):
     model.eval() # Set back to eval mode or train() will be called by the main loop again
 
 
-def train_model(model, optimizer, train_loader, test_loader, criterion, device, num_epochs=20, model_name="Model", calib_loader=None, lambda_kurtosis=0.0):
+def train_model(model, optimizer, scheduler, train_loader, test_loader, criterion, device, num_epochs=20, model_name="Model", calib_loader=None, lambda_kurtosis=0.0):
     train_losses = []
     train_accuracies = []
     test_losses = []
@@ -106,6 +106,7 @@ def train_model(model, optimizer, train_loader, test_loader, criterion, device, 
         epoch_acc = 100. * correct_train / total_train
         train_losses.append(epoch_loss)
         train_accuracies.append(epoch_acc)
+        scheduler.step()
 
         model.eval() # Set model to evaluation mode. This disables observers in custom layers.
         test_loss = 0.0

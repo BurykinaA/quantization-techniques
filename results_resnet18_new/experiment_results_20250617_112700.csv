@@ -1,0 +1,601 @@
+Model Name,Epoch,Train Loss,Train Accuracy,Test Loss,Test Accuracy,Parameters
+ResNet18 (Baseline),1,1.7137,36.50%,1.5310,43.27%,
+ResNet18 (Baseline),2,1.4349,47.77%,1.3635,49.91%,
+ResNet18 (Baseline),3,1.1907,57.16%,1.1506,60.01%,
+ResNet18 (Baseline),4,0.9903,64.89%,1.0533,63.74%,
+ResNet18 (Baseline),5,0.8081,71.58%,0.7401,74.22%,
+ResNet18 (Baseline),6,0.6755,76.46%,0.6689,76.65%,
+ResNet18 (Baseline),7,0.6006,79.24%,0.6616,77.46%,
+ResNet18 (Baseline),8,0.5574,80.89%,0.7696,74.50%,
+ResNet18 (Baseline),9,0.5192,82.07%,0.5543,81.31%,
+ResNet18 (Baseline),10,0.5031,82.70%,0.6295,78.38%,
+ResNet18 (Baseline),11,0.4811,83.48%,0.5662,80.68%,
+ResNet18 (Baseline),12,0.4644,83.86%,0.5711,80.82%,
+ResNet18 (Baseline),13,0.4473,84.68%,0.5583,80.57%,
+ResNet18 (Baseline),14,0.4369,84.97%,0.5670,80.94%,
+ResNet18 (Baseline),15,0.4261,85.30%,0.6962,77.24%,
+ResNet18 (Baseline),16,0.4168,85.63%,0.5678,81.39%,
+ResNet18 (Baseline),17,0.4050,86.14%,0.5784,81.00%,
+ResNet18 (Baseline),18,0.4039,86.20%,0.4868,83.16%,
+ResNet18 (Baseline),19,0.3970,86.44%,0.4782,84.07%,
+ResNet18 (Baseline),20,0.3875,86.65%,0.5664,82.15%,
+ResNet18 (Baseline),21,0.3861,86.80%,0.5048,82.78%,
+ResNet18 (Baseline),22,0.3774,87.04%,0.4483,84.94%,
+ResNet18 (Baseline),23,0.3732,87.19%,0.5205,82.70%,
+ResNet18 (Baseline),24,0.3683,87.47%,0.4490,85.26%,
+ResNet18 (Baseline),25,0.3615,87.73%,0.5084,83.24%,
+ResNet18 (Baseline),26,0.3582,87.79%,0.5764,80.99%,
+ResNet18 (Baseline),27,0.3574,87.85%,0.5146,83.17%,
+ResNet18 (Baseline),28,0.3551,87.90%,0.4760,84.09%,
+ResNet18 (Baseline),29,0.3474,87.93%,0.5483,82.33%,
+ResNet18 (Baseline),30,0.3489,87.86%,0.4255,86.20%,
+ResNet18 (Baseline),31,0.3442,88.26%,0.4663,84.19%,
+ResNet18 (Baseline),32,0.3403,88.39%,0.5077,82.95%,
+ResNet18 (Baseline),33,0.3367,88.57%,0.4804,84.37%,
+ResNet18 (Baseline),34,0.3332,88.50%,0.5897,81.54%,
+ResNet18 (Baseline),35,0.3301,88.79%,0.5107,82.63%,
+ResNet18 (Baseline),36,0.3347,88.53%,0.6024,80.19%,
+ResNet18 (Baseline),37,0.3271,88.91%,0.5006,84.00%,
+ResNet18 (Baseline),38,0.3328,88.51%,0.5477,82.36%,
+ResNet18 (Baseline),39,0.3212,88.99%,0.4811,84.45%,
+ResNet18 (Baseline),40,0.3224,88.95%,0.4610,84.79%,
+ResNet18 (Baseline),41,0.3256,88.94%,0.4052,86.62%,
+ResNet18 (Baseline),42,0.3185,89.28%,0.4428,85.47%,
+ResNet18 (Baseline),43,0.3185,89.12%,0.4730,84.46%,
+ResNet18 (Baseline),44,0.3127,89.40%,0.3988,86.33%,
+ResNet18 (Baseline),45,0.3089,89.58%,0.4232,86.18%,
+ResNet18 (Baseline),46,0.3098,89.35%,0.6433,79.92%,
+ResNet18 (Baseline),47,0.3059,89.63%,0.5074,84.12%,
+ResNet18 (Baseline),48,0.3103,89.44%,0.4609,85.03%,
+ResNet18 (Baseline),49,0.3005,89.66%,0.4786,84.56%,
+ResNet18 (Baseline),50,0.3025,89.76%,0.6116,80.59%,
+ResNet18 (Baseline),51,0.2952,89.92%,0.5259,83.75%,
+ResNet18 (Baseline),52,0.3021,89.57%,0.6155,81.55%,
+ResNet18 (Baseline),53,0.2953,90.09%,0.4708,84.40%,
+ResNet18 (Baseline),54,0.2971,89.91%,0.4847,84.05%,
+ResNet18 (Baseline),55,0.2867,90.28%,0.4942,84.57%,
+ResNet18 (Baseline),56,0.2905,90.12%,0.4480,85.00%,
+ResNet18 (Baseline),57,0.2888,90.19%,0.4222,86.10%,
+ResNet18 (Baseline),58,0.2848,90.26%,0.6402,80.34%,
+ResNet18 (Baseline),59,0.2842,90.34%,0.5218,83.52%,
+ResNet18 (Baseline),60,0.2824,90.34%,0.5268,83.47%,
+ResNet18 (Baseline),61,0.2827,90.39%,0.4647,85.20%,
+ResNet18 (Baseline),62,0.2796,90.58%,0.4795,84.64%,
+ResNet18 (Baseline),63,0.2742,90.59%,0.4604,85.10%,
+ResNet18 (Baseline),64,0.2744,90.75%,0.4007,86.87%,
+ResNet18 (Baseline),65,0.2747,90.70%,0.3853,86.93%,
+ResNet18 (Baseline),66,0.2673,90.96%,0.4039,86.88%,
+ResNet18 (Baseline),67,0.2683,90.80%,0.4543,85.83%,
+ResNet18 (Baseline),68,0.2631,90.99%,0.3375,88.49%,
+ResNet18 (Baseline),69,0.2677,90.88%,0.4607,85.50%,
+ResNet18 (Baseline),70,0.2585,91.15%,0.4377,85.83%,
+ResNet18 (Baseline),71,0.2571,91.14%,0.4542,85.31%,
+ResNet18 (Baseline),72,0.2623,91.08%,0.3832,87.17%,
+ResNet18 (Baseline),73,0.2579,91.13%,0.4121,86.52%,
+ResNet18 (Baseline),74,0.2530,91.42%,0.5415,82.95%,
+ResNet18 (Baseline),75,0.2531,91.44%,0.3552,88.16%,
+ResNet18 (Baseline),76,0.2491,91.54%,0.4476,85.45%,
+ResNet18 (Baseline),77,0.2468,91.71%,0.3568,88.51%,
+ResNet18 (Baseline),78,0.2476,91.49%,0.4687,84.86%,
+ResNet18 (Baseline),79,0.2371,91.88%,0.3716,87.74%,
+ResNet18 (Baseline),80,0.2439,91.77%,0.4134,86.47%,
+ResNet18 (Baseline),81,0.2388,91.69%,0.4603,85.76%,
+ResNet18 (Baseline),82,0.2342,91.89%,0.3716,87.73%,
+ResNet18 (Baseline),83,0.2332,92.08%,0.3210,89.53%,
+ResNet18 (Baseline),84,0.2302,92.08%,0.3901,87.54%,
+ResNet18 (Baseline),85,0.2288,92.09%,0.3310,89.09%,
+ResNet18 (Baseline),86,0.2192,92.50%,0.3404,88.73%,
+ResNet18 (Baseline),87,0.2215,92.45%,0.4164,86.46%,
+ResNet18 (Baseline),88,0.2225,92.29%,0.3804,87.36%,
+ResNet18 (Baseline),89,0.2188,92.51%,0.4793,85.09%,
+ResNet18 (Baseline),90,0.2147,92.79%,0.3523,88.51%,
+ResNet18 (Baseline),91,0.2185,92.50%,0.3846,87.68%,
+ResNet18 (Baseline),92,0.2108,92.90%,0.3837,87.44%,
+ResNet18 (Baseline),93,0.2106,92.79%,0.3199,89.48%,
+ResNet18 (Baseline),94,0.2161,92.62%,0.3991,87.36%,
+ResNet18 (Baseline),95,0.1967,93.41%,0.3747,88.26%,
+ResNet18 (Baseline),96,0.2030,92.98%,0.3871,87.93%,
+ResNet18 (Baseline),97,0.1994,93.15%,0.3388,89.02%,
+ResNet18 (Baseline),98,0.1920,93.45%,0.3215,89.63%,
+ResNet18 (Baseline),99,0.1968,93.21%,0.3334,88.95%,
+ResNet18 (Baseline),100,0.1888,93.54%,0.3740,87.75%,
+ResNet18 (Baseline),101,0.1893,93.45%,0.3369,89.29%,
+ResNet18 (Baseline),102,0.1812,93.77%,0.3734,87.68%,
+ResNet18 (Baseline),103,0.1872,93.50%,0.3823,88.62%,
+ResNet18 (Baseline),104,0.1833,93.71%,0.3127,89.74%,
+ResNet18 (Baseline),105,0.1746,94.04%,0.3066,89.87%,
+ResNet18 (Baseline),106,0.1700,94.08%,0.3198,89.48%,
+ResNet18 (Baseline),107,0.1735,94.12%,0.3783,88.28%,
+ResNet18 (Baseline),108,0.1701,94.10%,0.3272,89.21%,
+ResNet18 (Baseline),109,0.1672,94.45%,0.4692,85.96%,
+ResNet18 (Baseline),110,0.1649,94.37%,0.3046,90.18%,
+ResNet18 (Baseline),111,0.1591,94.61%,0.3010,90.62%,
+ResNet18 (Baseline),112,0.1582,94.57%,0.3466,89.08%,
+ResNet18 (Baseline),113,0.1548,94.73%,0.3618,88.91%,
+ResNet18 (Baseline),114,0.1528,94.76%,0.3246,89.72%,
+ResNet18 (Baseline),115,0.1535,94.79%,0.2831,90.89%,
+ResNet18 (Baseline),116,0.1471,95.02%,0.3770,88.41%,
+ResNet18 (Baseline),117,0.1422,95.14%,0.3815,87.96%,
+ResNet18 (Baseline),118,0.1407,95.30%,0.3419,89.20%,
+ResNet18 (Baseline),119,0.1339,95.48%,0.2868,91.34%,
+ResNet18 (Baseline),120,0.1397,95.22%,0.2928,90.77%,
+ResNet18 (Baseline),121,0.1329,95.46%,0.3636,88.79%,
+ResNet18 (Baseline),122,0.1292,95.57%,0.2888,90.82%,
+ResNet18 (Baseline),123,0.1240,95.76%,0.2630,91.64%,
+ResNet18 (Baseline),124,0.1211,95.95%,0.3606,89.20%,
+ResNet18 (Baseline),125,0.1215,95.86%,0.3179,90.27%,
+ResNet18 (Baseline),126,0.1138,96.10%,0.2872,91.15%,
+ResNet18 (Baseline),127,0.1129,96.15%,0.2651,91.71%,
+ResNet18 (Baseline),128,0.1074,96.35%,0.3409,90.12%,
+ResNet18 (Baseline),129,0.1069,96.45%,0.2844,91.38%,
+ResNet18 (Baseline),130,0.1069,96.38%,0.2866,90.71%,
+ResNet18 (Baseline),131,0.1031,96.40%,0.2969,91.07%,
+ResNet18 (Baseline),132,0.0997,96.64%,0.3061,90.67%,
+ResNet18 (Baseline),133,0.0967,96.75%,0.2732,91.54%,
+ResNet18 (Baseline),134,0.0935,96.85%,0.2830,91.36%,
+ResNet18 (Baseline),135,0.0841,97.21%,0.3116,91.09%,
+ResNet18 (Baseline),136,0.0845,97.18%,0.2592,92.12%,
+ResNet18 (Baseline),137,0.0900,96.93%,0.2723,91.73%,
+ResNet18 (Baseline),138,0.0871,97.06%,0.3297,90.76%,
+ResNet18 (Baseline),139,0.0739,97.48%,0.2843,91.54%,
+ResNet18 (Baseline),140,0.0710,97.73%,0.2828,91.50%,
+ResNet18 (Baseline),141,0.0735,97.49%,0.2740,92.03%,
+ResNet18 (Baseline),142,0.0669,97.76%,0.2674,92.01%,
+ResNet18 (Baseline),143,0.0610,97.97%,0.2575,92.61%,
+ResNet18 (Baseline),144,0.0651,97.86%,0.2615,92.64%,
+ResNet18 (Baseline),145,0.0612,97.98%,0.2554,92.66%,
+ResNet18 (Baseline),146,0.0590,98.07%,0.3130,91.16%,
+ResNet18 (Baseline),147,0.0578,98.14%,0.2707,92.20%,
+ResNet18 (Baseline),148,0.0535,98.21%,0.2815,92.31%,
+ResNet18 (Baseline),149,0.0487,98.45%,0.2646,93.00%,
+ResNet18 (Baseline),150,0.0435,98.58%,0.2357,93.13%,
+ResNet18 (Baseline),151,0.0438,98.52%,0.2823,92.11%,
+ResNet18 (Baseline),152,0.0399,98.66%,0.2441,92.95%,
+ResNet18 (Baseline),153,0.0390,98.75%,0.2417,93.18%,
+ResNet18 (Baseline),154,0.0325,98.96%,0.2725,92.53%,
+ResNet18 (Baseline),155,0.0342,98.87%,0.2586,92.94%,
+ResNet18 (Baseline),156,0.0329,98.97%,0.2409,93.53%,
+ResNet18 (Baseline),157,0.0274,99.13%,0.2590,92.87%,
+ResNet18 (Baseline),158,0.0260,99.18%,0.2661,92.95%,
+ResNet18 (Baseline),159,0.0237,99.28%,0.2196,93.73%,
+ResNet18 (Baseline),160,0.0208,99.41%,0.2392,93.82%,
+ResNet18 (Baseline),161,0.0184,99.43%,0.2225,94.17%,
+ResNet18 (Baseline),162,0.0148,99.57%,0.2316,93.79%,
+ResNet18 (Baseline),163,0.0126,99.68%,0.2382,93.91%,
+ResNet18 (Baseline),164,0.0123,99.64%,0.2349,94.00%,
+ResNet18 (Baseline),165,0.0092,99.77%,0.2340,93.98%,
+ResNet18 (Baseline),166,0.0100,99.72%,0.2099,94.42%,
+ResNet18 (Baseline),167,0.0089,99.75%,0.2207,94.24%,
+ResNet18 (Baseline),168,0.0076,99.81%,0.2125,94.36%,
+ResNet18 (Baseline),169,0.0064,99.85%,0.2034,94.79%,
+ResNet18 (Baseline),170,0.0044,99.93%,0.2004,94.77%,
+ResNet18 (Baseline),171,0.0039,99.93%,0.1993,94.74%,
+ResNet18 (Baseline),172,0.0033,99.97%,0.1996,94.87%,
+ResNet18 (Baseline),173,0.0030,99.96%,0.1941,95.08%,
+ResNet18 (Baseline),174,0.0025,99.97%,0.1946,94.90%,
+ResNet18 (Baseline),175,0.0027,99.96%,0.1960,94.84%,
+ResNet18 (Baseline),176,0.0026,99.97%,0.1911,95.18%,
+ResNet18 (Baseline),177,0.0027,99.96%,0.1859,95.18%,
+ResNet18 (Baseline),178,0.0024,99.98%,0.1859,95.03%,
+ResNet18 (Baseline),179,0.0021,99.99%,0.1805,95.22%,
+ResNet18 (Baseline),180,0.0019,99.99%,0.1821,95.06%,
+ResNet18 (Baseline),181,0.0020,99.99%,0.1835,95.21%,
+ResNet18 (Baseline),182,0.0020,99.99%,0.1826,95.18%,
+ResNet18 (Baseline),183,0.0018,99.99%,0.1804,95.34%,
+ResNet18 (Baseline),184,0.0020,99.98%,0.1792,95.32%,
+ResNet18 (Baseline),185,0.0019,99.99%,0.1798,95.19%,
+ResNet18 (Baseline),186,0.0018,99.99%,0.1785,95.32%,
+ResNet18 (Baseline),187,0.0018,99.99%,0.1777,95.33%,
+ResNet18 (Baseline),188,0.0018,99.99%,0.1777,95.31%,
+ResNet18 (Baseline),189,0.0017,100.00%,0.1772,95.34%,
+ResNet18 (Baseline),190,0.0017,100.00%,0.1764,95.31%,
+ResNet18 (Baseline),191,0.0016,100.00%,0.1776,95.23%,
+ResNet18 (Baseline),192,0.0018,100.00%,0.1770,95.34%,
+ResNet18 (Baseline),193,0.0016,100.00%,0.1782,95.23%,
+ResNet18 (Baseline),194,0.0018,99.98%,0.1772,95.33%,
+ResNet18 (Baseline),195,0.0016,100.00%,0.1766,95.24%,
+ResNet18 (Baseline),196,0.0017,99.99%,0.1763,95.34%,
+ResNet18 (Baseline),197,0.0017,100.00%,0.1775,95.25%,
+ResNet18 (Baseline),198,0.0017,100.00%,0.1762,95.34%,
+ResNet18 (Baseline),199,0.0017,100.00%,0.1767,95.33%,
+ResNet18 (Baseline),200,0.0018,99.99%,0.1770,95.30%,
+ResNet18 (ADC),1,1.8621,30.44%,1.6534,37.42%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),2,1.7002,36.80%,1.6880,38.76%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),3,1.5895,40.56%,1.5614,43.23%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),4,1.5341,42.58%,1.4362,46.91%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),5,1.4786,44.52%,1.4176,46.36%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),6,1.4002,47.70%,1.3627,47.82%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),7,1.3370,50.31%,1.4508,48.09%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),8,1.2982,51.89%,1.2855,52.73%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),9,1.2247,54.81%,1.2458,53.87%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),10,1.1997,55.84%,1.2386,54.83%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),11,1.1557,57.37%,1.1848,57.18%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),12,1.1192,58.78%,1.1394,59.34%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),13,1.0927,59.87%,1.1183,58.08%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),14,1.0717,60.51%,1.1705,56.90%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),15,1.0574,61.16%,1.2423,56.86%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),16,1.0313,62.33%,1.1183,60.82%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),17,1.0049,62.80%,1.3491,53.17%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),18,0.9773,64.03%,1.0316,64.46%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),19,1.0148,62.66%,1.2452,58.44%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),20,0.9919,63.45%,0.9879,64.36%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),21,0.9520,64.86%,1.1663,60.00%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),22,0.9842,63.94%,1.0373,62.47%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),23,0.9164,65.96%,0.9834,64.86%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),24,0.9090,66.40%,0.9688,66.37%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),25,0.9054,66.54%,0.9389,65.61%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),26,0.8964,66.67%,0.9868,64.98%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),27,0.8856,67.17%,0.9540,65.98%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),28,0.8725,67.89%,0.9268,66.14%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),29,0.8686,67.98%,0.9187,67.91%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),30,0.8557,68.50%,0.8889,66.96%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),31,0.8459,68.69%,0.9315,67.90%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),32,0.8467,68.66%,0.8762,67.92%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),33,0.8372,69.14%,0.8693,68.30%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),34,0.8257,69.35%,0.8660,68.11%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),35,0.8225,69.80%,0.8514,68.91%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),36,0.8184,69.79%,0.9199,67.43%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),37,0.8144,69.75%,0.9179,68.17%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),38,0.8082,70.22%,0.8808,68.40%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),39,0.8061,70.36%,0.8513,68.69%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),40,0.8033,70.32%,0.9068,68.68%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),41,0.7949,70.79%,0.8508,68.76%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),42,0.7872,70.99%,0.8498,69.87%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),43,0.7822,71.27%,0.8182,70.74%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),44,0.7800,71.04%,0.8998,68.04%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),45,0.7801,70.89%,0.8255,70.68%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),46,0.7840,70.81%,0.8107,70.90%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),47,0.7742,71.29%,0.8962,69.46%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),48,0.7588,71.92%,0.8073,71.02%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),49,0.7592,71.89%,0.7972,71.85%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),50,0.7526,72.14%,0.8230,70.33%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),51,0.7486,72.26%,0.8369,69.86%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),52,0.7501,72.15%,0.8070,71.01%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),53,0.7462,72.42%,0.7905,71.36%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),54,0.7359,72.46%,0.7936,71.22%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),55,0.7319,72.87%,0.8010,72.56%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),56,0.7395,72.51%,0.7917,72.22%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),57,0.7326,72.89%,0.7856,72.15%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),58,0.7343,72.63%,0.7736,72.23%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),59,0.7293,72.95%,0.7596,72.31%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),60,0.7367,72.78%,0.7682,72.32%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),61,0.7227,73.13%,0.7777,72.49%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),62,0.7234,73.07%,0.8130,71.73%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),63,0.7287,72.87%,0.7840,71.67%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),64,0.7229,72.99%,0.7744,72.41%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),65,0.7258,73.02%,0.8101,70.51%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),66,0.7256,73.08%,0.7800,72.26%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),67,0.7188,73.07%,0.8350,69.40%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),68,0.7183,73.38%,0.8231,70.65%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),69,0.7238,73.00%,0.7694,71.39%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),70,0.7187,73.32%,0.7999,71.16%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),71,0.7163,73.36%,0.7595,72.15%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),72,0.7133,73.37%,0.7722,72.45%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),73,0.7264,72.77%,0.8022,71.44%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),74,0.7295,72.56%,0.7706,71.98%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),75,0.7282,72.63%,0.8020,71.17%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),76,0.7335,72.54%,0.7902,71.53%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),77,0.7249,72.52%,0.7760,72.07%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),78,0.7230,72.76%,0.7704,72.42%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),79,0.7173,72.96%,0.7852,71.07%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),80,0.7241,72.87%,0.7808,71.90%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),81,0.7198,73.14%,0.7699,72.25%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),82,0.7204,72.91%,0.7681,72.43%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),83,0.7186,73.16%,0.7663,72.25%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),84,0.7176,72.92%,0.7780,72.21%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),85,0.7186,73.09%,0.7783,72.89%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),86,0.7151,73.27%,0.7707,72.54%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),87,0.7177,72.98%,0.7584,72.69%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),88,0.7168,73.02%,0.7694,72.22%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),89,0.7133,73.03%,0.7712,71.97%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),90,0.7102,73.14%,0.7617,72.37%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),91,0.7175,72.93%,0.7659,72.50%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),92,0.7157,73.02%,0.7724,72.05%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),93,0.7244,72.72%,0.7704,71.59%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),94,0.7219,72.78%,0.7693,72.10%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),95,0.7229,72.65%,0.7721,72.00%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),96,0.7222,72.86%,0.7679,72.12%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),97,0.7183,72.80%,0.7662,72.51%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),98,0.7230,72.76%,0.7623,72.21%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),99,0.7241,72.67%,0.7724,72.30%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),100,0.7229,72.51%,0.7702,71.75%,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),101,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),102,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),103,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),104,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),105,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),106,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),107,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),108,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),109,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),110,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),111,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),112,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),113,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),114,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),115,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),116,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),117,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),118,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),119,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),120,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),121,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),122,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),123,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),124,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),125,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),126,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),127,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),128,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),129,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),130,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),131,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),132,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),133,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),134,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),135,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),136,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),137,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),138,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),139,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),140,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),141,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),142,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),143,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),144,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),145,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),146,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),147,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),148,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),149,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),150,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),151,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),152,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),153,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),154,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),155,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),156,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),157,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),158,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),159,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),160,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),161,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),162,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),163,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),164,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),165,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),166,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),167,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),168,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),169,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),170,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),171,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),172,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),173,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),174,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),175,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),176,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),177,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),178,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),179,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),180,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),181,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),182,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),183,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),184,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),185,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),186,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),187,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),188,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),189,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),190,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),191,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),192,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),193,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),194,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),195,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),196,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),197,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),198,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),199,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+ResNet18 (ADC),200,N/A,N/A,N/A,N/A,bx=8 bw=8 ba=8 k=4
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",1,1.8718,32.50%,1.8813,32.75%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",2,1.5875,43.41%,1.9475,33.01%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",3,1.4820,47.11%,1.4399,45.60%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",4,1.3570,51.83%,1.3455,48.88%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",5,1.4898,47.32%,1.3396,51.13%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",6,1.3037,54.28%,1.2229,55.99%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",7,1.3151,54.00%,1.2860,51.16%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",8,1.1862,58.42%,1.1528,58.49%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",9,1.1249,60.92%,1.1048,60.02%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",10,1.0866,62.08%,1.0546,61.90%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",11,1.0393,63.95%,1.0210,63.06%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",12,1.0111,64.79%,1.0524,60.99%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",13,0.9925,65.45%,0.9739,64.69%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",14,0.9607,66.67%,0.9525,66.41%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",15,0.9388,67.40%,0.9944,64.59%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",16,0.9135,68.12%,0.9652,64.08%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",17,0.8899,69.10%,0.9655,66.08%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",18,0.8667,69.95%,0.9238,66.60%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",19,0.8457,70.75%,0.8987,65.81%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",20,0.8258,71.38%,0.8728,68.49%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",21,0.7975,72.61%,0.8832,69.32%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",22,0.7823,73.04%,0.9068,67.42%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",23,0.7681,73.65%,0.8218,70.92%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",24,0.7336,74.98%,0.8256,70.67%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",25,0.7217,75.37%,0.8895,68.04%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",26,0.7170,75.67%,0.8185,69.91%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",27,0.6878,76.66%,0.7629,73.28%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",28,0.6654,77.57%,0.7358,74.38%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",29,0.6514,78.17%,0.8243,72.39%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",30,0.6322,78.81%,0.7558,73.99%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",31,0.6098,79.48%,0.7328,74.91%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",32,0.6017,79.83%,0.8182,72.51%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",33,0.5905,80.30%,0.8427,70.72%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",34,0.5783,80.68%,0.6983,75.15%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",35,0.5674,81.02%,0.7430,75.36%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",36,0.5516,81.83%,0.6625,76.76%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",37,0.5434,82.07%,0.6532,77.84%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",38,0.5330,82.38%,0.7030,77.05%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",39,0.5181,82.88%,0.6687,77.35%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",40,0.5084,83.20%,0.6469,78.49%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",41,0.4994,83.47%,0.6807,76.06%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",42,0.4920,83.77%,0.6641,78.52%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",43,0.4832,84.01%,0.6751,77.24%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",44,0.4754,84.25%,0.6392,78.65%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",45,0.4720,84.47%,0.7046,75.41%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",46,0.4557,84.95%,0.6507,77.61%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",47,0.4505,85.20%,0.6431,77.93%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",48,0.4481,85.36%,0.6840,78.29%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",49,0.4444,85.36%,0.6441,79.41%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",50,0.4282,86.02%,0.6430,78.35%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",51,0.4283,85.85%,0.6500,78.11%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",52,0.4210,86.17%,0.6866,77.77%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",53,0.4158,86.38%,0.6545,79.04%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",54,0.4119,86.50%,0.6691,77.88%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",55,0.4042,86.81%,0.6686,79.07%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",56,0.4018,86.75%,0.6392,80.65%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",57,0.3907,87.31%,0.6512,78.45%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",58,0.3859,87.41%,0.7481,77.89%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",59,0.3832,87.51%,0.6557,79.24%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",60,0.3740,87.79%,0.6340,80.11%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",61,0.3672,87.96%,0.6401,80.29%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",62,0.3697,87.95%,0.6642,79.29%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",63,0.3578,88.25%,0.6708,79.35%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",64,0.3617,88.20%,0.6489,79.87%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",65,0.3506,88.52%,0.7112,77.06%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",66,0.3473,88.74%,0.6562,80.08%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",67,0.3357,89.06%,0.6571,79.92%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",68,0.3395,88.95%,0.6658,80.69%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",69,0.3384,89.05%,0.7023,78.23%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",70,0.3352,89.06%,0.6725,81.17%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",71,0.3253,89.39%,0.6507,79.77%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",72,0.3228,89.44%,0.6667,79.36%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",73,0.3215,89.36%,0.6862,79.81%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",74,0.3205,89.46%,0.6536,80.55%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",75,0.3175,89.64%,0.6904,79.45%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",76,0.3201,89.53%,0.6826,80.31%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",77,0.3088,89.93%,0.6661,80.64%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",78,0.3118,89.80%,0.6648,80.56%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",79,0.3027,90.09%,0.7037,79.87%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",80,0.3015,90.20%,0.7542,79.22%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",81,0.3004,90.12%,0.6835,79.50%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",82,0.2962,90.42%,0.7000,81.42%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",83,0.2903,90.46%,0.6802,80.77%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",84,0.2948,90.40%,0.6803,80.83%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",85,0.2871,90.74%,0.6970,79.82%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",86,0.2900,90.51%,0.6748,80.54%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",87,0.2892,90.49%,0.7564,80.18%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",88,0.2821,90.76%,0.6741,80.61%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",89,0.2855,90.72%,0.6926,80.57%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",90,0.2794,90.99%,0.6865,80.50%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",91,0.2741,91.13%,0.6910,81.06%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",92,0.2751,91.05%,0.6694,80.59%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",93,0.2764,90.87%,0.6794,81.28%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",94,0.2727,91.10%,0.6994,79.77%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",95,0.2728,91.30%,0.6738,80.65%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",96,0.2691,91.32%,0.6887,81.12%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",97,0.2675,91.33%,0.7212,80.31%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",98,0.2649,91.34%,0.7001,81.20%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",99,0.2606,91.61%,0.7382,79.15%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",100,0.2632,91.53%,0.6908,80.56%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",101,0.2576,91.61%,0.7034,80.35%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",102,0.2610,91.55%,0.7208,79.39%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",103,0.2586,91.59%,0.7036,80.72%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",104,0.2581,91.69%,0.7413,81.20%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",105,0.2538,91.72%,0.7392,81.15%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",106,0.2530,91.77%,0.7180,80.67%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",107,0.2496,91.81%,0.7202,81.24%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",108,0.2452,92.00%,0.7253,81.31%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",109,0.2396,92.21%,0.7104,81.57%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",110,0.2441,92.03%,0.7115,81.50%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",111,0.2454,91.99%,0.7090,81.44%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",112,0.2431,92.06%,0.7109,80.94%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",113,0.2426,92.12%,0.7373,81.66%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",114,0.2419,92.01%,0.7748,81.24%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",115,0.2423,92.14%,0.7414,80.29%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",116,0.2390,92.16%,0.7452,81.89%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",117,0.2393,92.28%,0.7274,80.58%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",118,0.2353,92.43%,0.7789,79.95%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",119,0.2375,92.24%,0.7455,81.25%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",120,0.2297,92.51%,0.7747,81.88%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",121,0.2315,92.36%,0.7516,80.65%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",122,0.2344,92.33%,0.7601,81.10%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",123,0.2326,92.34%,0.7501,80.92%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",124,0.2366,92.12%,0.7513,81.21%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",125,0.2324,92.53%,0.7404,81.65%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",126,0.2346,92.32%,0.7890,80.61%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",127,0.2362,92.38%,0.8004,80.43%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",128,0.2352,92.27%,0.7534,81.04%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",129,0.2319,92.32%,0.7719,81.22%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",130,0.2371,92.15%,0.7821,81.22%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",131,0.2338,92.10%,0.8134,80.37%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",132,0.2428,91.87%,0.8062,79.60%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",133,0.3250,89.52%,0.8668,78.59%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",134,0.2881,90.15%,0.7797,80.51%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",135,0.2547,91.16%,0.8033,80.88%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",136,0.2456,91.59%,0.7918,81.46%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",137,0.2453,91.72%,0.7775,81.29%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",138,0.2365,91.94%,0.7953,80.88%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",139,0.2328,92.18%,0.8043,80.84%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",140,0.2340,92.23%,0.8015,81.32%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",141,0.2296,92.43%,0.7859,81.46%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",142,0.2314,92.21%,0.8010,80.91%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",143,0.2348,92.08%,0.7746,80.63%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",144,0.2330,91.91%,0.7931,80.87%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",145,0.2290,92.18%,0.7935,81.14%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",146,0.2310,92.26%,0.7846,80.99%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",147,0.2295,92.32%,0.8114,80.67%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",148,0.2268,92.36%,0.8181,81.44%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",149,0.2246,92.52%,0.8192,81.11%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",150,0.2240,92.54%,0.8263,80.65%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",151,0.2260,92.54%,0.8138,81.35%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",152,0.2221,92.66%,0.8085,81.38%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",153,0.2225,92.74%,0.8327,81.52%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",154,0.2232,92.65%,0.8182,81.45%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",155,0.2234,92.81%,0.8274,81.11%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",156,0.2188,92.74%,0.8353,81.25%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",157,0.2178,92.92%,0.8308,81.54%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",158,0.2206,92.82%,0.8360,81.38%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",159,0.2169,92.90%,0.8150,81.66%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",160,0.2171,92.88%,0.8528,81.55%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",161,0.2183,92.86%,0.8253,81.41%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",162,0.2155,92.88%,0.8447,80.91%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",163,0.2145,93.07%,0.8480,81.11%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",164,0.2121,93.03%,0.8477,81.26%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",165,0.2138,92.95%,0.8564,80.85%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",166,0.2127,93.08%,0.8257,82.08%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",167,0.2080,93.21%,0.8485,81.12%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",168,0.2152,92.99%,0.8438,81.59%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",169,0.2112,93.04%,0.8544,81.48%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",170,0.2107,93.01%,0.8596,81.49%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",171,0.2156,92.92%,0.8407,81.23%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",172,0.2133,92.96%,0.8742,81.17%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",173,0.2141,93.09%,0.8473,81.25%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",174,0.2138,93.15%,0.8319,80.99%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",175,0.2094,93.12%,0.8533,81.43%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",176,0.2060,93.25%,0.8285,81.43%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",177,0.2097,93.18%,0.8383,81.36%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",178,0.2088,93.18%,0.8395,81.16%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",179,0.2125,93.13%,0.8510,81.70%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",180,0.2108,93.09%,0.8521,80.90%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",181,0.2106,93.17%,0.8501,81.14%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",182,0.2124,93.01%,0.8553,81.42%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",183,0.2152,93.10%,0.8608,81.48%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",184,0.2112,93.15%,0.8575,81.63%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",185,0.2113,93.16%,0.8499,80.74%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",186,0.2117,93.21%,0.8467,81.53%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",187,0.2062,93.27%,0.8515,81.24%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",188,0.2088,93.19%,0.8499,81.46%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",189,0.2096,93.28%,0.8468,81.49%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",190,0.2079,93.30%,0.8368,81.35%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",191,0.2059,93.23%,0.8525,81.33%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",192,0.2092,93.23%,0.8515,80.93%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",193,0.2094,93.03%,0.8622,81.12%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",194,0.2080,93.24%,0.8564,81.23%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",195,0.2053,93.42%,0.8541,81.65%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",196,0.2125,93.11%,0.8560,81.37%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",197,0.2092,93.24%,0.8460,81.53%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",198,0.2076,93.26%,0.8611,81.46%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",199,0.2100,93.18%,0.8847,80.98%,"bx=8,bw=8,ba=8,k=4,lk=0.001"
+"ResNet18(ADC)+W-Reshape (bx=8,bw=8,ba=8,k=4,lk=0.001)",200,0.2095,93.31%,0.8415,81.45%,"bx=8,bw=8,ba=8,k=4,lk=0.001"

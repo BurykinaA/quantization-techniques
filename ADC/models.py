@@ -198,8 +198,9 @@ class ResNetCIFAR_ADC(nn.Module):
         self.ashift=ashift
 
         # CIFAR: input 3x32x32 → 64x32x32
+        # First layer is kept in 8-bit
         self.conv1 = Conv2dADC(3, 64, kernel_size=3, stride=1,
-                               padding=1, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=ashift)
+                               padding=1, bias=False, bx=8, bw=8, ba=8, k=self.k, ashift=ashift)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
 
@@ -210,7 +211,8 @@ class ResNetCIFAR_ADC(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = LinearADC(512 * block.expansion, num_classes, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=ashift)
+        # Last layer is kept in 8-bit
+        self.fc = LinearADC(512 * block.expansion, num_classes, bx=8, bw=8, ba=8, k=self.k, ashift=ashift)
 
         # Weight init
         for m in self.modules():
