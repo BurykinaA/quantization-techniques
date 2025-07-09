@@ -20,6 +20,7 @@ def _replace_linear(module, bx, bw, ba, k, ashift, name_prefix=""):
         if isinstance(child, torch.nn.Linear):
             if "qa_outputs" in full_name or "attention" in full_name or "intermediate" in full_name:
                 # Decide which quantized layer to use based on config
+                print(f"Replacing {full_name} with {LinearADCAshift if ashift else LinearADC}")
                 QuantLayer = LinearADCAshift if ashift else LinearADC
                 new_layer = QuantLayer(
                     child.in_features,
