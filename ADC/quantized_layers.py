@@ -17,7 +17,6 @@ class LinearADC(nn.Linear):
     def dequantize(self, yq, wq):
         target_device = self.weight.device
 
-        # Move quantizer params to target device before use
         x_zp = self.x_quantizer.zero_point.to(target_device)
         w_s = self.w_quantizer.scale.to(target_device)
         x_s = self.x_quantizer.scale.to(target_device)
@@ -26,7 +25,6 @@ class LinearADC(nn.Linear):
         if (self.ashift):
             y = y + self.C * wq.sum(axis=-1)
         
-        # Ensure all tensors in this expression are on the same device
         out = y - x_zp / w_s * self.weight.sum(axis=-1)
         out = out * x_s * w_s
         return out
@@ -79,7 +77,6 @@ class LinearADCAshift(LinearADC):
     def dequantize(self, yq_adc, wq):
         target_device = self.weight.device
         
-        # Move quantizer params to target device before use
         x_zp = self.x_quantizer.zero_point.to(target_device)
         w_s = self.w_quantizer.scale.to(target_device)
         x_s = self.x_quantizer.scale.to(target_device)
@@ -127,30 +124,22 @@ class LinearQuant(nn.Linear):
         return self
 
     def forward(self, x):
+        target_device = x.device
+
         xq = self.x_quantizer(x)
         wq = self.w_quantizer(self.weight)
 
-        if self.x_quantizer.scale is None or self.x_quantizer.zero_point is None or \
-           self.w_quantizer.scale is None:
-            raise RuntimeError("Input/Weight quantizers in LinearQuant must be calibrated.")
-
-        target_device = self.weight.device
+        if not self.x_quantizer.params_calculated or not self.w_quantizer.params_calculated:
+            raise RuntimeError("Input/Weight quantizers must be calibrated.")
 
         # Dequantize activations
         scale_x = self.x_quantizer.scale.to(target_device)
         zp_x = self.x_quantizer.zero_point.to(target_device)
-        
-        if not torch.is_floating_point(xq):
-             x_dequant = (xq.to(scale_x.dtype) - zp_x) * scale_x
-        else:
-             x_dequant = (xq - zp_x) * scale_x
+        x_dequant = (xq - zp_x) * scale_x
 
         # Dequantize weights
         scale_w = self.w_quantizer.scale.to(target_device)
-        if not torch.is_floating_point(wq):
-            w_dequant = wq.to(scale_w.dtype) * scale_w
-        else:
-            w_dequant = wq * scale_w
+        w_dequant = wq * scale_w
             
         out = nn.functional.linear(x_dequant, w_dequant, self.bias)
         return out
@@ -192,7 +181,6 @@ class Conv2dADC(nn.Conv2d):
     def dequantize(self, yq, wq):
         target_device = self.weight.device
 
-        # Move quantizer params to target device before use
         x_zp = self.x_quantizer.zero_point.to(target_device)
         w_s = self.w_quantizer.scale.to(target_device)
         x_s = self.x_quantizer.scale.to(target_device)
@@ -202,7 +190,6 @@ class Conv2dADC(nn.Conv2d):
         y = yq * self.adc_quantizer.delta
         if (self.ashift):
             y = y + self.C * (wq.sum(axis=(1, 2, 3)))[None, :, None, None]
-        
         out = y - x_zp / w_s * (self.weight.sum(axis=(1, 2, 3)))[None, :, None, None]
         out = out * x_s * w_s
         return out
