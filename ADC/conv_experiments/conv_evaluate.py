@@ -6,6 +6,7 @@ import argparse
 
 from ADC.conv_experiments.conv_experiment_setup import get_config, sanitize_filename
 
+
 def log_results_to_csv(all_results, num_epochs, csv_filename):
     """Logs the results of all experiments to a single CSV file."""
     with open(csv_filename, 'w', newline='') as csvfile:

@@ -236,6 +236,14 @@ class AffineQuantizerPerTensor(nn.Module):
         xq = torch.clamp(xq, self.observer.quant_min, self.observer.quant_max)
         return xq
 
+    def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
+        xq = self.forward(x)
+        scale_x = self.scale.to(xq.device)
+        zp_x = self.zero_point.to(xq.device, dtype=xq.dtype)
+        x_dequant = (xq - zp_x) * scale_x
+        return x_dequant
+            
+
 
 class SymmetricQuantizerPerTensor(nn.Module):
     def __init__(self, bw=8):
@@ -301,6 +309,12 @@ class SymmetricQuantizerPerTensor(nn.Module):
         xq = ste_round(x / current_scale) 
         xq = torch.clamp(xq, self.observer.quant_min, self.observer.quant_max)
         return xq
+
+    def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
+        xq = self.forward(x)
+        scale_x = self.scale.to(xq.device)
+        x_dequant = xq * scale_x
+        return x_dequant
 
 class ADCQuantizer(nn.Module):
     def __init__(self, M, bx, bw, ba = 8, k = 4):

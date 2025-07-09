@@ -13,6 +13,12 @@ class LinearADC(nn.Linear):
         self.adc_quantizer = ADCQuantizer(M=in_features, bx=bx, bw=bw, ba=ba, k=k)
         self.ashift = ashift
         self.C = 2 ** (bx - 1)
+        self.adc_enabled = True
+
+    def enable_adc(self):
+        self.adc_enabled = True
+    def disable_adc(self):
+        self.adc_enabled = False
 
     def dequantize(self, yq, wq):
 
@@ -45,6 +51,12 @@ class LinearADC(nn.Linear):
         return self
 
     def forward(self, x):
+        if (not self.adc_enabled):
+            xq = self.x_quantizer.fake_quantize(x)
+            wq = self.w_quantizer.fake_quantize(self.weight)
+            out = nn.functional.linear(xq, wq, self.bias)
+            return out
+
         xq = self.x_quantizer(x)
         if (self.ashift):
             xq = xq - self.C
@@ -171,7 +183,13 @@ class Conv2dADC(nn.Conv2d):
         else:
             Mv = in_channels*kernel_size[0]*kernel_size[1]
         self.adc_quantizer = ADCQuantizer(M=Mv, bx=bx, bw=bw, ba=ba, k=k)
+        self.adc_enabled = True
     
+    def enable_adc(self):
+        self.adc_enabled = True
+    def disable_adc(self):
+        self.adc_enabled = False
+
     def dequantize(self, yq, wq):
         # yq: out x H_out x W_out
         # self.weight: out x in x H_out x W_out
@@ -196,13 +214,26 @@ class Conv2dADC(nn.Conv2d):
         self.train(not mode)
         return self
     def forward(self, x):
+        if (not self.adc_enabled):
+            xq = self.x_quantizer.fake_quantize(x)
+            wq = self.w_quantizer.fake_quantize(self.weight)
+            out = torch.nn.functional.conv2d(xq, 
+                                               wq, 
+                                               bias=self.bias, 
+                                               stride=self.stride, 
+                                               padding=self.padding, 
+                                               dilation=self.dilation, 
+                                               groups=self.groups)
+            return out
+        
+
         xq = self.x_quantizer(x)
         if (self.ashift):
             xq = xq - self.C
         wq = self.w_quantizer(self.weight)
         y_for_adc = torch.nn.functional.conv2d(xq, 
                                                wq, 
-                                               bias=self.bias, 
+                                               bias=None, 
                                                stride=self.stride, 
                                                padding=self.padding, 
                                                dilation=self.dilation, 

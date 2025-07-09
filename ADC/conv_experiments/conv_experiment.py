@@ -1,4 +1,5 @@
 import torch
+import wandb
 import torch.optim as optim
 from torch import nn
 import os
@@ -7,11 +8,24 @@ from datetime import datetime
 from ADC.train_utils import train_model
 from ADC.conv_experiments.conv_experiment_setup import get_config, setup_dataloaders, define_experiments, sanitize_filename
 
+WANDB_PROJECT_NAME = "quantization-conv2d"
 
-def run_single_experiment(exp_config, loaders, criterion, device, num_epochs, lr, scheduler_params, results_dir, timestamp):
+def run_single_experiment(exp_config, loaders, criterion, device, num_epochs, lr, scheduler_params, results_dir = 'tmp', timestamp=None):
+    
+    if not timestamp:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     """Runs a single experiment and saves the weights."""
     model_name = exp_config['name']
     print(f"\n--- Training {model_name} ---")
+
+    wandb.init(
+        project=WANDB_PROJECT_NAME,
+        name=f"{sanitize_filename(model_name)}_{timestamp}",
+        config={
+            "learning_rate": lr,
+            "num_epochs": num_epochs
+        })
 
     train_loader, test_loader = loaders
     
@@ -39,9 +53,21 @@ def run_single_experiment(exp_config, loaders, criterion, device, num_epochs, lr
         **train_args
     )
     
-    weights_filename = f'{results_dir}/model_{sanitize_filename(model_name)}_weights_{timestamp}.pth'
-    torch.save(model.state_dict(), weights_filename)
-    print(f"Saved {model_name} weights to: {weights_filename}")
+    # weights_filename = f'{results_dir}/model_{sanitize_filename(model_name)}_weights_{timestamp}.pth'
+    # torch.save(model.state_dict(), weights_filename)
+    # print(f"Saved {model_name} weights to: {weights_filename}")
+
+    results_path = f'{results_dir}/results_{sanitize_filename(model_name)}_{timestamp}.pt'
+    torch.save({
+        "name": model_name,
+        'num_epochs': exp_config['num_epochs'],
+        "params_str": exp_config['params_str'],
+        "train_losses": train_losses,
+        "train_accs": train_accs,
+        "test_losses": test_losses,
+        "test_accs": test_accs,
+        'timestamp': timestamp
+    }, results_path)
 
     try:
         checkpoint_path = f'{results_dir}/checkpoint_{sanitize_filename(model_name)}_{timestamp}.pth'
@@ -95,7 +121,7 @@ def main_train():
         all_results.append(result)
 
     # Save all results for the evaluation script
-    results_path = f"{config['results_dir']}/results_{timestamp}.pt"
+    results_path = f"{config['results_dir']}/all_results_{timestamp}.pt"
     torch.save({
         'all_results': all_results,
         'num_epochs': config['num_epochs'],

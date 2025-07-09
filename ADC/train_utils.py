@@ -2,6 +2,7 @@ import torch
 import time
 from torch import nn # For criterion
 from tqdm import tqdm
+import wandb
 
 def calibrate_model(model, calib_loader, device):
     model.train() # Set to train mode for observers to work
@@ -127,7 +128,7 @@ def train_model(model, optimizer, scheduler, train_loader, test_loader, criterio
         epoch_test_acc = 100. * correct_test / total_test
         test_losses.append(epoch_test_loss)
         test_accuracies.append(epoch_test_acc)
-
+        wandb.log({"train_loss": epoch_loss, "train_acc": epoch_acc, "test_loss" : epoch_test_loss, "test_acc" : epoch_test_acc})
         print(f"Epoch {epoch+1}/{num_epochs} => "
               f"Train Loss: {epoch_loss:.4f}, Train Acc: {epoch_acc:.2f}% | "
               f"Test Loss: {epoch_test_loss:.4f}, Test Acc: {epoch_test_acc:.2f}%")

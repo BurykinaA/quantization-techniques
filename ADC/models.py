@@ -198,9 +198,15 @@ class ResNetCIFAR_ADC(nn.Module):
         self.ashift=ashift
 
         # CIFAR: input 3x32x32 → 64x32x32
-        # First layer is kept in 8-bit
+
+        
         self.conv1 = Conv2dADC(3, 64, kernel_size=3, stride=1,
-                               padding=1, bias=False, bx=8, bw=8, ba=8, k=self.k, ashift=ashift)
+                                padding=1, bias=False, bx=8, bw=8, ba=8, k=self.k, ashift=ashift)
+        self.conv1.disable_adc()
+        
+        # First layer is kept in original precision
+        #self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
 
@@ -211,12 +217,17 @@ class ResNetCIFAR_ADC(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        # Last layer is kept in 8-bit
-        self.fc = LinearADC(512 * block.expansion, num_classes, bx=8, bw=8, ba=8, k=self.k, ashift=ashift)
 
+
+        # Last layer is kept in original precision
+        #self.fc = nn.Linear(512 * block.expansion, num_classes)
+
+        self.fc = LinearADC(512 * block.expansion, num_classes, bx=8, bw=8, ba=8, k=self.k, ashift=ashift)
+        self.fc.disable_adc()
+    
         # Weight init
         for m in self.modules():
-            if isinstance(m, Conv2dADC):
+            if isinstance(m, Conv2dADC) or isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
@@ -239,6 +250,17 @@ class ResNetCIFAR_ADC(nn.Module):
             layers.append(block(self.in_channels, out_channels, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift))
 
         return nn.Sequential(*layers)
+
+    def enable_adc(self):
+        for name, m in self.named_modules():
+            if isinstance(m, Conv2dADC) or isinstance(m, LinearADC) and name not in ["conv1", "fc"]:
+                m.enable_adc()
+    
+    def disable_adc(self):
+        for m in self.modules():
+            if isinstance(m, Conv2dADC) or isinstance(m, LinearADC):
+                m.disable_adc()
+                
 
     def forward(self, x):
         x = self.relu(self.bn1(self.conv1(x)))  # 3x32x32 → 64x32x32

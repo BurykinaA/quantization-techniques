@@ -24,7 +24,7 @@ def get_config():
             "k": 4, #do we even have it like this in our ADC?
         },
         "lambda_k_val": 0.001,
-        "ashift_mode": True, #now is commented 
+        #"ashift_mode": True, #now is commented 
         "num_classes": 10,
         "device": device,
     }
@@ -68,65 +68,112 @@ def sanitize_filename(name):
     """Sanitizes a string to be used as a filename."""
     return name.replace(" ", "_").replace("(", "").replace(")", "").replace("=", "").replace(",", "").replace("+", "plus")
 
-def define_experiments(config):
-    """Defines all experiments to be run."""
+def get_exp_config(config=None, model='resnet18', adc=False, ashift=False, wreshape=False):
+    if not config:
+        config = get_config()
+    if (model != 'resnet18'):
+        raise ValueError("Unknown model type")
     q_params = config['quant_params']
     bx, bw, ba, k = q_params['bx'], q_params['bw'], q_params['ba'], q_params['k']
     lk = config['lambda_k_val']
-    ashift = config['ashift_mode']
+    #ashift = config['ashift_mode']
+    #train_args = {"lr" : config['learning_rate'], "num_epochs" : config["num_epochs"]}
+    train_args = {}
     num_classes = config['num_classes']
+    if (not adc):
+        return {
+            'name': "ResNet18 Baseline",
+            'model_class': resnet18_cifar,
+            'model_args': {'num_classes': num_classes},
+            'train_args': {},
+            'params_str': "",
+        }
+    model_class = resnet18_cifar_adc
+    model_args = {'num_classes': num_classes, 'bx': bx, 'bw': bw, 'ba': ba, 'k': k, 'ashift': ashift}
+    params_str = f"bx={bx}, bw={bw}, ba={ba}, k={k}, ashift={ashift}"
+    train_args['calib_loader'] = True
+    model_name = f"ResNet18 ADC ({bx}, {bw}, {ba}, {k})"
 
-    # ADC Experiment
-    adc_exp = {
-        'name': "ResNet18 (ADC)",
-        'model_class': resnet18_cifar_adc,
-        'model_args': {'num_classes': num_classes, 'bx': bx, 'bw': bw, 'ba': ba, 'k': k},
-        'train_args': {}, # No calibration in original script for this specific model
-        'params_str': f"bx={bx}, bw={bw}, ba={ba}, k={k}",
+    if ashift:
+        model_name += " Ashift"
+    if wreshape:
+        model_name += f" WReshape ({lk})"
+        params_str += f", lk={lk}"
+        train_args['lk'] = lk
+    return {
+        'name' : model_name,
+        'model_class' : model_class,
+        'model_args' : model_args,
+        'train_args' : train_args,
+        'params_str' : params_str
     }
 
-    # Baseline Experiment
-    baseline_exp = {
-        'name': "ResNet18 (Baseline)",
-        'model_class': resnet18_cifar,
-        'model_args': {'num_classes': num_classes},
-        'train_args': {},
-        'params_str': "N/A",
-    }
+def define_experiments(config):
+    return [get_exp_config(config, adc=False),
+            get_exp_config(config, adc=True),
+            get_exp_config(config, adc=True, wreshape=True),
+            get_exp_config(config, adc=True, ashift=True),
+            get_exp_config(config, adc=True, ashift=True, wreshape=True)]
 
-    # ADC with Weight Reshaping Experiment
-    adc_w_reshape_exp = {
-        'name': f"ResNet18(ADC)+W-Reshape (bx={bx},bw={bw},ba={ba},k={k},lk={lk})",
-        'model_class': resnet18_cifar_adc,
-        'model_args': {'num_classes': num_classes, 'bx': bx, 'bw': bw, 'ba': ba, 'k': k},
-        'train_args': {'calib_loader': True, 'lambda_kurtosis': lk},
-        'params_str': f"bx={bx},bw={bw},ba={ba},k={k},lk={lk}",
-    }
+# def define_experiments(config):
+#     """Defines all experiments to be run."""
+#     q_params = config['quant_params']
+#     bx, bw, ba, k = q_params['bx'], q_params['bw'], q_params['ba'], q_params['k']
+#     lk = config['lambda_k_val']
+#     ashift = config['ashift_mode']
+#     num_classes = config['num_classes']
+
+#     # ADC Experiment
+#     adc_exp = {
+#         'name': "ResNet18 (ADC)",
+#         'model_class': resnet18_cifar_adc,
+#         'model_args': {'num_classes': num_classes, 'bx': bx, 'bw': bw, 'ba': ba, 'k': k},
+#         'train_args': {}, # No calibration in original script for this specific model
+#         'params_str': f"bx={bx}, bw={bw}, ba={ba}, k={k}",
+#     }
+
+#     # Baseline Experiment
+#     baseline_exp = {
+#         'name': "ResNet18 (Baseline)",
+#         'model_class': resnet18_cifar,
+#         'model_args': {'num_classes': num_classes},
+#         'train_args': {},
+#         'params_str': "N/A",
+#     }
+
+#     # ADC with Weight Reshaping Experiment
+#     adc_w_reshape_exp = {
+#         'name': f"ResNet18(ADC)+W-Reshape (bx={bx},bw={bw},ba={ba},k={k},lk={lk})",
+#         'model_class': resnet18_cifar_adc,
+#         'model_args': {'num_classes': num_classes, 'bx': bx, 'bw': bw, 'ba': ba, 'k': k},
+#         'train_args': {'calib_loader': True, 'lambda_kurtosis': lk},
+#         'params_str': f"bx={bx},bw={bw},ba={ba},k={k},lk={lk}",
+#     }
     
-    #ADC with Ashift Experiment (currently does not work)
-    adc_ashift_exp = {
-        'name': f"ResNet18ADCAshift (ashift={ashift}, bx={bx}, bw={bw}, ba={ba}, k={k})",
-        'model_class': resnet18_cifar_adc,
-        'model_args': {'num_classes': num_classes, 'bx': bx, 'bw': bw, 'ba': ba, 'k': k, 'ashift': True},
-        'train_args': {'calib_loader': True},
-        'params_str': f"ashift={ashift}, bx={bx}, bw={bw}, ba={ba}, k={k}",
-    }
+#     #ADC with Ashift Experiment (currently does not work)
+#     adc_ashift_exp = {
+#         'name': f"ResNet18ADCAshift (ashift={ashift}, bx={bx}, bw={bw}, ba={ba}, k={k})",
+#         'model_class': resnet18_cifar_adc,
+#         'model_args': {'num_classes': num_classes, 'bx': bx, 'bw': bw, 'ba': ba, 'k': k, 'ashift': True},
+#         'train_args': {'calib_loader': True},
+#         'params_str': f"ashift={ashift}, bx={bx}, bw={bw}, ba={ba}, k={k}",
+#     }
 
-    #ADC with Ashift and Weight Reshaping Experiment (currently does not work)
-    adc_ashift_w_reshape_exp = {
-        'name': f"ResNet18 Ashift+W-Reshape (ashift={ashift}, bx={bx},bw={bw},ba={ba},k={k},lk={lk})",
-        'model_class': resnet18_cifar_adc,
-        'model_args': {'num_classes': num_classes, 'bx': bx, 'bw': bw, 'ba': ba, 'k': k, 'ashift': True},
-        'train_args': {'calib_loader': True, 'lambda_kurtosis': lk},
-        'params_str': f"ashift={ashift}, bx={bx},bw={bw},ba={ba},k={k},lk={lk}",
-    }
+#     #ADC with Ashift and Weight Reshaping Experiment (currently does not work)
+#     adc_ashift_w_reshape_exp = {
+#         'name': f"ResNet18 Ashift+W-Reshape (ashift={ashift}, bx={bx},bw={bw},ba={ba},k={k},lk={lk})",
+#         'model_class': resnet18_cifar_adc,
+#         'model_args': {'num_classes': num_classes, 'bx': bx, 'bw': bw, 'ba': ba, 'k': k, 'ashift': True},
+#         'train_args': {'calib_loader': True, 'lambda_kurtosis': lk},
+#         'params_str': f"ashift={ashift}, bx={bx},bw={bw},ba={ba},k={k},lk={lk}",
+#     }
 
 
-    experiments = [
-        adc_exp,
-        adc_w_reshape_exp,
-        baseline_exp,
-        # adc_ashift_exp,
-        # adc_ashift_w_reshape_exp,
-    ]
-    return experiments
+#     experiments = [
+#         adc_exp,
+#         adc_w_reshape_exp,
+#         baseline_exp,
+#         # adc_ashift_exp,
+#         # adc_ashift_w_reshape_exp,
+#     ]
+#     return experiments
