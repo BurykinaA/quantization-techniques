@@ -40,7 +40,11 @@ def main(args):
     # Перемещаем всю модель на целевое устройство (важно для консистентности)
     model_skeleton.to(device)
     
-    # 4. Запускаем оценку
+    # 4. КЛЮЧЕВОЙ ШАГ: Переводим модель в режим оценки.
+    # Это отключит наблюдателей и заставит квантизаторы использовать загруженные scale/zero_point.
+    model_skeleton.eval()
+
+    # 5. Запускаем оценку
     print("Starting evaluation...")
     metrics = evaluate(model_skeleton, eval_dataloader, eval_examples, eval_features, device)
     

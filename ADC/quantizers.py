@@ -169,24 +169,20 @@ class AffineQuantizerPerTensor(nn.Module):
         super().__init__()
         self.observer = MinMaxObserver(dtype=torch.quint8, qscheme=torch.per_tensor_affine, quant_min=0, quant_max=2**bx - 1)
         
-        # Register scale and zero_point as buffers with initial placeholder values.
-        # Their types will be preserved when updated.
         self.register_buffer('scale', torch.tensor([1.0], dtype=torch.float32)) 
-        self.register_buffer('zero_point', torch.tensor([0], dtype=torch.int32)) # Observers often return int32 zero_point
+        self.register_buffer('zero_point', torch.tensor([0], dtype=torch.int32))
         
-        # Flag to indicate if parameters have been calculated and loaded/set
-        # This will be True after the first observer pass or if loaded from state_dict
-        self.params_calculated = False
+        # РЕГИСТРИРУЕМ ФЛАГ КАК БУФЕР
+        self.register_buffer('params_calculated', torch.tensor(False, dtype=torch.bool))
+        
         self.bx = bx
-        # This 'enabled' flag controls if the observer runs when model.training is False
-        # (e.g., for post-training calibration runs if needed)
         self.enabled = True 
 
     def enable(self):
         """Enables the observer for potential calibration runs even if model.training is False."""
         self.enabled = True
         # Optionally, if re-enabling means you want to force re-calibration:
-        # self.params_calculated = False 
+        # self.params_calculated.fill_(False)
         # self.scale.fill_(1.0)
         # self.zero_point.fill_(0)
 
@@ -208,17 +204,12 @@ class AffineQuantizerPerTensor(nn.Module):
             self.observer(x.detach()) 
             _s, _zp = self.observer.calculate_qparams()
             
-            # Update the buffers in-place using copy_()
-            # This ensures the registered buffers are modified and will be saved.
-            self.scale.copy_(_s.to(self.scale.device)) # Ensure observer output is on same device as buffer
+            self.scale.copy_(_s.to(self.scale.device))
             self.zero_point.copy_(_zp.to(self.zero_point.device, dtype=self.zero_point.dtype))
-            self.params_calculated = True
+            # ИЗМЕНЯЕМ ЗНАЧЕНИЕ БУФЕРА
+            self.params_calculated.fill_(True)
 
-        # Check if parameters are valid for quantization
-        # This check runs after any potential observer pass.
-        # If params_calculated is False here, it means:
-        #   - Not training, observer disabled, and they were never calculated/loaded.
-        #   - Or, observer ran (e.g. in eval mode calibration) but failed to produce valid params (unlikely with MinMaxObserver).
+        # Проверка теперь будет работать корректно, так как флаг загружается из файла
         if not self.params_calculated:
             raise RuntimeError(
                 f"{self.__class__.__name__} has not been calibrated. "
@@ -255,14 +246,16 @@ class SymmetricQuantizerPerTensor(nn.Module):
         # For per_tensor_symmetric, zero_point from observer should be 0.
         self.register_buffer('zero_point', torch.tensor([0], dtype=torch.int32)) 
         
-        self.params_calculated = False
+        # РЕГИСТРИРУЕМ ФЛАГ КАК БУФЕР
+        self.register_buffer('params_calculated', torch.tensor(False, dtype=torch.bool))
+
         self.bw = bw
         self.enabled = True
 
     def enable(self):
         self.enabled = True
         # Optionally reset for re-calibration:
-        # self.params_calculated = False
+        # self.params_calculated.fill_(False)
         # self.scale.fill_(1.0)
         # self.zero_point.fill_(0)
 
@@ -283,8 +276,10 @@ class SymmetricQuantizerPerTensor(nn.Module):
             self.scale.copy_(_s.to(self.scale.device))
             # For torch.per_tensor_symmetric, _zp should ideally be 0.
             self.zero_point.copy_(_zp.to(self.zero_point.device, dtype=self.zero_point.dtype)) 
-            self.params_calculated = True
+            # ИЗМЕНЯЕМ ЗНАЧЕНИЕ БУФЕРА
+            self.params_calculated.fill_(True)
 
+        # Проверка теперь будет работать корректно
         if not self.params_calculated:
             raise RuntimeError(
                 f"{self.__class__.__name__} has not been calibrated. "
