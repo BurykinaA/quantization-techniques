@@ -11,6 +11,22 @@ import matplotlib.pyplot as plt
 from ADC.bert_experiments.bert_experiment_setup import get_squad_dataloaders
 from ADC.bert_experiments.bert_evaluate import evaluate
 from ADC.bert_experiments.quantized_bert_layers import adapt_model_for_stage
+# Импортируем наши классы квантизаторов, чтобы проверять тип слоя
+from ADC.quantizers import AffineQuantizerPerTensor, SymmetricQuantizerPerTensor
+
+def set_quantizer_state(module, enabled: bool):
+    """
+    Recursively enables or disables observers in quantizer modules.
+    """
+    for child in module.children():
+        if isinstance(child, (AffineQuantizerPerTensor, SymmetricQuantizerPerTensor)):
+            if enabled:
+                child.enable()
+            else:
+                child.disable()
+        else:
+            set_quantizer_state(child, enabled)
+
 
 def train_one_stage(stage_name, model, train_dataloader, eval_dataloader, eval_examples, eval_features, device, args):
     print(f"\n----- Starting Stage: {stage_name} -----")
@@ -20,6 +36,11 @@ def train_one_stage(stage_name, model, train_dataloader, eval_dataloader, eval_e
     
     optimizer = AdamW(model.parameters(), lr=lr)
     num_training_steps = epochs * len(train_dataloader)
+    
+    # Вычисляем, когда закончить калибровку (например, 20% от всех шагов)
+    calibration_steps = int(num_training_steps * 0.2)
+    print(f"Calibration will run for {calibration_steps} steps.")
+
     lr_scheduler = get_scheduler(
         "linear",
         optimizer=optimizer,
@@ -29,9 +50,18 @@ def train_one_stage(stage_name, model, train_dataloader, eval_dataloader, eval_e
 
     progress_bar = tqdm(range(num_training_steps), desc=f"{stage_name} Training")
     
+    # Убедимся, что наблюдатели включены в начале
+    set_quantizer_state(model, enabled=True)
+    
+    step_count = 0
     for epoch in range(epochs):
         model.train()
         for batch in train_dataloader:
+            # Проверяем, не пора ли заморозить наблюдателей
+            if step_count == calibration_steps:
+                print(f"\n--- Step {step_count}: Calibration finished. Freezing observers. ---")
+                model.apply(lambda m: m.disable() if hasattr(m, 'disable') else None)
+
             batch = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**batch)
             loss = outputs.loss
@@ -42,6 +72,7 @@ def train_one_stage(stage_name, model, train_dataloader, eval_dataloader, eval_e
             optimizer.zero_grad()
             progress_bar.update(1)
             progress_bar.set_description(f"Epoch {epoch+1}/{epochs} ({stage_name}), Loss: {loss.item():.4f}")
+            step_count += 1
 
     print(f"----- Stage {stage_name} Finished -----")
     print("Evaluating model after stage...")
