@@ -27,44 +27,45 @@ def main(args):
     eval_metrics_history = []
 
     # Training loop
-    if args.model_type == 'baseline':
-        print("Baseline model selected. Skipping training and proceeding to evaluation.")
-    else:
-        optimizer = AdamW(model.parameters(), lr=args.learning_rate)
-        num_training_steps = args.num_epochs * len(train_dataloader)
-        lr_scheduler = get_scheduler(
-            "linear",
-            optimizer=optimizer,
-            num_warmup_steps=0,
-            num_training_steps=num_training_steps,
-        )
+    # --- ВРЕМЕННО УБИРАЕМ ПРОПУСК ОБУЧЕНИЯ ДЛЯ BASELINE ---
+    # if args.model_type == 'baseline':
+    #     print("Baseline model selected. Skipping training and proceeding to evaluation.")
+    # else:
+    optimizer = AdamW(model.parameters(), lr=args.learning_rate)
+    num_training_steps = args.num_epochs * len(train_dataloader)
+    lr_scheduler = get_scheduler(
+        "linear",
+        optimizer=optimizer,
+        num_warmup_steps=0,
+        num_training_steps=num_training_steps,
+    )
 
-        progress_bar = tqdm(range(num_training_steps))
-        for epoch in range(args.num_epochs):
-            model.train()
-            epoch_loss = 0
-            for batch in train_dataloader:
-                batch = {k: v.to(device) for k, v in batch.items()}
-                outputs = model(**batch)
-                loss = outputs.loss
-                loss.backward()
+    progress_bar = tqdm(range(num_training_steps))
+    for epoch in range(args.num_epochs):
+        model.train()
+        epoch_loss = 0
+        for batch in train_dataloader:
+            batch = {k: v.to(device) for k, v in batch.items()}
+            outputs = model(**batch)
+            loss = outputs.loss
+            loss.backward()
 
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad()
-                progress_bar.update(1)
-                progress_bar.set_description(f"Epoch {epoch+1}, Loss: {loss.item():.4f}")
-                epoch_loss += loss.item()
-            
-            avg_epoch_loss = epoch_loss / len(train_dataloader)
-            train_losses.append(avg_epoch_loss)
-            
-            print(f"\nEvaluating at end of epoch {epoch+1}...")
-            metrics = evaluate(model, eval_dataloader, eval_examples, eval_features, device)
-            eval_metrics_history.append(metrics)
-            print(f"Epoch {epoch+1} finished. Avg Loss: {avg_epoch_loss:.4f}, Eval Metrics: {metrics}")
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad()
+            progress_bar.update(1)
+            progress_bar.set_description(f"Epoch {epoch+1}, Loss: {loss.item():.4f}")
+            epoch_loss += loss.item()
+        
+        avg_epoch_loss = epoch_loss / len(train_dataloader)
+        train_losses.append(avg_epoch_loss)
+        
+        print(f"\nEvaluating at end of epoch {epoch+1}...")
+        metrics = evaluate(model, eval_dataloader, eval_examples, eval_features, device)
+        eval_metrics_history.append(metrics)
+        print(f"Epoch {epoch+1} finished. Avg Loss: {avg_epoch_loss:.4f}, Eval Metrics: {metrics}")
 
-        print("Training finished.")
+    print("Training finished.")
 
     # Evaluation
     print("Starting final evaluation...")
