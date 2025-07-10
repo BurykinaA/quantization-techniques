@@ -1,6 +1,86 @@
 import torch
 from torch import nn
 from ADC.quantizers import AffineQuantizerPerTensor, SymmetricQuantizerPerTensor, ADCQuantizer, ADCQuantizerAshift
+from torch.ao.quantization.observer import MinMaxObserver, ObserverBase
+from ADC.ste import ste_round, ste_floor
+
+# ДОБАВЛЕНИЕ: создаем кастомный MinMaxObserver с eps
+class MinMaxObserverWithEps(MinMaxObserver):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.eps = torch.finfo(torch.float32).eps
+
+    def calculate_qparams(self):
+        # Добавляем eps в знаменатель
+        scale = (self.max_val - self.min_val) / float(self.quant_max - self.quant_min + self.eps)
+        # Убедимся, что scale не равен нулю
+        scale = torch.max(scale, torch.tensor(self.eps).to(scale.device))
+
+        zero_point = self.min_val - scale * self.quant_min
+        zero_point = zero_point.round()
+
+        return scale.to(torch.float32), zero_point.to(torch.int32)
+
+
+class AffineQuantizerPerTensor(nn.Module):
+    def __init__(self, bx=8):
+        super().__init__()
+        # ИСПОЛЬЗУЕМ НАШ НОВЫЙ OBSERVER
+        self.observer = MinMaxObserverWithEps(dtype=torch.quint8, qscheme=torch.per_tensor_affine, quant_min=0, quant_max=2**bx - 1)
+        
+        self.register_buffer('scale', torch.tensor([1.0], dtype=torch.float32)) 
+        self.register_buffer('zero_point', torch.tensor([0], dtype=torch.int32))
+        self.register_buffer('params_calculated', torch.tensor([False], dtype=torch.bool))
+        self.enabled = True
+
+    def forward(self, x):
+        if not self.enabled:
+            return x
+        if self.training:
+            self.observer(x.detach())
+        if not self.params_calculated:
+            self.scale.copy_(self.observer.calculate_qparams()[0])
+            self.zero_point.copy_(self.observer.calculate_qparams()[1])
+            if self.training: self.params_calculated.fill_(True)
+        return ste_round(torch.clamp(x / self.scale + self.zero_point, 0, 2**8 - 1))
+
+    def enable(self):
+        self.enabled = True
+
+    def disable(self):
+        self.enabled = False
+
+
+class SymmetricQuantizerPerTensor(nn.Module):
+    def __init__(self, bw=8):
+        super().__init__()
+        q_min_val = -(2**(bw-1)) if bw > 1 else -1 
+        q_max_val = 2**(bw-1) - 1 if bw > 1 else 0
+        # ИСПОЛЬЗУЕМ НАШ НОВЫЙ OBSERVER
+        self.observer = MinMaxObserverWithEps(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric, 
+                                       quant_min=q_min_val, quant_max=q_max_val)
+        
+        self.register_buffer('scale', torch.tensor([1.0], dtype=torch.float32))
+        self.register_buffer('zero_point', torch.tensor([0], dtype=torch.int32))
+        self.register_buffer('params_calculated', torch.tensor([False], dtype=torch.bool))
+        self.enabled = True
+
+    def forward(self, x):
+        if not self.enabled:
+            return x
+        if self.training:
+            self.observer(x.detach())
+        if not self.params_calculated:
+            self.scale.copy_(self.observer.calculate_qparams()[0])
+            if self.training: self.params_calculated.fill_(True)
+        return ste_round(torch.clamp(x / self.scale, self.observer.quant_min, self.observer.quant_max))
+
+    def enable(self):
+        self.enabled = True
+
+    def disable(self):
+        self.enabled = False
+
 
 class LinearADC(nn.Linear):
     def __init__(self, in_features, out_features, bx=8, bw=8, ba=8, k=4, bias=True, ashift=False):
@@ -124,25 +204,34 @@ class LinearQuant(nn.Linear):
         return self
 
     def forward(self, x):
-        target_device = x.device
+        # Активации (аффинное квантование)
+        if self.training:
+            self.x_quantizer.observer(x.detach())
+        if not self.x_quantizer.params_calculated:
+            # Вычисляем параметры, если еще не были вычислены (например, в режиме eval)
+            self.x_quantizer.scale.copy_(self.x_quantizer.observer.calculate_qparams()[0])
+            self.x_quantizer.zero_point.copy_(self.x_quantizer.observer.calculate_qparams()[1])
+            if self.training: self.x_quantizer.params_calculated.fill_(True)
 
-        xq = self.x_quantizer(x)
-        wq = self.w_quantizer(self.weight)
+        scale_x = self.x_quantizer.scale.to(x.device)
+        zp_x = self.x_quantizer.zero_point.to(x.device)
+        x_q = ste_round(torch.clamp(x / scale_x + zp_x, 0, 2**self.bx - 1))
+        x_dequant = (x_q - zp_x) * scale_x
 
-        if not self.x_quantizer.params_calculated or not self.w_quantizer.params_calculated:
-            raise RuntimeError("Input/Weight quantizers must be calibrated.")
+        # Веса (симметричное квантование)
+        if self.training:
+            self.w_quantizer.observer(self.weight.detach())
+        if not self.w_quantizer.params_calculated:
+            self.w_quantizer.scale.copy_(self.w_quantizer.observer.calculate_qparams()[0])
+            if self.training: self.w_quantizer.params_calculated.fill_(True)
+        
+        scale_w = self.w_quantizer.scale.to(self.weight.device)
+        q_min = self.w_quantizer.observer.quant_min
+        q_max = self.w_quantizer.observer.quant_max
+        w_q = ste_round(torch.clamp(self.weight / scale_w, q_min, q_max))
+        w_dequant = w_q * scale_w
 
-        # Dequantize activations
-        scale_x = self.x_quantizer.scale.to(target_device)
-        zp_x = self.x_quantizer.zero_point.to(target_device)
-        x_dequant = (xq - zp_x) * scale_x
-
-        # Dequantize weights
-        scale_w = self.w_quantizer.scale.to(target_device)
-        w_dequant = wq * scale_w
-            
-        out = nn.functional.linear(x_dequant, w_dequant, self.bias)
-        return out
+        return nn.functional.linear(x_dequant, w_dequant, self.bias)
 
 
 class Conv2dADC(nn.Conv2d):

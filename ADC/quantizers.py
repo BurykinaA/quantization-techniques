@@ -161,13 +161,33 @@
 
 import torch
 from torch import nn
-from torch.ao.quantization.observer import MinMaxObserver
+# ИЗМЕНЕНИЕ: импортируем ObserverBase, чтобы можно было добавить eps
+from torch.ao.quantization.observer import MinMaxObserver, ObserverBase
 from ADC.ste import ste_round, ste_floor
+
+# ДОБАВЛЕНИЕ: создаем кастомный MinMaxObserver с eps
+class MinMaxObserverWithEps(MinMaxObserver):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.eps = torch.finfo(torch.float32).eps
+
+    def calculate_qparams(self):
+        # Добавляем eps в знаменатель
+        scale = (self.max_val - self.min_val) / float(self.quant_max - self.quant_min + self.eps)
+        # Убедимся, что scale не равен нулю
+        scale = torch.max(scale, torch.tensor(self.eps).to(scale.device))
+
+        zero_point = self.min_val - scale * self.quant_min
+        zero_point = zero_point.round()
+
+        return scale.to(torch.float32), zero_point.to(torch.int32)
+
 
 class AffineQuantizerPerTensor(nn.Module):
     def __init__(self, bx=8):
         super().__init__()
-        self.observer = MinMaxObserver(dtype=torch.quint8, qscheme=torch.per_tensor_affine, quant_min=0, quant_max=2**bx - 1)
+        # ИСПОЛЬЗУЕМ НАШ НОВЫЙ OBSERVER
+        self.observer = MinMaxObserverWithEps(dtype=torch.quint8, qscheme=torch.per_tensor_affine, quant_min=0, quant_max=2**bx - 1)
         
         self.register_buffer('scale', torch.tensor([1.0], dtype=torch.float32)) 
         self.register_buffer('zero_point', torch.tensor([0], dtype=torch.int32))
@@ -239,7 +259,7 @@ class SymmetricQuantizerPerTensor(nn.Module):
             q_max_val = 1  # Allow observer to see range around zero. Scale will make it symmetric.
                            # If you intend strictly {-1,0} levels, then q_max_val=0.
 
-        self.observer = MinMaxObserver(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric, 
+        self.observer = MinMaxObserverWithEps(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric, 
                                        quant_min=q_min_val, quant_max=q_max_val)
         
         self.register_buffer('scale', torch.tensor([1.0], dtype=torch.float32))
