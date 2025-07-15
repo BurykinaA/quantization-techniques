@@ -9,7 +9,7 @@ import json
 import matplotlib.pyplot as plt
 
 from ADC.bert_experiments.bert_experiment_setup import get_model, get_squad_dataloaders
-from ADC.bert_experiments.bert_evaluate import evaluate
+from ADC.bert_experiments.bert_evaluate import evaluate_model as evaluate
 
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
