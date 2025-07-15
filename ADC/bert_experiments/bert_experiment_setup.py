@@ -142,7 +142,7 @@ def get_squad_dataloaders(batch_size=16, subset_size=None):
     validation_features = datasets["validation"].map(
         prepare_validation_features,
         batched=True,
-        # remove_columns=datasets["validation"].column_names # Let's not remove columns to be safe
+        remove_columns=datasets["validation"].column_names
     )
 
     # Set format for PyTorch
