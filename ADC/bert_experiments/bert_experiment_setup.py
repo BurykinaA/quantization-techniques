@@ -111,7 +111,9 @@ def get_squad_dataloaders(batch_size=16, subset_size=None):
         return tokenized_examples
 
     def prepare_validation_features(examples):
-        examples["question"] = [q.lstrip() for q in examples["question"]]
+        # Tokenize our examples with truncation and maybe padding, but keep the overflows using a stride. This results
+        # in one example possible giving several features when a context is long, each of those features having a
+        # context that overlaps a bit the context of the previous feature.
         tokenized_examples = tokenizer(
             examples["question"],
             examples["context"],
@@ -122,7 +124,15 @@ def get_squad_dataloaders(batch_size=16, subset_size=None):
             return_offsets_mapping=True,
             padding="max_length",
         )
-        sample_mapping = tokenized_examples.pop("overflow_to_sample_mapping")
+
+        # Since one example might give us several features if it has a long context, we need a map from a feature to
+        # its corresponding example. This key gives us just that.
+        sample_mapping = tokenized_examples["overflow_to_sample_mapping"]
+
+        # The offset mappings will give us a map from token to character position in the original context. This will
+        # help us compute the start_positions and end_positions.
+        offset_mapping = tokenized_examples["offset_mapping"]
+
         tokenized_examples["example_id"] = [examples["id"][i] for i in sample_mapping]
         return tokenized_examples
 
