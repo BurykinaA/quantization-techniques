@@ -140,4 +140,4 @@ def get_squad_dataloaders(batch_size=16, subset_size=None):
     train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=batch_size)
     eval_dataloader = DataLoader(eval_dataset, collate_fn=default_data_collator, batch_size=batch_size)
     
-    return train_dataloader, eval_dataloader, datasets["validation"], validation_features 
+    return train_dataloader, eval_dataloader, datasets["validation"], validation_features, tokenizer 

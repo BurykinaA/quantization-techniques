@@ -104,8 +104,12 @@ def main(args):
     print(f"Using device: {device}")
     print(f"Results will be saved to: {output_dir}")
 
+    # Load the tokenizer directly. It's needed for evaluation.
+    model_checkpoint = "bert-base-uncased"
+    tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
+
     # Data
-    train_dataloader, eval_dataloader, eval_examples, eval_features = get_squad_dataloaders(args.batch_size, args.subset_size)
+    train_dataloader, eval_dataloader, eval_examples, eval_features, tokenizer = get_squad_dataloaders(args.batch_size, args.subset_size, tokenizer)
     
     # --- STAGE 0: Load Initial FP Model on CPU ---
     fp_model = AutoModelForQuestionAnswering.from_pretrained("bert-base-uncased")
