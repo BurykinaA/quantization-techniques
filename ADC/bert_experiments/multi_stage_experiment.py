@@ -109,7 +109,7 @@ def main(args):
     tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
 
     # Data
-    train_dataloader, eval_dataloader, eval_examples, eval_features, tokenizer = get_squad_dataloaders(args.batch_size, args.subset_size, tokenizer)
+    train_dataloader, eval_dataloader, eval_examples, eval_features, tokenizer = get_squad_dataloaders(args.batch_size, args.subset_size)
     
     # --- STAGE 0: Load Initial FP Model on CPU ---
     fp_model = BertForQuestionAnswering.from_pretrained("bert-base-uncased")
