@@ -87,7 +87,7 @@ def evaluate_model(model, dataloader, device, tokenizer, all_examples, all_featu
         # The dataloader now provides everything needed.
         # We don't need to manually select columns.
         model_inputs = {k: v.to(device) for k, v in batch.items() 
-                        if k in ['input_ids', 'attention_mask']}
+                        if k in ['input_ids', 'attention_mask', 'token_type_ids']}
 
         with torch.no_grad():
             outputs = model_for_eval(**model_inputs)

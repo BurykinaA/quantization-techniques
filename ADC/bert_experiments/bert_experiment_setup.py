@@ -30,7 +30,6 @@ def _replace_linear(module, bx, bw, ba, k, ashift, name_prefix=""):
                     bw=bw,
                     ba=ba,
                     k=k,
-                    ashift=ashift,
                 )
                 setattr(module, name, new_layer)
         else:
@@ -149,7 +148,7 @@ def get_squad_dataloaders(batch_size=16, subset_size=None):
     # Set format for PyTorch
     train_dataset.set_format(type='torch')
     validation_features.set_format(
-        type="torch", columns=["input_ids", "attention_mask", "token_type_ids"]
+        type="torch"
     )
 
     train_dataloader = DataLoader(
