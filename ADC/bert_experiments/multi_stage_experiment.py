@@ -49,7 +49,7 @@ def train_one_stage(
     num_training_steps = epochs * len(train_dataloader)
     
     # Вычисляем, когда закончить калибровку (например, 20% от всех шагов)
-    calibration_steps = int(num_training_steps * 0.2)
+    calibration_steps = int(len(train_dataloader))  # Full epoch for calibration
     print(f"Calibration will run for {calibration_steps} steps.")
 
     lr_scheduler = get_scheduler(
