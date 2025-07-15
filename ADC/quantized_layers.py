@@ -6,11 +6,17 @@ from ADC.ste import ste_round, ste_floor
 
 # ДОБАВЛЕНИЕ: создаем кастомный MinMaxObserver с eps
 class MinMaxObserverWithEps(MinMaxObserver):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.eps = torch.finfo(torch.float32).eps
+    """
+    Observer that tracks the min/max values of a tensor and computes quantization
+    parameters, adding a small epsilon to the range to avoid division by zero.
+    """
 
-    def calculate_qparams(self):
+    def __init__(self, *args, **kwargs):
+        super(MinMaxObserverWithEps, self).__init__(*args, **kwargs)
+        self.register_buffer("eps", torch.tensor(torch.finfo(torch.float32).eps))
+
+    def forward(self, x_orig):
+        r"""Records the running min and max of ``x``."""
         # Добавляем eps в знаменатель
         scale = (self.max_val - self.min_val) / float(self.quant_max - self.quant_min + self.eps)
         # Убедимся, что scale не равен нулю
