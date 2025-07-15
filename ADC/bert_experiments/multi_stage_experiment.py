@@ -28,8 +28,19 @@ def set_quantizer_state(module, enabled: bool):
             set_quantizer_state(child, enabled)
 
 
-def train_one_stage(stage_name, model, train_dataloader, eval_dataloader, eval_examples, eval_features, device, args):
-    print(f"\n----- Starting Stage: {stage_name} -----")
+def train_one_stage(
+    stage_name,
+    model,
+    train_dataloader,
+    eval_dataloader,
+    eval_examples,
+    eval_features,
+    device,
+    tokenizer,
+    args,
+):
+    """Trains the model for one stage (QAT or ADC)."""
+    print(f"\n----- Starting Stage: {stage_name.upper()} -----")
     
     epochs = args.qat_epochs if stage_name == 'QAT' else args.adc_epochs
     lr = args.qat_lr if stage_name == 'QAT' else args.adc_lr
@@ -74,11 +85,15 @@ def train_one_stage(stage_name, model, train_dataloader, eval_dataloader, eval_e
             progress_bar.set_description(f"Epoch {epoch+1}/{epochs} ({stage_name}), Loss: {loss.item():.4f}")
             step_count += 1
 
-    print(f"----- Stage {stage_name} Finished -----")
+    print(f"----- Stage {stage_name.upper()} Finished -----")
+
     print("Evaluating model after stage...")
-    metrics = evaluate_model(model, eval_dataloader, eval_examples, eval_features, device)
-    print(f"Metrics after {stage_name}: {metrics}")
+    metrics = evaluate_model(
+        model, eval_dataloader, device, tokenizer, eval_examples, eval_features
+    )
+
     return model, metrics
+
 
 def main(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -102,7 +117,7 @@ def main(args):
     # Move the entire adapted model to the target device BEFORE training
     qat_model.to(device)
     
-    qat_model, qat_metrics = train_one_stage("QAT", qat_model, train_dataloader, eval_dataloader, eval_examples, eval_features, device, args)
+    qat_model, qat_metrics = train_one_stage("QAT", qat_model, train_dataloader, eval_dataloader, eval_examples, eval_features, device, tokenizer, args)
     
     # Сохраняем модель после QAT
     qat_model_path = os.path.join(output_dir, "qat_model.pt")
@@ -128,7 +143,7 @@ def main(args):
     # 3. Ключевой шаг: Снова перемещаем всю модель на целевое устройство, чтобы синхронизировать слои.
     adc_model.to(device)
 
-    adc_model, final_metrics = train_one_stage("ADC", adc_model, train_dataloader, eval_dataloader, eval_examples, eval_features, device, args)
+    adc_model, final_metrics = train_one_stage("ADC", adc_model, train_dataloader, eval_dataloader, eval_examples, eval_features, device, tokenizer, args)
 
     # --- Save final results ---
     final_model_path = os.path.join(output_dir, "final_adc_model.pt")
