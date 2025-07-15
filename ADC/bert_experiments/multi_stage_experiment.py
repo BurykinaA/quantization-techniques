@@ -91,6 +91,7 @@ def train_one_stage(
     metrics = evaluate_model(
         model, pred_dataloader, device, tokenizer, eval_examples, eval_features
     )
+    print(f"Metrics for {stage_name} stage: {metrics}")
 
     return model, metrics
 

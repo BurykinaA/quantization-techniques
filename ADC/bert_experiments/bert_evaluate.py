@@ -16,7 +16,7 @@ def postprocess_qa_predictions(examples, features, raw_predictions, tokenizer, n
 
     print(f"Post-processing {len(examples)} example predictions split into {len(features)} features.")
 
-    for example_index, example in enumerate(tqdm(examples)):
+    for example_index, example in enumerate(tqdm(examples, desc="Post-processing")):
         feature_indices = features_per_example[example_index]
 
         min_null_score = None
@@ -97,6 +97,11 @@ def evaluate_model(model, dataloader, device, tokenizer, all_examples, all_featu
 
     raw_predictions = (np.concatenate(all_start_logits, axis=0), np.concatenate(all_end_logits, axis=0))
     
-    # We pass all_features, which is the mapped validation dataset that `postprocess` needs.
-    metrics = postprocess_qa_predictions(all_examples, all_features, raw_predictions, tokenizer)
-    return metrics 
+    final_predictions = postprocess_qa_predictions(all_examples, all_features, raw_predictions, tokenizer)
+    
+    metric = evaluate_metric.load("squad")
+
+    formatted_predictions = [{"id": k, "prediction_text": v} for k, v in final_predictions.items()]
+    references = [{"id": ex["id"], "answers": ex["answers"]} for ex in all_examples]
+
+    return metric.compute(predictions=formatted_predictions, references=references) 
