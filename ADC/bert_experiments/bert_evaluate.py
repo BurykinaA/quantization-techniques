@@ -3,6 +3,7 @@ import collections
 import numpy as np
 from tqdm.auto import tqdm
 import evaluate as evaluate_metric
+import copy
 
 def postprocess_qa_predictions(examples, features, raw_predictions, tokenizer, n_best_size=20, max_answer_length=30):
     all_start_logits, all_end_logits = raw_predictions
@@ -64,32 +65,32 @@ def postprocess_qa_predictions(examples, features, raw_predictions, tokenizer, n
 
     return predictions
 
-def evaluate(model, dataloader, eval_examples, eval_features, device):
-    model.eval()
-    all_start_logits = []
-    all_end_logits = []
+def evaluate_model(model, dataloader, device, tokenizer, all_examples, all_features):
+    # It's important to have the model on the CPU before conversion
+    # as some quantization ops might not be supported on CUDA.
+    # We also create a copy to avoid modifying the original model.
+    model_for_eval = copy.deepcopy(model)
+    model_for_eval.to('cpu')
+    model_for_eval.eval()
 
+    # This is the crucial step to convert the QAT model to a truly quantized model.
+    torch.quantization.convert(model_for_eval, inplace=True)
+    
+    model_for_eval.to(device)
+
+    all_results = []
     for batch in tqdm(dataloader, desc="Evaluating"):
-        model_input_keys = ['input_ids', 'attention_mask', 'token_type_ids']
-        model_input = {key: batch[key].to(device) for key in model_input_keys if key in batch}
-
+        model_inputs = {k: v.to(device) for k, v in batch.items() if k in ['input_ids', 'attention_mask', 'token_type_ids']}
+        
         with torch.no_grad():
-            outputs = model(**model_input)
-            start_logits = outputs.start_logits
-            end_logits = outputs.end_logits
+            outputs = model_for_eval(**model_inputs)
 
-        all_start_logits.append(start_logits.cpu().numpy())
-        all_end_logits.append(end_logits.cpu().numpy())
+        feature_indices = batch['overflow_to_sample_mapping']
+        
+        start_logits = outputs.start_logits.cpu().numpy()
+        end_logits = outputs.end_logits.cpu().numpy()
+        
+        all_results.append((feature_indices.cpu().numpy(), start_logits, end_logits))
 
-    raw_predictions = (np.concatenate(all_start_logits), np.concatenate(all_end_logits))
-    
-    from transformers import AutoTokenizer
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-
-    final_predictions = postprocess_qa_predictions(eval_examples, eval_features, raw_predictions, tokenizer)
-    metric = evaluate_metric.load("squad")
-    
-    formatted_predictions = [{"id": k, "prediction_text": v} for k, v in final_predictions.items()]
-    references = [{"id": ex["id"], "answers": ex["answers"]} for ex in eval_examples]
-    
-    return metric.compute(predictions=formatted_predictions, references=references) 
+    metrics = score_model(all_examples, all_features, all_results, tokenizer)
+    return metrics 
