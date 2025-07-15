@@ -148,7 +148,9 @@ def get_squad_dataloaders(batch_size=16, subset_size=None):
 
     # Set format for PyTorch
     train_dataset.set_format(type='torch')
-    validation_features.set_format(type="torch")
+    validation_features.set_format(
+        type="torch", columns=["input_ids", "attention_mask", "token_type_ids"]
+    )
 
     train_dataloader = DataLoader(
         train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=batch_size

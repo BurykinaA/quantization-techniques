@@ -28,7 +28,7 @@ def postprocess_qa_predictions(examples, features, raw_predictions, tokenizer, n
             end_logits = all_end_logits[feature_index]
             offset_mapping = features[feature_index]["offset_mapping"]
 
-            cls_index = features[feature_index]["input_ids"].index(tokenizer.cls_token_id)
+            cls_index = features[feature_index]["input_ids"].tolist().index(tokenizer.cls_token_id)
             feature_null_score = start_logits[cls_index] + end_logits[cls_index]
             if min_null_score is None or min_null_score < feature_null_score:
                 min_null_score = feature_null_score
