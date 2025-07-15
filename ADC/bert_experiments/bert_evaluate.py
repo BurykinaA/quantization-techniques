@@ -80,10 +80,9 @@ def evaluate_model(model, dataloader, device, tokenizer, all_examples, all_featu
 
     all_results = []
     for batch in tqdm(dataloader, desc="Evaluating"):
-        model_inputs = {k: v.to(device) for k, v in batch.items() if k in ['input_ids', 'attention_mask', 'token_type_ids']}
-        
+        batch = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
         with torch.no_grad():
-            outputs = model_for_eval(**model_inputs)
+            outputs = model_for_eval(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'])
 
         feature_indices = batch['overflow_to_sample_mapping']
         
@@ -92,5 +91,5 @@ def evaluate_model(model, dataloader, device, tokenizer, all_examples, all_featu
         
         all_results.append((feature_indices.cpu().numpy(), start_logits, end_logits))
 
-    metrics = score_model(all_examples, all_features, all_results, tokenizer)
+    metrics = postprocess_qa_predictions(all_examples, all_features, all_results, tokenizer)
     return metrics 
