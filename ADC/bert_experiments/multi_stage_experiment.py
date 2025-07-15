@@ -1,7 +1,7 @@
 import argparse
 import torch
 from torch.optim import AdamW
-from transformers import get_scheduler, AutoModelForQuestionAnswering
+from transformers import get_scheduler, AutoTokenizer, BertForQuestionAnswering
 from tqdm.auto import tqdm
 import os
 import time
@@ -112,7 +112,7 @@ def main(args):
     train_dataloader, eval_dataloader, eval_examples, eval_features, tokenizer = get_squad_dataloaders(args.batch_size, args.subset_size, tokenizer)
     
     # --- STAGE 0: Load Initial FP Model on CPU ---
-    fp_model = AutoModelForQuestionAnswering.from_pretrained("bert-base-uncased")
+    fp_model = BertForQuestionAnswering.from_pretrained("bert-base-uncased")
     
     # --- STAGE 1: Quantization-Aware Training (QAT) ---
     print("Preparing model for QAT stage...")
@@ -133,7 +133,7 @@ def main(args):
     # 1. Загружаем веса QAT-модели. map_location=device гарантирует, что веса загрузятся сразу на нужное устройство.
     # Сначала создаем "скелет" модели с той же структурой, что и была сохранена (т.е. QAT-структурой)
     adc_model_base_skeleton = adapt_model_for_stage(
-        AutoModelForQuestionAnswering.from_pretrained("bert-base-uncased"),
+        BertForQuestionAnswering.from_pretrained("bert-base-uncased"),
         'qat', bw=args.bw, bx=args.bx, ba=args.ba, k=args.k
     )
     # Теперь загружаем веса в этот скелет
