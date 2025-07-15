@@ -74,22 +74,29 @@ def evaluate_model(model, dataloader, device, tokenizer, all_examples, all_featu
     model_for_eval.eval()
 
     # This is the crucial step to convert the QAT model to a truly quantized model.
-    torch.quantization.convert(model_for_eval, inplace=True)
+    # We might need to make this conditional if we evaluate non-quantized models.
+    if hasattr(model, 'qconfig') and model.qconfig is not None:
+        torch.quantization.convert(model_for_eval, inplace=True)
     
     model_for_eval.to(device)
 
-    all_results = []
+    all_start_logits = []
+    all_end_logits = []
+
     for batch in tqdm(dataloader, desc="Evaluating"):
-        batch = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
+        # The dataloader now provides everything needed.
+        # We don't need to manually select columns.
+        model_inputs = {k: v.to(device) for k, v in batch.items() 
+                        if k in ['input_ids', 'attention_mask']}
+
         with torch.no_grad():
-            outputs = model_for_eval(input_ids=batch['input_ids'], attention_mask=batch['attention_mask'])
+            outputs = model_for_eval(**model_inputs)
 
-        feature_indices = batch['overflow_to_sample_mapping']
-        
-        start_logits = outputs.start_logits.cpu().numpy()
-        end_logits = outputs.end_logits.cpu().numpy()
-        
-        all_results.append((feature_indices.cpu().numpy(), start_logits, end_logits))
+        all_start_logits.append(outputs.start_logits.cpu().numpy())
+        all_end_logits.append(outputs.end_logits.cpu().numpy())
 
-    metrics = postprocess_qa_predictions(all_examples, all_features, all_results, tokenizer)
+    raw_predictions = (np.concatenate(all_start_logits, axis=0), np.concatenate(all_end_logits, axis=0))
+    
+    # We pass all_features, which is the mapped validation dataset that `postprocess` needs.
+    metrics = postprocess_qa_predictions(all_examples, all_features, raw_predictions, tokenizer)
     return metrics 

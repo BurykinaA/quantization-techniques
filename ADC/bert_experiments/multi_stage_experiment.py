@@ -32,7 +32,7 @@ def train_one_stage(
     stage_name,
     model,
     train_dataloader,
-    eval_dataloader,
+    pred_dataloader,
     eval_examples,
     eval_features,
     device,
@@ -89,7 +89,7 @@ def train_one_stage(
 
     print("Evaluating model after stage...")
     metrics = evaluate_model(
-        model, eval_dataloader, device, tokenizer, eval_examples, eval_features
+        model, pred_dataloader, device, tokenizer, eval_examples, eval_features
     )
 
     return model, metrics
@@ -109,7 +109,7 @@ def main(args):
     tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
 
     # Data
-    train_dataloader, eval_dataloader, eval_examples, eval_features, tokenizer = get_squad_dataloaders(args.batch_size, args.subset_size)
+    train_dataloader, pred_dataloader, eval_examples, eval_features, tokenizer = get_squad_dataloaders(args.batch_size, args.subset_size)
     
     # --- STAGE 0: Load Initial FP Model on CPU ---
     fp_model = BertForQuestionAnswering.from_pretrained("bert-base-uncased")
@@ -121,7 +121,7 @@ def main(args):
     # Move the entire adapted model to the target device BEFORE training
     qat_model.to(device)
     
-    qat_model, qat_metrics = train_one_stage("QAT", qat_model, train_dataloader, eval_dataloader, eval_examples, eval_features, device, tokenizer, args)
+    qat_model, qat_metrics = train_one_stage("QAT", qat_model, train_dataloader, pred_dataloader, eval_examples, eval_features, device, tokenizer, args)
     
     # Сохраняем модель после QAT
     qat_model_path = os.path.join(output_dir, "qat_model.pt")
@@ -147,7 +147,7 @@ def main(args):
     # 3. Ключевой шаг: Снова перемещаем всю модель на целевое устройство, чтобы синхронизировать слои.
     adc_model.to(device)
 
-    adc_model, final_metrics = train_one_stage("ADC", adc_model, train_dataloader, eval_dataloader, eval_examples, eval_features, device, tokenizer, args)
+    adc_model, final_metrics = train_one_stage("ADC", adc_model, train_dataloader, pred_dataloader, eval_examples, eval_features, device, tokenizer, args)
 
     # --- Save final results ---
     final_model_path = os.path.join(output_dir, "final_adc_model.pt")

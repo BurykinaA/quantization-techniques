@@ -138,7 +138,6 @@ def get_squad_dataloaders(batch_size=16, subset_size=None):
 
     # Create datasets for training and for evaluation where loss is computed
     train_dataset = datasets["train"].map(prepare_train_features, batched=True, remove_columns=datasets["train"].column_names)
-    eval_dataset = datasets["validation"].map(prepare_train_features, batched=True, remove_columns=datasets["validation"].column_names)
     
     # Create the special dataset for post-processing that keeps offset_mapping
     validation_features = datasets["validation"].map(
@@ -148,11 +147,13 @@ def get_squad_dataloaders(batch_size=16, subset_size=None):
     )
 
     # Set format for PyTorch
+    train_dataset.set_format(type='torch')
     validation_features.set_format(type="torch")
 
     train_dataloader = DataLoader(
         train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=batch_size
     )
-    eval_dataloader = DataLoader(eval_dataset, collate_fn=default_data_collator, batch_size=batch_size)
+    # This dataloader is for prediction and post-processing
+    pred_dataloader = DataLoader(validation_features, collate_fn=default_data_collator, batch_size=batch_size)
     
-    return train_dataloader, eval_dataloader, datasets["validation"], validation_features, tokenizer 
+    return train_dataloader, pred_dataloader, datasets["validation"], validation_features, tokenizer 
