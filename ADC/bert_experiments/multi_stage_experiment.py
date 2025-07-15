@@ -9,7 +9,7 @@ import json
 import matplotlib.pyplot as plt
 
 from ADC.bert_experiments.bert_experiment_setup import get_squad_dataloaders
-from ADC.bert_experiments.bert_evaluate import evaluate
+from ADC.bert_experiments.bert_evaluate import evaluate_model
 from ADC.bert_experiments.quantized_bert_layers import adapt_model_for_stage
 # Импортируем наши классы квантизаторов, чтобы проверять тип слоя
 from ADC.quantizers import AffineQuantizerPerTensor, SymmetricQuantizerPerTensor
@@ -76,7 +76,7 @@ def train_one_stage(stage_name, model, train_dataloader, eval_dataloader, eval_e
 
     print(f"----- Stage {stage_name} Finished -----")
     print("Evaluating model after stage...")
-    metrics = evaluate(model, eval_dataloader, eval_examples, eval_features, device)
+    metrics = evaluate_model(model, eval_dataloader, eval_examples, eval_features, device)
     print(f"Metrics after {stage_name}: {metrics}")
     return model, metrics
 
