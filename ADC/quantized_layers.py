@@ -1,9 +1,12 @@
 import torch
 from torch import nn
 from ADC.quantizers import AffineQuantizerPerTensor, SymmetricQuantizerPerTensor, ADCQuantizer, ADCQuantizerAshift
+import wandb
+import random
+
 
 class LinearADC(nn.Linear):
-    def __init__(self, in_features, out_features, bx=8, bw=8, ba=8, k=4, bias=True, ashift=False):
+    def __init__(self, in_features, out_features, bx=8, bw=8, ba=8, k=4, bias=True, ashift=False, logger=None):
         super(LinearADC, self).__init__(in_features, out_features, bias)
         self.bx = bx
         self.bw = bw
@@ -14,6 +17,8 @@ class LinearADC(nn.Linear):
         self.ashift = ashift
         self.C = 2 ** (bx - 1)
         self.adc_enabled = True
+        self.name = "Linear" + str(random.randint(10 ** 5, 10**6 - 1))
+        self.logger = logger
 
     def enable_adc(self):
         self.adc_enabled = True
@@ -72,6 +77,15 @@ class LinearADC(nn.Linear):
         
         if self.bias is not None:
             out = out + self.bias
+
+        if self.logger:
+            with torch.no_grad():
+                out_gth = nn.functional.linear(x, self.weight, bias = self.bias)
+                diff = torch.linalg.norm(out - out_gth).cpu().item()
+                gth_norm = torch.linalg.norm(out_gth).cpu().item()
+                self.logger.log(self.name, "out_norm_ratio", diff / gth_norm)
+                #wandb.log({self.name + "_diff" : diff / gth_norm})
+                #print(self.name + "_diff: ", diff / gth_norm)
         return out
 
 class LinearADCAshift(LinearADC):
@@ -168,8 +182,10 @@ class Conv2dADC(nn.Conv2d):
                  bw=8,
                  ba=8,
                  k=4,
-                 ashift=False):
+                 ashift=False,
+                 logger=None):
         super(Conv2dADC, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode, device, dtype)
+        self.name = f"Conv2d" + str(random.randint(10 ** 5, 10**6 - 1))
         self.bx = bx
         self.bw = bw
         self.ba = ba
@@ -178,23 +194,34 @@ class Conv2dADC(nn.Conv2d):
         self.w_quantizer = SymmetricQuantizerPerTensor(bw)
         self.ashift=ashift
         self.C = 2 ** (bx - 1)
+        self.logger = logger
         if type(kernel_size) == int:
             Mv = in_channels*(kernel_size**2)
         else:
             Mv = in_channels*kernel_size[0]*kernel_size[1]
-        self.adc_quantizer = ADCQuantizer(M=Mv, bx=bx, bw=bw, ba=ba, k=k)
+        self.adc_quantizer = ADCQuantizer(M=Mv, bx=bx, bw=bw, ba=ba, k=k, info=self.name, logger=self.logger)
         self.adc_enabled = True
     
     def enable_adc(self):
         self.adc_enabled = True
     def disable_adc(self):
         self.adc_enabled = False
+    
+    def _set_quantizer_state(self, enabled: bool):
+        self.x_quantizer.enabled = enabled
+        self.w_quantizer.enabled = enabled
 
     def dequantize(self, yq, wq):
         # yq: out x H_out x W_out
         # self.weight: out x in x H_out x W_out
+        
+        # Important!!!!!!!
         y = yq * self.adc_quantizer.delta
+        #y = yq
+        # -------------------------------------
+
         if (self.ashift):
+            print("ashift dequantize")
             y = y + self.C * (wq.sum(axis=(1, 2, 3)))[None, :, None, None]
         out = y - self.x_quantizer.zero_point / self.w_quantizer.scale * (self.weight.sum(axis=(1, 2, 3)))[None, :, None, None]
         out = out * self.x_quantizer.scale * self.w_quantizer.scale
@@ -238,9 +265,26 @@ class Conv2dADC(nn.Conv2d):
                                                padding=self.padding, 
                                                dilation=self.dilation, 
                                                groups=self.groups)
+        #yq_adc = y_for_adc
         yq_adc = self.adc_quantizer(y_for_adc)
         out = self.dequantize(yq_adc, wq)
         if self.bias is not None:
             out += self.bias
+        if self.logger:
+            with torch.no_grad():
+                out_gth = torch.nn.functional.conv2d(x, 
+                                               self.weight, 
+                                               bias=self.bias, 
+                                               stride=self.stride, 
+                                               padding=self.padding, 
+                                               dilation=self.dilation, 
+                                               groups=self.groups)
+                self.logger.log(self.name, "max_val", y_for_adc.max().item())
+                self.logger.log(self.name, "min_val", y_for_adc.min().item())
+                diff = torch.linalg.norm(out - out_gth).cpu().item()
+                gth_norm = torch.linalg.norm(out_gth).cpu().item()
+                self.logger.log(self.name, "out_norm_ratio", diff / gth_norm)
+                #print(self.name + "_diff: ", diff / gth_norm)
+
         return out
     

@@ -317,22 +317,28 @@ class SymmetricQuantizerPerTensor(nn.Module):
         return x_dequant
 
 class ADCQuantizer(nn.Module):
-    def __init__(self, M, bx, bw, ba = 8, k = 4):
+    def __init__(self, M, bx, bw, ba = 8, k = 4, info="", logger=None):
         super().__init__()
         # delta calculation seems to assume symmetric quantization for weights (2**(bw-1)-1)
         # and affine for activations (2**bx - 1)
-        self.delta = 2 * M * (2 ** bx - 1) * (2 ** (bw - 1) - 1) / ((2 ** ba - 1) * k)
+        self.delta = 2 * M * (2 ** bx - 1) * (2 ** (bw - 1) - 1) / ((2 ** ba) * k)
         self.M = M
         self.bx = bx
         self.bw = bw
         self.ba = ba
         self.k = k
+        self.info = info
+        self.logger = logger
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        xq = ste_floor(x / self.delta)
+        xq = x / self.delta
         mnval = -2 ** (self.ba - 1)
         mxval = 2 ** (self.ba - 1) - 1
-        xq = torch.clamp(xq, mnval, mxval)
+        if (self.logger):
+            cl1 = (xq < mnval).sum().float().item()
+            cl2 = (xq > mxval).sum().float().item()
+            self.logger.log(self.info, "Clipped%: ", 100. * (cl1 + cl2) / xq.numel())
+        xq = ste_floor(torch.clamp(xq, mnval, mxval))
         return xq
     
 
@@ -391,7 +397,7 @@ class ADCQuantizerAshift(nn.Module):
             print(f"Runtime Warning (Ashift Fwd): ADCQuantizerAshift using fallback delta={effective_delta} because calculated delta ({self.delta}) is too small.")
             
         xq = ste_floor(x / effective_delta)
-            
+
         mnval = -(2**(self.ba - 1))
         mxval = (2**(self.ba - 1)) - 1
         xq = torch.clamp(xq, mnval, mxval)
