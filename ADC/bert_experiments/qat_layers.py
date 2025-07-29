@@ -8,15 +8,15 @@ class StraightThroughQuantize(torch.autograd.Function):
     Straight-through estimator for quantization that allows gradients to flow to scale parameters
     """
     @staticmethod
-    def forward(ctx, input, scale, zero_point, qmin, qmax, symmetric, per_channel, channel_dim):
-        ctx.save_for_backward(input, scale, zero_point)
+    def forward(ctx, input, scale, zero_point, qmin, qmax, symmetric, per_channel, channel_dim, original_scale, original_zp):
+        ctx.save_for_backward(input, original_scale, original_zp)  # Save original parameters for gradient computation
         ctx.qmin = qmin
         ctx.qmax = qmax
         ctx.symmetric = symmetric
         ctx.per_channel = per_channel
         ctx.channel_dim = channel_dim
         
-        # Perform quantization
+        # Perform quantization using the broadcasted scale/zero_point
         if symmetric:
             x_scaled = input / scale
             x_quant = torch.clamp(torch.round(x_scaled), qmin, qmax)
@@ -30,7 +30,25 @@ class StraightThroughQuantize(torch.autograd.Function):
     
     @staticmethod
     def backward(ctx, grad_output):
-        input, scale, zero_point = ctx.saved_tensors
+        input, original_scale, original_zp = ctx.saved_tensors
+        
+        # For gradient computation, we need to use the broadcasted versions
+        if ctx.per_channel:
+            # Recreate the broadcasted scale and zero_point
+            shape = [1] * input.ndim
+            shape[ctx.channel_dim] = -1
+            scale = original_scale.view(shape)
+            
+            if not ctx.symmetric:
+                zero_point = original_zp.view(shape)
+            else:
+                zero_point = torch.zeros_like(scale)
+        else:
+            scale = original_scale
+            if not ctx.symmetric:
+                zero_point = original_zp
+            else:
+                zero_point = torch.zeros_like(scale)
         
         # Straight-through for input gradients
         grad_input = grad_output
@@ -45,7 +63,7 @@ class StraightThroughQuantize(torch.autograd.Function):
             quantized_levels = torch.clamp(torch.round(x_scaled), ctx.qmin, ctx.qmax) - zero_point
             scale_grad_per_element = grad_output * (quantized_levels - input / scale)
         
-        # Sum over appropriate dimensions to match scale shape
+        # Sum over appropriate dimensions to match original scale shape
         if ctx.per_channel:
             # For per-channel, sum over all dimensions except the channel dimension
             dims_to_sum = list(range(input.ndim))
@@ -53,12 +71,11 @@ class StraightThroughQuantize(torch.autograd.Function):
             grad_scale = torch.sum(scale_grad_per_element, dim=dims_to_sum, keepdim=False)
             
             # Make sure the shape matches exactly
-            if grad_scale.shape != scale.shape:
-                # If scale was reshaped for broadcasting, we need to match the original shape
-                grad_scale = grad_scale.view_as(scale)
+            if grad_scale.shape != original_scale.shape:
+                grad_scale = grad_scale.view_as(original_scale)
         else:
             # For per-tensor, sum over all dimensions but keep as tensor with same shape as scale
-            grad_scale = torch.sum(scale_grad_per_element).view_as(scale)
+            grad_scale = torch.sum(scale_grad_per_element).view_as(original_scale)
         
         # Compute gradients for zero_point (if not symmetric)
         if not ctx.symmetric:
@@ -69,16 +86,16 @@ class StraightThroughQuantize(torch.autograd.Function):
                 dims_to_sum.remove(ctx.channel_dim)
                 grad_zero_point = torch.sum(zp_grad_per_element, dim=dims_to_sum, keepdim=False)
                 
-                if grad_zero_point.shape != zero_point.shape:
-                    grad_zero_point = grad_zero_point.view_as(zero_point)
+                if grad_zero_point.shape != original_zp.shape:
+                    grad_zero_point = grad_zero_point.view_as(original_zp)
             else:
                 # For per-tensor zero point
                 zp_grad_per_element = grad_output * scale
-                grad_zero_point = torch.sum(zp_grad_per_element).view_as(zero_point)
+                grad_zero_point = torch.sum(zp_grad_per_element).view_as(original_zp)
         else:
             grad_zero_point = None
         
-        return grad_input, grad_scale, grad_zero_point, None, None, None, None, None
+        return grad_input, None, None, None, None, None, None, None, grad_scale, grad_zero_point
 
 class LearnableQuantizer(nn.Module):
     """
@@ -214,23 +231,25 @@ class LearnableQuantizer(nn.Module):
             # For per-channel, we need to reshape scale and zero_point to broadcast correctly
             shape = [1] * x.ndim
             shape[self.channel_dim] = -1
-            scale = self.scale.view(shape)
+            scale_broadcasted = self.scale.view(shape)
             
             if not self.symmetric:
-                zero_point = self.zero_point.view(shape)
+                zero_point_broadcasted = self.zero_point.view(shape)
             else:
-                zero_point = torch.zeros_like(scale)
+                zero_point_broadcasted = torch.zeros_like(scale_broadcasted)
         else:
-            scale = self.scale
+            scale_broadcasted = self.scale
             if not self.symmetric:
-                zero_point = self.zero_point
+                zero_point_broadcasted = self.zero_point
             else:
-                zero_point = torch.zeros_like(scale)
+                zero_point_broadcasted = torch.zeros_like(scale_broadcasted)
         
         # Apply quantization with learnable parameters
+        # Pass both broadcasted versions (for computation) and original versions (for gradients)
         return StraightThroughQuantize.apply(
-            x, self.scale, self.zero_point, self.qmin, self.qmax, 
-            self.symmetric, self.per_channel, self.channel_dim
+            x, scale_broadcasted, zero_point_broadcasted, self.qmin, self.qmax, 
+            self.symmetric, self.per_channel, self.channel_dim,
+            self.scale, self.zero_point  # Original parameters for gradient computation
         )
 
 class QATLinear(nn.Linear):
