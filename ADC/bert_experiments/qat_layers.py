@@ -130,9 +130,8 @@ class LearnableQuantizer(nn.Module):
             # Get the channel dimension size
             channel_size = x.shape[self.channel_dim]
             
-            # Reinitialize scale with correct shape
+            # Calculate initial scale values
             with torch.no_grad():
-                # Initialize scale based on input statistics
                 if self.channel_dim == 0:
                     x_reshaped = x.view(channel_size, -1)
                     x_absmax = x_reshaped.abs().max(dim=1)[0]
@@ -145,14 +144,16 @@ class LearnableQuantizer(nn.Module):
                 init_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
                 init_scale = torch.clamp(init_scale, min=1e-8)
                 
-                # Create new parameter with correct shape
-                self.scale = nn.Parameter(init_scale.to(x.device))
+                # Resize the existing parameter instead of creating new one
+                self.scale.data = self.scale.data.new_zeros(channel_size)
+                self.scale.data.copy_(init_scale)
+            
             self._scale_initialized = True
             
             # Reinitialize zero_point if asymmetric
             if not self.symmetric and not self._zp_initialized:
                 with torch.no_grad():
-                    self.zero_point = nn.Parameter(torch.zeros(channel_size, device=x.device, dtype=x.dtype))
+                    self.zero_point.data = self.zero_point.data.new_zeros(channel_size)
                 self._zp_initialized = True
     
     def update_params(self, x: torch.Tensor):
