@@ -1,86 +1,125 @@
 import torch
-from ADC.quantized_layers import LinearQuant, LinearADC, LinearADCAshift
+import torch.nn as nn
+import sys
+import os
 
-def _selectively_replace_layers(module, stage, bw, bx, ba, k, name_prefix=""):
-    """
-    Recursively replaces layers in a BERT model based on the specified stage ('qat' or 'adc').
-    """
-    for name, child in module.named_children():
-        full_name = f"{name_prefix}.{name}" if name_prefix else name
+# Add parent directory to path to import from ADC
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from quantizers import WeightQuantizer, ActivationQuantizer
 
-        # Рекурсивно идем вглубь, если это не линейный слой
-        if not isinstance(child, torch.nn.Linear):
-            _selectively_replace_layers(child, stage, bw, bx, ba, k, name_prefix=full_name)
-            continue
-
-        # --- Применяем правила замены ---
-
-        # Правило 1: Последний слой (классификатор) всегда 8-бит
-        if "qa_outputs" in full_name:
-            quant_bw, quant_bx = 8, 8
-        else:
-            quant_bw, quant_bx = bw, bx
-
-        # Правило 2: Пропускаем квантование для слоя после BMM2 (attention.output.dense)
-        if "attention.output.dense" in full_name:
-            # На стадии QAT оставляем его в FP32.
-            # На стадии ADC он уже будет заменен, если мы решим его квантовать, но пока пропускаем.
-            # В данном пайплайне мы его не трогаем.
-            continue
+class QuantizedBertSelfAttention(nn.Module):
+    def __init__(self, original_attention, weight_bit_width=8, activation_bit_width=8):
+        super(QuantizedBertSelfAttention, self).__init__()
+        self.original_attention = original_attention
+        
+        # Create quantizers for weights
+        self.query_weight_quantizer = WeightQuantizer(bit_width=weight_bit_width)
+        self.key_weight_quantizer = WeightQuantizer(bit_width=weight_bit_width)
+        self.value_weight_quantizer = WeightQuantizer(bit_width=weight_bit_width)
+        self.output_weight_quantizer = WeightQuantizer(bit_width=weight_bit_width)
+        
+        # Create quantizers for activations
+        self.input_act_quantizer = ActivationQuantizer(bit_width=activation_bit_width)
+        self.attention_act_quantizer = ActivationQuantizer(bit_width=activation_bit_width)
+        
+    def forward(self, hidden_states, attention_mask=None, head_mask=None):
+        # Quantize input activations
+        hidden_states_q = self.input_act_quantizer(hidden_states)
+        
+        # Get the original attention module components
+        query = self.original_attention.query
+        key = self.original_attention.key
+        value = self.original_attention.value
+        
+        # Quantize weights
+        query_weight_q = self.query_weight_quantizer(query.weight)
+        key_weight_q = self.key_weight_quantizer(key.weight)
+        value_weight_q = self.value_weight_quantizer(value.weight)
+        
+        # Apply quantized weights to linear layers
+        query_layer = torch.nn.functional.linear(hidden_states_q, query_weight_q, query.bias)
+        key_layer = torch.nn.functional.linear(hidden_states_q, key_weight_q, key.bias)
+        value_layer = torch.nn.functional.linear(hidden_states_q, value_weight_q, value.bias)
+        
+        # Continue with the original attention mechanism
+        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+        attention_scores = attention_scores / torch.sqrt(torch.tensor(self.original_attention.attention_head_size, 
+                                                                    dtype=attention_scores.dtype))
+        
+        if attention_mask is not None:
+            attention_scores = attention_scores + attention_mask
             
-        # Определяем, какой слой использовать в зависимости от стадии
-        if stage == 'qat':
-            new_layer = LinearQuant(
-                child.in_features,
-                child.out_features,
-                bias=child.bias is not None,
-                bx=quant_bx,
-                bw=quant_bw
-            )
-        elif stage == 'adc':
-            # Правило 3: Применяем A-shift только для слоя перед GELU (intermediate.dense)
-            use_ashift = "intermediate.dense" in full_name
+        attention_probs = nn.functional.softmax(attention_scores, dim=-1)
+        
+        # Quantize attention probabilities
+        attention_probs_q = self.attention_act_quantizer(attention_probs)
+        
+        if head_mask is not None:
+            attention_probs_q = attention_probs_q * head_mask
             
-            QuantLayer = LinearADCAshift if use_ashift else LinearADC
-            new_layer = QuantLayer(
-                child.in_features,
-                child.out_features,
-                bias=child.bias is not None,
-                bx=quant_bx,
-                bw=quant_bw,
-                ba=ba,
-                k=k,
-                # ashift флаг теперь зависит от имени слоя
-                ashift=use_ashift
-            )
-        else:
-            raise ValueError(f"Unknown stage: {stage}")
+        context_layer = torch.matmul(attention_probs_q, value_layer)
+        
+        # Apply output projection with quantized weights
+        output_weight_q = self.output_weight_quantizer(self.original_attention.output.dense.weight)
+        output = torch.nn.functional.linear(context_layer, output_weight_q, 
+                                          self.original_attention.output.dense.bias)
+        
+        return output
 
-        setattr(module, name, new_layer)
-
-
-def adapt_model_for_stage(model, stage, bw, bx, ba, k):
-    """
-    Adapts the BERT model for a specific quantization stage.
-    """
-    # Правило для первого слоя: Первый линейный слой в первом энкодере - 8 бит.
-    # Мы сделаем это, применив общую замену, а затем вручную исправим первый слой.
-    # Однако, в BERT `embeddings` не содержат линейных слоев. Первый линейный слой - `attention.self.query`.
-    # Для простоты, мы будем считать, что правило "первый слой 8-бит" покрывается
-    # неквантованием embedding'ов, а все слои энкодера следуют общим правилам.
-    # Если бы нужно было строго, мы бы нашли `encoder.layer.0...` и задали ему 8 бит.
-    
-    print(f"Adapting model for stage: '{stage}'...")
-    _selectively_replace_layers(model.bert, stage, bw, bx, ba, k)
-    
-    # Последний слой находится вне `model.bert`, поэтому обрабатываем его отдельно
-    if stage == 'qat':
-        new_qa_layer = LinearQuant(model.qa_outputs.in_features, model.qa_outputs.out_features, bias=True, bx=8, bw=8)
-    elif stage == 'adc':
-        new_qa_layer = LinearADC(model.qa_outputs.in_features, model.qa_outputs.out_features, bias=True, bx=8, bw=8, ba=ba, k=k)
-    else:
-        new_qa_layer = model.qa_outputs
-    
-    model.qa_outputs = new_qa_layer
-    print("Model adaptation complete.")
-    return model 
+class QuantizedBertLayer(nn.Module):
+    def __init__(self, original_layer, weight_bit_width=8, activation_bit_width=8):
+        super(QuantizedBertLayer, self).__init__()
+        self.original_layer = original_layer
+        
+        # Quantize attention
+        self.attention = QuantizedBertSelfAttention(
+            original_layer.attention.self, 
+            weight_bit_width=weight_bit_width,
+            activation_bit_width=activation_bit_width
+        )
+        
+        # Create quantizers for intermediate and output weights
+        self.intermediate_weight_quantizer = WeightQuantizer(bit_width=weight_bit_width)
+        self.output_weight_quantizer = WeightQuantizer(bit_width=weight_bit_width)
+        
+        # Create quantizers for activations
+        self.intermediate_act_quantizer = ActivationQuantizer(bit_width=activation_bit_width)
+        
+    def forward(self, hidden_states, attention_mask=None, head_mask=None):
+        attention_output = self.attention(hidden_states, attention_mask, head_mask)
+        
+        # Apply layer norm (not quantized as it's parameter-free)
+        attention_output = self.original_layer.attention.output.LayerNorm(
+            attention_output + hidden_states
+        )
+        
+        # Intermediate layer with quantized weights
+        intermediate_weight_q = self.intermediate_weight_quantizer(
+            self.original_layer.intermediate.dense.weight
+        )
+        intermediate_output = torch.nn.functional.linear(
+            attention_output, 
+            intermediate_weight_q,
+            self.original_layer.intermediate.dense.bias
+        )
+        
+        # Apply activation function
+        intermediate_output = self.original_layer.intermediate.intermediate_act_fn(intermediate_output)
+        
+        # Quantize intermediate activations
+        intermediate_output_q = self.intermediate_act_quantizer(intermediate_output)
+        
+        # Output layer with quantized weights
+        output_weight_q = self.output_weight_quantizer(
+            self.original_layer.output.dense.weight
+        )
+        layer_output = torch.nn.functional.linear(
+            intermediate_output_q,
+            output_weight_q,
+            self.original_layer.output.dense.bias
+        )
+        
+        # Apply layer norm (not quantized)
+        layer_output = self.original_layer.output.LayerNorm(layer_output + attention_output)
+        
+        return layer_output 

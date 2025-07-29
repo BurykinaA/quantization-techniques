@@ -1,27 +1,28 @@
 import torch
 
-class STERound(torch.autograd.Function):
+class FloorSTE(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input):
-        return input.round()
+    def forward(ctx, x):
+        return torch.floor(x)
 
     @staticmethod
     def backward(ctx, grad_output):
-        # Pass gradient straight through
+        # Straight-through: just pass gradient through
         return grad_output
-
-class STEFloor(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, input):
-        return input.floor()
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # Pass gradient straight through
-        return grad_output
-
-def ste_round(x):
-    return STERound.apply(x)
 
 def ste_floor(x):
-    return STEFloor.apply(x)
+    return FloorSTE.apply(x)
+
+
+class RoundSTE(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x):
+        return torch.round(x)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Straight-through: just pass gradient through
+        return grad_output
+def ste_round(x):
+    return RoundSTE.apply(x)
+
