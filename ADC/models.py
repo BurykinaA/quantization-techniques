@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
-from ADC.quantized_layers import LinearADC, LinearQuant, LinearADCAshift, Conv2dADC
+from ADC.quantized_layers import LinearADC, LinearQuant, LinearADCAshift, Conv2dADC, TiledConv2dADC
 
 class MLP(nn.Module):
     def __init__(self):
@@ -99,18 +99,18 @@ class BasicBlock(nn.Module):
 class BasicBlockADC(nn.Module):
     expansion = 1
 
-    def __init__(self, in_channels, out_channels, stride=1, downsample=None, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None):
+    def __init__(self, in_channels, out_channels, stride=1, downsample=None, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None, conv_type=Conv2dADC):
         super(BasicBlockADC, self).__init__()
         self.bx = bx
         self.bw = bw
         self.ba = ba
         self.k = k
         self.logger = logger
-        self.conv1 = Conv2dADC(in_channels, out_channels, kernel_size=3,
+        self.conv1 = conv_type(in_channels, out_channels, kernel_size=3,
                                stride=stride, padding=1, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=ashift, logger=self.logger)
         self.bn1 = nn.BatchNorm2d(out_channels)
         
-        self.conv2 = Conv2dADC(out_channels, out_channels, kernel_size=3,
+        self.conv2 = conv_type(out_channels, out_channels, kernel_size=3,
                                stride=1, padding=1, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=ashift, logger=self.logger)
         self.bn2 = nn.BatchNorm2d(out_channels)
         
@@ -189,7 +189,7 @@ class ResNetCIFAR(nn.Module):
         return x
 
 class ResNetCIFAR_ADC(nn.Module):
-    def __init__(self, block, layers, num_classes=10, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None):
+    def __init__(self, block, layers, num_classes=10, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None, conv_type=Conv2dADC):
         super(ResNetCIFAR_ADC, self).__init__()
         self.in_channels = 64
         self.bx = bx
@@ -198,11 +198,12 @@ class ResNetCIFAR_ADC(nn.Module):
         self.k = k
         self.ashift=ashift
         self.logger = logger
+        self.conv_type = conv_type
 
         # CIFAR: input 3x32x32 → 64x32x32
 
         
-        self.conv1 = Conv2dADC(3, 64, kernel_size=3, stride=1,
+        self.conv1 = conv_type(3, 64, kernel_size=3, stride=1,
                                 padding=1, bias=False, bx=8, bw=8, ba=8, k=self.k, ashift=ashift, logger=self.logger)
         self.conv1.disable_adc()
         
@@ -240,16 +241,16 @@ class ResNetCIFAR_ADC(nn.Module):
 
         if stride != 1 or self.in_channels != out_channels * block.expansion:
             downsample = nn.Sequential(
-                Conv2dADC(self.in_channels, out_channels * block.expansion,
+                self.conv_type(self.in_channels, out_channels * block.expansion,
                           kernel_size=1, stride=stride, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger),
                 nn.BatchNorm2d(out_channels * block.expansion)
             )
 
-        layers = [block(self.in_channels, out_channels, stride, downsample, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger)]
+        layers = [block(self.in_channels, out_channels, stride, downsample, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger, conv_type=self.conv_type)]
         self.in_channels = out_channels * block.expansion
 
         for _ in range(1, blocks):
-            layers.append(block(self.in_channels, out_channels, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger))
+            layers.append(block(self.in_channels, out_channels, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger, conv_type=self.conv_type))
 
         return nn.Sequential(*layers)
 
@@ -282,5 +283,5 @@ def resnet18_cifar(num_classes=10):
     return ResNetCIFAR(BasicBlock, [2, 2, 2, 2], num_classes=num_classes)
 
 
-def resnet18_cifar_adc(num_classes=10, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None):
-    return ResNetCIFAR_ADC(BasicBlockADC, [2, 2, 2, 2], num_classes=num_classes, bx=bx, bw=bw, ba=ba, k=k, ashift=ashift, logger=logger)
+def resnet18_cifar_adc(num_classes=10, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None, conv_type=Conv2dADC):
+    return ResNetCIFAR_ADC(BasicBlockADC, [2, 2, 2, 2], num_classes=num_classes, bx=bx, bw=bw, ba=ba, k=k, ashift=ashift, logger=logger, conv_type=conv_type)

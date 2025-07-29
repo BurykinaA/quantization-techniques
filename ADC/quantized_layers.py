@@ -4,6 +4,7 @@ from ADC.quantizers import AffineQuantizerPerTensor, SymmetricQuantizerPerTensor
 import wandb
 import random
 
+MVM_LIMIT = 512
 
 class LinearADC(nn.Linear):
     def __init__(self, in_features, out_features, bx=8, bw=8, ba=8, k=4, bias=True, ashift=False, logger=None):
@@ -287,4 +288,96 @@ class Conv2dADC(nn.Conv2d):
                 #print(self.name + "_diff: ", diff / gth_norm)
 
         return out
+
+
+class TiledConv2dADC(nn.Module):
+    def __init__(self,
+                 in_channels, 
+                 out_channels, 
+                 kernel_size, 
+                 stride=1, 
+                 padding=0, 
+                 dilation=1, 
+                 groups=1, 
+                 bias=None, 
+                 padding_mode='zeros', 
+                 device=None, 
+                 dtype=None,
+                 bx=8,
+                 bw=8,
+                 ba=8,
+                 k=4,
+                 ashift=False,
+                 logger=None):
+        super(TiledConv2dADC, self).__init__()
+        
+        if type(kernel_size) == int:
+            ksz = (kernel_size**2)
+        else:
+            ksz = kernel_size[0]*kernel_size[1]
+        n_conv = 1
+        while (ksz * in_channels > MVM_LIMIT and in_channels % 2 == 0):
+            n_conv *= 2
+            in_channels //= 2
+        if (ksz * in_channels > MVM_LIMIT):
+            raise ValueError("Number of input channels is not divided by power of 2")
+        self.convs = nn.ModuleList()
+        self.in_channels = in_channels
+        self.logger = logger
+
+        for i in range(n_conv):
+            bias = bias if i == 0 else None
+            self.convs.append(Conv2dADC(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode, device, dtype, bx, bw, ba, k, ashift, logger))
     
+    def enable_adc(self):
+        for i in range(len(self.convs)):
+            self.convs[i].enable_adc()
+    def disable_adc(self):
+        for i in range(len(self.convs)):
+            self.convs[i].disable_adc()
+    
+    def _set_quantizer_state(self, enabled: bool):
+        for i in range(len(self.convs)):
+            self.convs[i]._set_quantizer_state(enabled)
+    
+    def train(self, mode=True):
+        for i in range(len(self.convs)):
+            self.convs[i].train(mode)
+        return self
+
+    def eval(self, mode=True):
+        for i in range(len(self.convs)):
+            self.convs[i].train(mode)
+        return self
+
+    def load_weights(self, conv):
+        wshape = conv.weight.shape  # (out_channels, in_channels, kH, kW)
+        ksz = wshape[2] * wshape[3]
+        in_channels = wshape[1]
+        n_conv = len(self.convs)
+        split_in = in_channels // n_conv
+
+        # Split weights and biases along the input channel axis
+        w_splits = torch.split(conv.weight, split_in, dim=1)
+        if conv.bias is not None:
+            bias = conv.bias
+        else:
+            bias = None
+
+        for i, subconv in enumerate(self.convs):
+            subconv.weight.data.copy_(w_splits[i].clone())
+            if bias is not None and subconv.bias is not None:
+                subconv.bias.data.copy_(bias.clone())
+        
+
+    def forward(self, x):
+        if (len(x.shape) == 4):
+            # (N, C_in, H, W)
+            results = [self.convs[i](x[:,self.in_channels * i : self.in_channels * (i + 1),:,:]) for i in range(len(self.convs))]
+            return sum(results)
+        elif (len(x.shape) == 3):
+            # (C_in, H, W)
+            results = [self.convs[i](x[self.in_channels * i : self.in_channels * (i + 1),:,:]) for i in range(len(self.convs))]
+            return sum(results)
+        else:
+            raise ValueError("Incorrect dimension of input tensor")
