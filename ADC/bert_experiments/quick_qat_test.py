@@ -6,17 +6,25 @@ def test_qat_linear():
     """Test QAT Linear layer"""
     print("=== Testing QAT Linear Layer ===")
     
-    # Create QAT linear layer
+    # Create QAT linear layer with per-tensor quantization to start
     qat_linear = QATLinear(512, 256, weight_bits=8, activation_bits=8)
     
+    # Override with per-tensor quantizers for testing
+    qat_linear.weight_quantizer = LearnableQuantizer(
+        num_bits=8, symmetric=True, per_channel=False
+    )
+    qat_linear.activation_quantizer = LearnableQuantizer(
+        num_bits=8, symmetric=False, per_channel=False
+    )
+    
     # Create dummy input with gradients enabled
-    x = torch.randn(32, 512, requires_grad=True)  # FIXED: Added requires_grad=True
+    x = torch.randn(32, 512, requires_grad=True)
     
     print(f"Input shape: {x.shape}")
     print(f"Input range: [{x.min().item():.3f}, {x.max().item():.3f}]")
     
     # Forward pass
-    qat_linear.train()  # Enable training mode for quantization
+    qat_linear.train()
     output = qat_linear(x)
     
     print(f"Output shape: {output.shape}")
@@ -43,10 +51,11 @@ def test_qat_linear():
 
 def test_quantizer():
     """Test individual quantizer"""
-    print("\n=== Testing Quantizer ===")
+    print("=== Testing Quantizer ===")
     
-    quantizer = LearnableQuantizer(num_bits=8, symmetric=True)
-    x = torch.randn(10, 20, requires_grad=True) * 2  # FIXED: Added requires_grad=True
+    # Test per-tensor quantizer first
+    quantizer = LearnableQuantizer(num_bits=8, symmetric=True, per_channel=False)
+    x = torch.randn(10, 20, requires_grad=True) * 2
     
     print(f"Input mean: {x.mean().item():.3f}, std: {x.std().item():.3f}")
     
@@ -64,13 +73,45 @@ def test_quantizer():
     print(f"Input gradient norm: {x.grad.norm().item() if x.grad is not None else 'No gradient'}")
     print(f"Scale gradient: {quantizer.scale.grad.item() if quantizer.scale.grad is not None else 'No gradient'}")
 
+def test_per_channel_quantizer():
+    """Test per-channel quantizer separately"""
+    print("\n=== Testing Per-Channel Quantizer ===")
+    
+    # Test per-channel quantizer
+    quantizer = LearnableQuantizer(num_bits=8, symmetric=True, per_channel=True, channel_dim=0)
+    
+    # Create weight-like tensor [out_features, in_features]
+    x = torch.randn(256, 512, requires_grad=True)
+    
+    print(f"Input shape: {x.shape}")
+    print(f"Input mean: {x.mean().item():.3f}, std: {x.std().item():.3f}")
+    
+    # Forward pass
+    quantizer.train()
+    x_quant = quantizer(x)
+    
+    print(f"Quantized shape: {x_quant.shape}")
+    print(f"Scale shape: {quantizer.scale.shape}")
+    print(f"Scale mean: {quantizer.scale.mean().item():.6f}")
+    
+    # Test gradients
+    loss = x_quant.sum()
+    loss.backward()
+    
+    print(f"Input gradient norm: {x.grad.norm().item() if x.grad is not None else 'No gradient'}")
+    print(f"Scale gradient norm: {quantizer.scale.grad.norm().item() if quantizer.scale.grad is not None else 'No gradient'}")
+
 def compare_with_fp32():
     """Compare QAT with FP32 baseline"""
     print("\n=== Comparing QAT vs FP32 ===")
     
-    # Create layers
+    # Create layers with per-tensor quantization for simpler testing
     fp32_linear = nn.Linear(256, 128)
     qat_linear = QATLinear(256, 128, weight_bits=8, activation_bits=8)
+    
+    # Override with per-tensor quantizers
+    qat_linear.weight_quantizer = LearnableQuantizer(num_bits=8, symmetric=True, per_channel=False)
+    qat_linear.activation_quantizer = LearnableQuantizer(num_bits=8, symmetric=False, per_channel=False)
     
     # Copy weights to make fair comparison
     with torch.no_grad():
@@ -78,17 +119,17 @@ def compare_with_fp32():
         qat_linear.bias.copy_(fp32_linear.bias)
     
     # Test input with gradients enabled
-    x = torch.randn(16, 256, requires_grad=True)  # FIXED: Added requires_grad=True
+    x = torch.randn(16, 256, requires_grad=True)
     
     # Forward pass
     fp32_linear.train()
     qat_linear.train()
     
     fp32_output = fp32_linear(x)
-    qat_output = qat_linear(x.clone())  # Clone to avoid in-place operations
+    qat_output = qat_linear(x.clone())
     
     # Compare outputs
-    mse = nn.MSELoss()(fp32_output, qat_output.detach())  # Detach for MSE calculation
+    mse = nn.MSELoss()(fp32_output, qat_output.detach())
     print(f"MSE between FP32 and QAT outputs: {mse.item():.6f}")
     
     # Compare gradients - need separate backward passes
@@ -114,7 +155,7 @@ def test_gradient_flow():
     print("\n=== Testing Gradient Flow ===")
     
     # Create a simple chain: input -> quantizer -> linear -> loss
-    quantizer = LearnableQuantizer(num_bits=8, symmetric=True)
+    quantizer = LearnableQuantizer(num_bits=8, symmetric=True, per_channel=False)
     linear = nn.Linear(10, 1)
     
     # Input with gradients
@@ -148,6 +189,7 @@ def test_gradient_flow():
 if __name__ == "__main__":
     # Run tests
     test_quantizer()
+    test_per_channel_quantizer()
     test_qat_linear()
     compare_with_fp32()
     test_gradient_flow()

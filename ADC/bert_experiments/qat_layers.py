@@ -37,14 +37,26 @@ class LearnableQuantizer(nn.Module):
         self.per_channel = per_channel
         self.channel_dim = channel_dim
         
-        # Learnable scale parameter
-        self.register_parameter('scale', nn.Parameter(torch.ones(1)))
+        # Initialize scale parameter with correct shape
+        if per_channel:
+            # We'll set the correct size during the first forward pass
+            self.register_parameter('scale', nn.Parameter(torch.ones(1)))
+            self._scale_initialized = False
+        else:
+            self.register_parameter('scale', nn.Parameter(torch.ones(1)))
+            self._scale_initialized = True
         
         if not symmetric:
             # Learnable zero point for asymmetric quantization
-            self.register_parameter('zero_point', nn.Parameter(torch.zeros(1)))
+            if per_channel:
+                self.register_parameter('zero_point', nn.Parameter(torch.zeros(1)))
+                self._zp_initialized = False
+            else:
+                self.register_parameter('zero_point', nn.Parameter(torch.zeros(1)))
+                self._zp_initialized = True
         else:
             self.register_buffer('zero_point', torch.zeros(1))
+            self._zp_initialized = True
         
         # Quantization levels
         if symmetric:
@@ -54,13 +66,33 @@ class LearnableQuantizer(nn.Module):
             self.qmin = 0
             self.qmax = 2 ** num_bits - 1
     
+    def _initialize_parameters(self, x: torch.Tensor):
+        """Initialize parameters with correct shape on first forward pass"""
+        if self.per_channel and not self._scale_initialized:
+            # Get the channel dimension size
+            channel_size = x.shape[self.channel_dim]
+            
+            # Reinitialize scale with correct shape
+            with torch.no_grad():
+                self.scale.data = torch.ones(channel_size, device=x.device, dtype=x.dtype)
+            self._scale_initialized = True
+            
+            # Reinitialize zero_point if asymmetric
+            if not self.symmetric and not self._zp_initialized:
+                with torch.no_grad():
+                    self.zero_point.data = torch.zeros(channel_size, device=x.device, dtype=x.dtype)
+                self._zp_initialized = True
+    
     def update_params(self, x: torch.Tensor):
         """Update quantization parameters based on input statistics"""
         with torch.no_grad():
             if self.per_channel:
                 # Per-channel quantization
-                x_flat = x.transpose(self.channel_dim, 0).contiguous()
-                x_flat = x_flat.view(x_flat.size(0), -1)
+                # Move channel dim to front and flatten other dims
+                x_transposed = x.transpose(self.channel_dim, 0).contiguous()
+                original_shape = x_transposed.shape
+                x_flat = x_transposed.view(original_shape[0], -1)
+                
                 x_min = x_flat.min(dim=1)[0]
                 x_max = x_flat.max(dim=1)[0]
             else:
@@ -73,6 +105,12 @@ class LearnableQuantizer(nn.Module):
                 x_absmax = torch.max(x_min.abs(), x_max.abs())
                 scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
                 scale = torch.clamp(scale, min=1e-8)  # Prevent division by zero
+                
+                # Ensure scale has the right shape
+                if self.per_channel:
+                    if scale.numel() != self.scale.numel():
+                        print(f"Warning: Scale shape mismatch. Expected {self.scale.shape}, got {scale.shape}")
+                        return
                 self.scale.data.copy_(scale)
             else:
                 # Asymmetric quantization
@@ -81,24 +119,49 @@ class LearnableQuantizer(nn.Module):
                 zero_point = -x_min / scale
                 zero_point = torch.clamp(zero_point, self.qmin, self.qmax)
                 
+                # Ensure shapes match
+                if self.per_channel:
+                    if scale.numel() != self.scale.numel():
+                        print(f"Warning: Scale shape mismatch. Expected {self.scale.shape}, got {scale.shape}")
+                        return
+                    if zero_point.numel() != self.zero_point.numel():
+                        print(f"Warning: Zero point shape mismatch. Expected {self.zero_point.shape}, got {zero_point.shape}")
+                        return
+                
                 self.scale.data.copy_(scale)
                 self.zero_point.data.copy_(zero_point)
     
     def quantize_fn(self, x: torch.Tensor) -> torch.Tensor:
         """Quantization function (used in forward pass)"""
+        if self.per_channel:
+            # For per-channel, we need to reshape scale and zero_point to broadcast correctly
+            shape = [1] * x.ndim
+            shape[self.channel_dim] = -1
+            scale = self.scale.view(shape)
+            
+            if not self.symmetric:
+                zero_point = self.zero_point.view(shape)
+        else:
+            scale = self.scale
+            if not self.symmetric:
+                zero_point = self.zero_point
+        
         if self.symmetric:
-            x_scaled = x / self.scale
+            x_scaled = x / scale
             x_quant = torch.clamp(torch.round(x_scaled), self.qmin, self.qmax)
         else:
-            x_scaled = x / self.scale + self.zero_point
+            x_scaled = x / scale + zero_point
             x_quant = torch.clamp(torch.round(x_scaled), self.qmin, self.qmax)
-            x_quant = x_quant - self.zero_point
+            x_quant = x_quant - zero_point
         
-        return x_quant * self.scale
+        return x_quant * scale
     
     def forward(self, x: torch.Tensor, update_stats: bool = None) -> torch.Tensor:
         if update_stats is None:
             update_stats = self.training
+        
+        # Initialize parameters on first forward pass
+        self._initialize_parameters(x)
         
         if update_stats:
             self.update_params(x)
@@ -120,12 +183,12 @@ class QATLinear(nn.Linear):
                  activation_symmetric: bool = False):
         super().__init__(in_features, out_features, bias)
         
-        # Weight quantizer (per-channel)
+        # Weight quantizer (per-channel for output channels)
         self.weight_quantizer = LearnableQuantizer(
             num_bits=weight_bits,
             symmetric=weight_symmetric,
             per_channel=True,
-            channel_dim=0
+            channel_dim=0  # Output channels are dim 0 in weight tensor
         )
         
         # Activation quantizer (per-tensor)
