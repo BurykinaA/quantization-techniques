@@ -213,31 +213,29 @@ class MetricsComputer:
     
     def compute_metrics(self, eval_pred):
         """Compute metrics during training"""
-        print("DEBUG: compute_metrics called!")
         try:
-            predictions, _ = eval_pred
-            print(f"DEBUG: Predictions shape: {predictions[0].shape if len(predictions) > 0 else 'No predictions'}")
-            
+            # Be robust to different transformers versions:
+            preds = getattr(eval_pred, "predictions", None)
+            if preds is None:
+                preds, _ = eval_pred
+
             # Postprocess predictions
             formatted_predictions = postprocess_qa_predictions(
                 examples=self.eval_examples,
                 features=self.eval_dataset,
-                predictions=predictions,
+                predictions=preds,
             )
-            print(f"DEBUG: Formatted {len(formatted_predictions)} predictions")
-            
+
             # Format for metric computation
             references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(self.eval_examples["id"], self.eval_examples["answers"])]
             predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
-            
+
             # Compute SQuAD metrics
             result = self.squad_metric.compute(predictions=predictions_for_metric, references=references)
-            print(f"DEBUG: SQuAD metrics computed: {result}")
-            
+
             return {"f1": result["f1"], "exact_match": result["exact_match"]}
-            
+
         except Exception as e:
-            print(f"ERROR in compute_metrics: {e}")
             import traceback
             traceback.print_exc()
             return {"f1": 0.0, "exact_match": 0.0}
@@ -278,16 +276,23 @@ def main():
         desc="Tokenizing train",
     )
     eval_examples = raw["validation"]
-    eval_dataset = eval_examples.map(
-        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
+    # eval_dataset = eval_examples.map(
+    #     lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
+    #     batched=True,
+    #     remove_columns=eval_examples.column_names,
+    #     desc="Tokenizing validation",
+    # )
+    
+    # Add dummy labels so Trainer will call compute_metrics during eval
+    eval_dataset = eval_dataset.map(
+        lambda x: {
+            "start_positions": [0] * len(x["input_ids"]),
+            "end_positions": [0] * len(x["input_ids"]),
+        },
         batched=True,
-        remove_columns=eval_examples.column_names,
-        desc="Tokenizing validation",
+        desc="Adding dummy labels for eval",
     )
     
-    print(f"DEBUG: eval_dataset created with {len(eval_dataset)} samples")
-    print(f"DEBUG: eval_dataset columns: {eval_dataset.column_names}")
-
     metric = evaluate.load("squad")
 
     # Minimal TrainingArguments with compatibility fallback
@@ -306,6 +311,7 @@ def main():
             save_total_limit=2,
             eval_strategy="steps",
             eval_steps=args.eval_steps,
+            prediction_loss_only=False,
             fp16=args.fp16,
             report_to="none",
         )
@@ -322,12 +328,23 @@ def main():
             save_steps=args.save_steps,
             eval_strategy="steps",
             eval_steps=args.eval_steps,
+            prediction_loss_only=False,
             fp16=args.fp16,
         )
 
     # Create metrics computer
     metrics_computer = MetricsComputer(eval_examples, eval_dataset, tokenizer, metric)
     
+    # trainer = Trainer(
+    #     model=model,
+    #     args=training_args,
+    #     train_dataset=train_dataset,
+    #     eval_dataset=eval_dataset,
+    #     tokenizer=tokenizer,
+    #     data_collator=default_data_collator,
+    #     compute_metrics=metrics_computer.compute_metrics,
+    # )
+
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -336,13 +353,13 @@ def main():
         tokenizer=tokenizer,
         data_collator=default_data_collator,
         compute_metrics=metrics_computer.compute_metrics,
+        label_names=["start_positions", "end_positions"],
     )
     
-    print("DEBUG: Trainer created")
-    print(f"DEBUG: Trainer has compute_metrics: {trainer.compute_metrics is not None}")
-
     trainer.train()
 
+    # Manual evaluation with metrics
+    print("Running final evaluation with F1 computation...")
     preds = trainer.predict(eval_dataset).predictions
     formatted = postprocess_qa_predictions(
         examples=eval_examples,
@@ -352,6 +369,9 @@ def main():
     refs = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
     preds_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted.items()]
     eval_metrics = metric.compute(predictions=preds_for_metric, references=refs)
+
+    print(f"Final F1 Score: {eval_metrics['f1']:.2f}")
+    print(f"Final Exact Match: {eval_metrics['exact_match']:.2f}")
 
     try:
         trainer.state.log_history.append({"step": trainer.state.global_step, "eval_f1": eval_metrics.get("f1", None)})
