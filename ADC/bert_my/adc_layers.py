@@ -655,3 +655,166 @@ class QATTransformerBlockADC(nn.Module):
         for module in self.feed_forward:
             if hasattr(module, 'disable_quantization'):
                 module.disable_quantization() 
+
+if __name__ == "__main__":
+    import torch
+    import torch.nn.functional as F
+    
+    print("="*50)
+    print("Testing ADC Layers")
+    print("="*50)
+    
+    # Set up for gradient tracking
+    torch.manual_seed(42)
+    
+    def check_tensor(tensor, name):
+        """Helper function to check tensor for issues"""
+        if tensor is None:
+            print(f"{name}: None")
+            return
+        
+        has_nan = torch.isnan(tensor).any()
+        has_inf = torch.isinf(tensor).any()
+        print(f"{name}: shape={tensor.shape}, mean={tensor.mean().item():.6f}, std={tensor.std().item():.6f}, min={tensor.min().item():.6f}, max={tensor.max().item():.6f}, nan={has_nan}, inf={has_inf}")
+        
+        if has_nan or has_inf:
+            print(f"  WARNING: {name} contains NaN or inf!")
+            return False
+        return True
+    
+    # Test 1: LearnableQuantizer
+    print("\n1. Testing LearnableQuantizer")
+    print("-" * 30)
+    
+    # Test per-tensor symmetric quantizer (like weight quantizer)
+    weight_quantizer = LearnableQuantizer(num_bits=8, symmetric=True, per_channel=False)
+    dummy_weight = torch.randn(10, 5, requires_grad=True) * 0.1  # Small weights
+    check_tensor(dummy_weight, "Input weights")
+    
+    print("Weight quantizer forward pass...")
+    quantized_weight = weight_quantizer(dummy_weight)
+    check_tensor(quantized_weight, "Quantized weights")
+    check_tensor(weight_quantizer.scale, "Weight scale")
+    
+    # Test per-channel symmetric quantizer  
+    weight_quantizer_pc = LearnableQuantizer(num_bits=8, symmetric=True, per_channel=True, channel_dim=0)
+    print("Per-channel weight quantizer forward pass...")
+    quantized_weight_pc = weight_quantizer_pc(dummy_weight)
+    check_tensor(quantized_weight_pc, "PC Quantized weights")
+    check_tensor(weight_quantizer_pc.scale, "PC Weight scale")
+    
+    # Test per-tensor asymmetric quantizer (like activation quantizer)
+    act_quantizer = LearnableQuantizer(num_bits=8, symmetric=False, per_channel=False)
+    dummy_activation = torch.randn(3, 10, requires_grad=True) * 0.5 + 0.5  # Positive activations
+    check_tensor(dummy_activation, "Input activations")
+    
+    print("Activation quantizer forward pass...")
+    quantized_activation = act_quantizer(dummy_activation)
+    check_tensor(quantized_activation, "Quantized activations")
+    check_tensor(act_quantizer.scale, "Activation scale")
+    check_tensor(act_quantizer.zero_point, "Activation zero_point")
+    
+    # Test 2: ADCQuantizer
+    print("\n2. Testing ADCQuantizer")
+    print("-" * 30)
+    
+    adc_quantizer = ADCQuantizer(M=5, bx=8, bw=8, ba=8, k=4)
+    
+    # Simulate matrix multiplication output
+    dummy_mm_output = torch.randn(3, 10, requires_grad=True) * 10  # Matrix mult output
+    check_tensor(dummy_mm_output, "Matrix mult output")
+    
+    print("ADC quantizer forward pass...")
+    adc_output = adc_quantizer(dummy_mm_output)
+    check_tensor(adc_output, "ADC output")
+    print(f"ADC delta: {adc_quantizer._delta.item():.6f}")
+    
+    # Test 3: QATLinearADC
+    print("\n3. Testing QATLinearADC")
+    print("-" * 30)
+    
+    linear_adc = QATLinearADC(in_features=5, out_features=10, bias=True, 
+                              bx=8, bw=8, ba=8, k=4, ashift=False)
+    
+    dummy_input = torch.randn(3, 5, requires_grad=True) * 0.5  # Small input
+    check_tensor(dummy_input, "Linear input")
+    check_tensor(linear_adc.weight, "Linear weight")
+    check_tensor(linear_adc.bias, "Linear bias")
+    
+    print("QATLinearADC forward pass...")
+    
+    # Step by step forward pass with logging
+    print("  Step 1: Quantize activations")
+    xq = linear_adc.activation_quantizer(dummy_input)
+    check_tensor(xq, "  Quantized activations")
+    check_tensor(linear_adc.activation_quantizer.scale, "  Act scale")
+    
+    print("  Step 2: Quantize weights")
+    wq = linear_adc.weight_quantizer(linear_adc.weight)
+    check_tensor(wq, "  Quantized weights")
+    check_tensor(linear_adc.weight_quantizer.scale, "  Weight scale")
+    
+    print("  Step 3: Matrix multiplication")
+    y_for_adc = F.linear(xq, wq, bias=None)
+    check_tensor(y_for_adc, "  MM output")
+    
+    print("  Step 4: ADC quantization")
+    yq_adc = linear_adc.adc_quantizer(y_for_adc)
+    check_tensor(yq_adc, "  ADC quantized")
+    
+    print("  Step 5: Dequantization")
+    try:
+        dequant_output = linear_adc.dequantize(yq_adc, wq)
+        check_tensor(dequant_output, "  Dequantized")
+    except Exception as e:
+        print(f"  ERROR in dequantization: {e}")
+    
+    print("  Step 6: Full forward")
+    try:
+        final_output = linear_adc(dummy_input)
+        check_tensor(final_output, "  Final output")
+    except Exception as e:
+        print(f"  ERROR in forward: {e}")
+    
+    # Test 4: Gradient flow
+    print("\n4. Testing Gradient Flow")
+    print("-" * 30)
+    
+    try:
+        # Create fresh layer for gradient test
+        test_layer = QATLinearADC(in_features=5, out_features=2, bias=True,
+                                  bx=8, bw=8, ba=8, k=4, ashift=False)
+        test_input = torch.randn(2, 5, requires_grad=True) * 0.1
+        
+        print("Forward pass...")
+        output = test_layer(test_input)
+        check_tensor(output, "Test output")
+        
+        print("Backward pass...")
+        loss = output.sum()
+        print(f"Loss: {loss.item():.6f}")
+        
+        loss.backward()
+        
+        print("Checking gradients...")
+        check_tensor(test_input.grad, "Input grad")
+        check_tensor(test_layer.weight.grad, "Weight grad")
+        check_tensor(test_layer.bias.grad, "Bias grad")
+        check_tensor(test_layer.activation_quantizer.scale.grad, "Act scale grad")
+        check_tensor(test_layer.weight_quantizer.scale.grad, "Weight scale grad")
+        
+        # Check for exploding gradients
+        if test_layer.weight.grad is not None:
+            grad_norm = test_layer.weight.grad.norm().item()
+            print(f"Weight gradient norm: {grad_norm:.6f}")
+            if grad_norm > 100:
+                print("WARNING: Gradient norm is very large!")
+        
+    except Exception as e:
+        print(f"ERROR in gradient test: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print("\n" + "="*50)
+    print("Testing complete")
+    print("="*50) 
