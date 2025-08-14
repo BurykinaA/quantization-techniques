@@ -203,6 +203,26 @@ def plot_curves(log_history, out_dir):
             plt.close()
 
 
+def compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer):
+    """Compute metrics during training"""
+    predictions, _ = eval_pred
+    
+    # Postprocess predictions
+    formatted_predictions = postprocess_qa_predictions(
+        examples=eval_examples,
+        features=eval_dataset,
+        predictions=predictions,
+    )
+    
+    # Format for metric computation
+    references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
+    predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
+    
+    # Compute SQuAD metrics
+    metric = evaluate.load("squad")
+    return metric.compute(predictions=predictions_for_metric, references=references)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_name", type=str, default="bert-base-uncased")
@@ -216,6 +236,8 @@ def main():
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
     parser.add_argument("--max_length", type=int, default=384)
     parser.add_argument("--doc_stride", type=int, default=128)
+    parser.add_argument("--eval_steps", type=int, default=500, help="Number of steps between evaluations")
+    parser.add_argument("--save_steps", type=int, default=500, help="Number of steps between saves")
     parser.add_argument("--fp16", action="store_true")
     args = parser.parse_args()
 
@@ -257,8 +279,14 @@ def main():
             num_train_epochs=args.num_train_epochs,
             warmup_ratio=args.warmup_ratio,
             logging_steps=50,
-            save_strategy="epoch",
+            save_strategy="steps",
+            save_steps=args.save_steps,
             save_total_limit=2,
+            evaluation_strategy="steps",
+            eval_steps=args.eval_steps,
+            load_best_model_at_end=True,
+            metric_for_best_model="f1",
+            greater_is_better=True,
             fp16=args.fp16,
             report_to="none",
         )
@@ -272,7 +300,12 @@ def main():
             num_train_epochs=args.num_train_epochs,
             warmup_steps=0,
             logging_steps=50,
-            save_steps=500,
+            save_steps=args.save_steps,
+            evaluation_strategy="steps",
+            eval_steps=args.eval_steps,
+            load_best_model_at_end=True,
+            metric_for_best_model="f1",
+            greater_is_better=True,
             fp16=args.fp16,
         )
 
@@ -283,6 +316,7 @@ def main():
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
         data_collator=default_data_collator,
+        compute_metrics=lambda eval_pred: compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer),
     )
 
     trainer.train()
