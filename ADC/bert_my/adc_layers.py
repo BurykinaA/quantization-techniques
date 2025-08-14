@@ -121,9 +121,10 @@ class ADCQuantizer(nn.Module):
         # Delta calculation from equation (3) - but scale it down to avoid overflow
         # Original: self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)
         # Scaled version to avoid numerical issues:
-        self.delta = (2 * M * activation_range * weight_range) / (2**ba * k * M)  # Divide by M to normalize
-        self.delta = max(self.delta, 1e-6)
-        self.delta = min(self.delta, 1e3)  # Also cap the maximum to prevent overflow
+        self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)  # Divide by M to normalize
+        
+        # self.delta = max(self.delta, 1e-6)
+        # self.delta = min(self.delta, 1e3)  # Also cap the maximum to prevent overflow
         
         # ADC quantization range
         self.na = -(2**(ba-1))  # Negative clipping value
@@ -220,7 +221,7 @@ class LearnableQuantizer(nn.Module):
                 
                 init_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
                 # Ensure scale is never too small
-                init_scale = torch.clamp(init_scale, min=1e-4)
+                # init_scale = torch.clamp(init_scale, min=1e-4)
                 
                 # Resize the existing parameter instead of creating new one
                 self.scale.data = self.scale.data.new_zeros(channel_size)
@@ -262,7 +263,7 @@ class LearnableQuantizer(nn.Module):
                 x_absmax = torch.max(x_min.abs(), x_max.abs())
                 new_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
                 # Ensure scale is never too small
-                new_scale = torch.clamp(new_scale, min=1e-4)
+                # new_scale = torch.clamp(new_scale, min=1e-4)
                 
                 # Exponential moving average update
                 momentum = 0.1
@@ -270,9 +271,9 @@ class LearnableQuantizer(nn.Module):
             else:
                 new_scale = (x_max - x_min) / (2 ** self.num_bits - 1)
                 # Ensure scale is never too small
-                new_scale = torch.clamp(new_scale, min=1e-4)
+                # new_scale = torch.clamp(new_scale, min=1e-4)
                 new_zero_point = -x_min / new_scale
-                new_zero_point = torch.clamp(new_zero_point, self.qmin, self.qmax)
+                # new_zero_point = torch.clamp(new_zero_point, self.qmin, self.qmax)
                 
                 # Exponential moving average update
                 momentum = 0.1
@@ -386,8 +387,8 @@ class QATLinearADC(nn.Linear):
         w_scale = self.weight_quantizer.scale
         
         # Ensure scales are not too small or too large
-        x_scale = torch.clamp(x_scale, min=1e-6, max=1e3)
-        w_scale = torch.clamp(w_scale, min=1e-6, max=1e3)
+        # x_scale = torch.clamp(x_scale, min=1e-6, max=1e3)
+        # w_scale = torch.clamp(w_scale, min=1e-6, max=1e3)
         
         if not self.signed_activations:
             x_zp = self.activation_quantizer.zero_point
