@@ -118,13 +118,12 @@ class ADCQuantizer(nn.Module):
             
         weight_range = 2**(bw-1) - 1  # Assuming symmetric quantization for weights
         
-        # Delta calculation from equation (3) - but scale it down to avoid overflow
-        # Original: self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)
-        # Scaled version to avoid numerical issues:
-        self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)  # Divide by M to normalize
+        # Delta calculation from equation (3) - corrected formula
+        self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)
         
-        # self.delta = max(self.delta, 1e-6)
-        # self.delta = min(self.delta, 1e3)  # Also cap the maximum to prevent overflow
+        # Add reasonable bounds to prevent numerical issues
+        self.delta = max(self.delta, 1e-2)  # Minimum bound
+        self.delta = min(self.delta, 1e4)   # Maximum bound to prevent overflow
         
         # ADC quantization range
         self.na = -(2**(ba-1))  # Negative clipping value
@@ -176,10 +175,10 @@ class LearnableQuantizer(nn.Module):
         # Initialize scale parameter with correct shape
         if per_channel:
             # We'll set the correct size during the first forward pass
-            self.register_parameter('scale', nn.Parameter(torch.ones(1)))
+            self.register_parameter('scale', nn.Parameter(torch.ones(1) * 0.1))  # Better initial value
             self._scale_initialized = False
         else:
-            self.register_parameter('scale', nn.Parameter(torch.ones(1)))
+            self.register_parameter('scale', nn.Parameter(torch.ones(1) * 0.1))  # Better initial value
             self._scale_initialized = True
         
         if not symmetric:
@@ -221,7 +220,10 @@ class LearnableQuantizer(nn.Module):
                 
                 init_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
                 # Ensure scale is never too small
-                # init_scale = torch.clamp(init_scale, min=1e-4)
+                init_scale = torch.clamp(init_scale, min=1e-3, max=10.0)
+                
+                # Handle case where x_absmax is 0
+                init_scale = torch.where(init_scale == 0, torch.ones_like(init_scale) * 0.1, init_scale)
                 
                 # Resize the existing parameter instead of creating new one
                 self.scale.data = self.scale.data.new_zeros(channel_size)
@@ -241,6 +243,11 @@ class LearnableQuantizer(nn.Module):
             return  # Only update during training
             
         with torch.no_grad():
+            # Check input for NaN/inf
+            if torch.isnan(x).any() or torch.isinf(x).any():
+                print("Warning: NaN/inf in quantizer input, skipping parameter update")
+                return
+                
             if self.per_channel:
                 # Per-channel quantization
                 if self.channel_dim == 0:
@@ -262,33 +269,56 @@ class LearnableQuantizer(nn.Module):
             if self.symmetric:
                 x_absmax = torch.max(x_min.abs(), x_max.abs())
                 new_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
-                # Ensure scale is never too small
-                # new_scale = torch.clamp(new_scale, min=1e-4)
+                # Ensure scale is never too small or too large
+                new_scale = torch.clamp(new_scale, min=1e-3, max=10.0)
+                
+                # Handle zero case
+                new_scale = torch.where(new_scale == 0, torch.ones_like(new_scale) * 0.1, new_scale)
                 
                 # Exponential moving average update
-                momentum = 0.1
+                momentum = 0.01  # Reduced momentum for stability
                 self.scale.data = (1 - momentum) * self.scale.data + momentum * new_scale
+                
+                # Clamp the final scale
+                self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
             else:
                 new_scale = (x_max - x_min) / (2 ** self.num_bits - 1)
                 # Ensure scale is never too small
-                # new_scale = torch.clamp(new_scale, min=1e-4)
+                new_scale = torch.clamp(new_scale, min=1e-3, max=10.0)
                 new_zero_point = -x_min / new_scale
-                # new_zero_point = torch.clamp(new_zero_point, self.qmin, self.qmax)
+                new_zero_point = torch.clamp(new_zero_point, self.qmin, self.qmax)
                 
                 # Exponential moving average update
-                momentum = 0.1
+                momentum = 0.01  # Reduced momentum
                 self.scale.data = (1 - momentum) * self.scale.data + momentum * new_scale
                 self.zero_point.data = (1 - momentum) * self.zero_point.data + momentum * new_zero_point
+                
+                # Clamp final values
+                self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
     
     def forward(self, x: torch.Tensor, update_stats: bool = None) -> torch.Tensor:
         if update_stats is None:
             update_stats = self.training
+        
+        # Check input for NaN/inf
+        if torch.isnan(x).any() or torch.isinf(x).any():
+            print(f"Warning: NaN/inf in quantizer input, range=[{x.min():.3f}, {x.max():.3f}]")
+            x = torch.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
         
         # Initialize parameters on first forward pass
         self._initialize_parameters(x)
         
         if update_stats:
             self.update_params(x)
+        
+        # Ensure scale is valid before using
+        if torch.isnan(self.scale).any() or (self.scale <= 0).any():
+            print("Warning: Invalid scale detected, resetting")
+            with torch.no_grad():
+                if self.per_channel:
+                    self.scale.data.fill_(0.1)
+                else:
+                    self.scale.data.fill_(0.1)
         
         # Prepare scale and zero_point for broadcasting
         if self.per_channel:
@@ -310,11 +340,18 @@ class LearnableQuantizer(nn.Module):
         
         # Apply quantization with learnable parameters
         # Pass both broadcasted versions (for computation) and original versions (for gradients)
-        return StraightThroughQuantize.apply(
+        result = StraightThroughQuantize.apply(
             x, scale_broadcasted, zero_point_broadcasted, self.qmin, self.qmax, 
             self.symmetric, self.per_channel, self.channel_dim,
             self.scale, self.zero_point  # Original parameters for gradient computation
         )
+        
+        # Check output for issues
+        if torch.isnan(result).any() or torch.isinf(result).any():
+            print("Warning: NaN/inf in quantizer output")
+            result = torch.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
+        
+        return result
 
 class QATLinearADC(nn.Linear):
     """
