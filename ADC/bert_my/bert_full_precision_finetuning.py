@@ -204,37 +204,43 @@ def plot_curves(log_history, out_dir):
             plt.close()
 
 
-def compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer, squad_metric):
-    """Compute metrics during training"""
-    try:
-        predictions, _ = eval_pred
-        print(f"DEBUG: Predictions shape: {predictions[0].shape if len(predictions) > 0 else 'No predictions'}")
-        
-        # Postprocess predictions
-        formatted_predictions = postprocess_qa_predictions(
-            examples=eval_examples,
-            features=eval_dataset,
-            predictions=predictions,
-        )
-        print(f"DEBUG: Formatted {len(formatted_predictions)} predictions")
-        
-        # Format for metric computation
-        references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
-        predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
-        
-        # Compute SQuAD metrics
-        result = squad_metric.compute(predictions=predictions_for_metric, references=references)
-        print(f"DEBUG: SQuAD metrics computed: {result}")
-        
-        # Return only the metrics that Trainer expects
-        return {"f1": result["f1"], "exact_match": result["exact_match"]}
-        
-    except Exception as e:
-        print(f"ERROR in compute_metrics: {e}")
-        import traceback
-        traceback.print_exc()
-        # Return dummy metrics to avoid crash
-        return {"f1": 0.0, "exact_match": 0.0}
+class MetricsComputer:
+    def __init__(self, eval_examples, eval_dataset, tokenizer, squad_metric):
+        self.eval_examples = eval_examples
+        self.eval_dataset = eval_dataset
+        self.tokenizer = tokenizer
+        self.squad_metric = squad_metric
+    
+    def compute_metrics(self, eval_pred):
+        """Compute metrics during training"""
+        print("DEBUG: compute_metrics called!")
+        try:
+            predictions, _ = eval_pred
+            print(f"DEBUG: Predictions shape: {predictions[0].shape if len(predictions) > 0 else 'No predictions'}")
+            
+            # Postprocess predictions
+            formatted_predictions = postprocess_qa_predictions(
+                examples=self.eval_examples,
+                features=self.eval_dataset,
+                predictions=predictions,
+            )
+            print(f"DEBUG: Formatted {len(formatted_predictions)} predictions")
+            
+            # Format for metric computation
+            references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(self.eval_examples["id"], self.eval_examples["answers"])]
+            predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
+            
+            # Compute SQuAD metrics
+            result = self.squad_metric.compute(predictions=predictions_for_metric, references=references)
+            print(f"DEBUG: SQuAD metrics computed: {result}")
+            
+            return {"f1": result["f1"], "exact_match": result["exact_match"]}
+            
+        except Exception as e:
+            print(f"ERROR in compute_metrics: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"f1": 0.0, "exact_match": 0.0}
 
 def main():
     parser = argparse.ArgumentParser()
@@ -249,7 +255,7 @@ def main():
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
     parser.add_argument("--max_length", type=int, default=384)
     parser.add_argument("--doc_stride", type=int, default=128)
-    parser.add_argument("--eval_steps", type=int, default=500, help="Number of steps between evaluations")
+    parser.add_argument("--eval_steps", type=int, default=2, help="Number of steps between evaluations")
     parser.add_argument("--save_steps", type=int, default=500, help="Number of steps between saves")
     parser.add_argument("--fp16", action="store_true")
     args = parser.parse_args()
@@ -319,6 +325,9 @@ def main():
             fp16=args.fp16,
         )
 
+    # Create metrics computer
+    metrics_computer = MetricsComputer(eval_examples, eval_dataset, tokenizer, metric)
+    
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -326,7 +335,7 @@ def main():
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
         data_collator=default_data_collator,
-        compute_metrics=lambda eval_pred: compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer, metric),
+        compute_metrics=metrics_computer.compute_metrics,
     )
     
     print("DEBUG: Trainer created")
