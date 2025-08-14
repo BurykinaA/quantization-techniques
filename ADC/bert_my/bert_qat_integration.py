@@ -1,427 +1,461 @@
+import argparse
+import os
+import time
+import collections
+import logging
+from typing import Dict, Any, Optional, List, Tuple
+
+import numpy as np
 import torch
 import torch.nn as nn
-from transformers import (
-    AutoTokenizer, AutoModelForSequenceClassification, 
-    AutoConfig, DataCollatorWithPadding, Trainer, TrainingArguments
-)
-from datasets import load_dataset
-from qat_layers import QATLinear, LearnableQuantizer
-from qat_training import QATTrainer
-import numpy as np
-from typing import Dict, Any, Optional
-import logging
-from torch.utils.data import DataLoader
+import evaluate
 
-# Setup logging
+from datasets import load_dataset
+from transformers import (
+    AutoTokenizer,
+    BertForQuestionAnswering,
+    TrainingArguments,
+    Trainer,
+    default_data_collator,
+    set_seed,
+)
+
+from qat_layers import QATLinear, LearnableQuantizer  # noqa: F401
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class BertQATConverter:
-    """Convert BERT model to use QAT layers"""
-    
+    """Convert BERT model to use QAT layers for QA."""
+
     @staticmethod
-    def replace_linear_with_qat(model: nn.Module, 
-                               weight_bits: int = 8, 
-                               activation_bits: int = 8,
-                               exclude_patterns: list = None):
+    def replace_linear_with_qat(
+        model: nn.Module,
+        weight_bits: int = 8,
+        activation_bits: int = 8,
+        exclude_patterns: Optional[List[str]] = None,
+    ) -> nn.Module:
         """
-        Replace all Linear layers in BERT with QAT versions
-        
+        Replace all nn.Linear layers in the model with QATLinear, except excluded.
+
         Args:
-            model: BERT model to convert
-            weight_bits: Bits for weight quantization
-            activation_bits: Bits for activation quantization
-            exclude_patterns: List of layer name patterns to exclude from quantization
+            model: Model to convert.
+            weight_bits: Bits for weight quantization.
+            activation_bits: Bits for activation quantization.
+            exclude_patterns: List of substrings of module names to exclude.
         """
         if exclude_patterns is None:
-            exclude_patterns = ['classifier', 'pooler', 'embeddings']
-        
-        def should_exclude(name):
-            return any(pattern in name for pattern in exclude_patterns)
-        
-        def replace_recursive(module, name=""):
+            # Default: don't quantize embeddings/pooler and QA output head unless requested
+            exclude_patterns = ["embeddings", "pooler", "qa_outputs"]
+
+        def should_exclude(name: str) -> bool:
+            return any(pat in name for pat in exclude_patterns)
+
+        def replace_recursive(module: nn.Module, name: str = ""):
             for child_name, child_module in module.named_children():
                 full_name = f"{name}.{child_name}" if name else child_name
-                
+
                 if isinstance(child_module, nn.Linear) and not should_exclude(full_name):
-                    # Replace with QAT version
                     qat_layer = QATLinear(
                         child_module.in_features,
                         child_module.out_features,
                         bias=(child_module.bias is not None),
                         weight_bits=weight_bits,
-                        activation_bits=activation_bits
+                        activation_bits=activation_bits,
                     )
-                    
-                    # Copy weights and bias
                     with torch.no_grad():
                         qat_layer.weight.copy_(child_module.weight)
                         if child_module.bias is not None:
                             qat_layer.bias.copy_(child_module.bias)
-                    
-                    # Replace the module
                     setattr(module, child_name, qat_layer)
-                    logger.info(f"Replaced {full_name} with QAT version")
+                    logger.info(f"Replaced {full_name} with QATLinear")
                 else:
-                    # Recursively process child modules
                     replace_recursive(child_module, full_name)
-        
+
         replace_recursive(model)
         return model
-    
+
     @staticmethod
     def count_qat_layers(model: nn.Module) -> Dict[str, int]:
-        """Count QAT layers in the model"""
-        counts = {'qat_linear': 0, 'regular_linear': 0, 'total_params': 0}
-        
-        for name, module in model.named_modules():
+        counts = {"qat_linear": 0, "regular_linear": 0, "total_params": 0}
+        for _, module in model.named_modules():
             if isinstance(module, QATLinear):
-                counts['qat_linear'] += 1
+                counts["qat_linear"] += 1
             elif isinstance(module, nn.Linear):
-                counts['regular_linear'] += 1
-            
-            if hasattr(module, 'parameters'):
-                counts['total_params'] += sum(p.numel() for p in module.parameters())
-        
+                counts["regular_linear"] += 1
+            if hasattr(module, "parameters"):
+                counts["total_params"] += sum(p.numel() for p in module.parameters())
         return counts
 
-class BertQATExperiment:
-    """Complete BERT QAT experiment runner"""
-    
-    def __init__(self, 
-                 model_name: str = "bert-base-uncased",
-                 num_labels: int = 2,
-                 weight_bits: int = 8,
-                 activation_bits: int = 8,
-                 device: str = None):
-        
-        self.model_name = model_name
-        self.num_labels = num_labels
-        self.weight_bits = weight_bits
-        self.activation_bits = activation_bits
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        
-        logger.info(f"Initializing BERT QAT experiment with {model_name}")
-        logger.info(f"Weight bits: {weight_bits}, Activation bits: {activation_bits}")
-        logger.info(f"Device: {self.device}")
-        
-        # Load tokenizer and model
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = self._load_and_convert_model()
-        
-    def _load_and_convert_model(self):
-        """Load BERT model and convert to QAT"""
-        logger.info("Loading pre-trained BERT model...")
-        model = AutoModelForSequenceClassification.from_pretrained(
-            self.model_name, 
-            num_labels=self.num_labels
-        )
-        
-        logger.info("Converting to QAT model...")
-        model = BertQATConverter.replace_linear_with_qat(
-            model, 
-            weight_bits=self.weight_bits,
-            activation_bits=self.activation_bits
-        )
-        
-        # Print conversion stats
-        stats = BertQATConverter.count_qat_layers(model)
-        logger.info(f"Conversion complete: {stats['qat_linear']} QAT layers, "
-                   f"{stats['regular_linear']} regular layers, "
-                   f"{stats['total_params']:,} total parameters")
-        
-        return model.to(self.device)
-    
-    def prepare_dataset(self, dataset_name: str = "imdb", max_length: int = 512, num_samples: int = None):
-        """Prepare dataset for training"""
-        logger.info(f"Loading dataset: {dataset_name}")
-        
-        if dataset_name == "imdb":
-            dataset = load_dataset("imdb")
-            text_column = "text"
-            label_column = "label"
-        elif dataset_name == "sst2":
-            dataset = load_dataset("glue", "sst2")
-            text_column = "sentence"
-            label_column = "label"
-        else:
-            raise ValueError(f"Unsupported dataset: {dataset_name}")
-        
-        # Limit samples if specified
-        if num_samples:
-            dataset['train'] = dataset['train'].select(range(min(num_samples, len(dataset['train']))))
-            dataset['test'] = dataset['test'].select(range(min(num_samples // 4, len(dataset['test']))))
-        
-        def tokenize_function(examples):
-            return self.tokenizer(
-                examples[text_column],
-                truncation=True,
-                padding=True,
-                max_length=max_length,
-                return_tensors='pt'
-            )
-        
-        logger.info("Tokenizing dataset...")
-        tokenized_dataset = dataset.map(tokenize_function, batched=True)
-        
-        # Prepare for PyTorch
-        tokenized_dataset = tokenized_dataset.rename_column(label_column, "labels")
-        tokenized_dataset.set_format("torch", columns=["input_ids", "attention_mask", "labels"])
-        
-        logger.info(f"Dataset ready: {len(tokenized_dataset['train'])} train, {len(tokenized_dataset['test'])} test")
-        return tokenized_dataset
-    
-    def create_data_loaders(self, dataset, batch_size: int = 16):
-        """Create data loaders"""
-        train_loader = DataLoader(
-            dataset['train'], 
-            batch_size=batch_size, 
-            shuffle=True,
-            collate_fn=DataCollatorWithPadding(self.tokenizer)
-        )
-        
-        eval_loader = DataLoader(
-            dataset['test'], 
-            batch_size=batch_size, 
-            shuffle=False,
-            collate_fn=DataCollatorWithPadding(self.tokenizer)
-        )
-        
-        return train_loader, eval_loader
-    
-    def run_qat_training(self, 
-                        dataset,
-                        num_epochs: int = 3,
-                        learning_rate: float = 2e-5,
-                        batch_size: int = 16,
-                        warmup_epochs: int = 1,
-                        save_model: bool = True):
-        """Run QAT training using our custom trainer"""
-        logger.info("Starting QAT training...")
-        
-        # Create data loaders
-        train_loader, eval_loader = self.create_data_loaders(dataset, batch_size)
-        
-        # Setup optimizer
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=learning_rate, weight_decay=0.01)
-        
-        # Create QAT trainer
-        trainer = QATTrainer(
-            model=self.model,
-            optimizer=optimizer,
-            device=self.device,
-            gradient_clip_norm=1.0
-        )
-        
-        # Loss function
-        criterion = nn.CrossEntropyLoss()
-        
-        # Training loop
-        best_accuracy = 0.0
-        training_history = []
-        
-        for epoch in range(num_epochs):
-            logger.info(f"\n=== Epoch {epoch + 1}/{num_epochs} ===")
-            
-            # Train
-            train_metrics = trainer.train_epoch(
-                train_loader, 
-                criterion, 
-                epoch, 
-                warmup_epochs=warmup_epochs
-            )
-            
-            # Evaluate
-            eval_metrics = self.evaluate_model(eval_loader)
-            
-            # Log results
-            logger.info(f"Train Loss: {train_metrics['avg_loss']:.4f}, "
-                       f"Grad Norm: {train_metrics['avg_grad_norm']:.6f}")
-            logger.info(f"Eval Loss: {eval_metrics['loss']:.4f}, "
-                       f"Accuracy: {eval_metrics['accuracy']:.4f}")
-            
-            # Save best model
-            if eval_metrics['accuracy'] > best_accuracy:
-                best_accuracy = eval_metrics['accuracy']
-                if save_model:
-                    self.save_model(f"best_bert_qat_{self.weight_bits}bit.pth")
-                    logger.info(f"Saved best model with accuracy: {best_accuracy:.4f}")
-            
-            # Track history
-            training_history.append({
-                'epoch': epoch + 1,
-                'train_loss': train_metrics['avg_loss'],
-                'eval_loss': eval_metrics['loss'],
-                'eval_accuracy': eval_metrics['accuracy'],
-                'grad_norm': train_metrics['avg_grad_norm']
-            })
-        
-        logger.info(f"\nTraining completed! Best accuracy: {best_accuracy:.4f}")
-        return training_history
-    
-    def evaluate_model(self, eval_loader):
-        """Evaluate the model"""
-        self.model.eval()
-        total_loss = 0.0
-        correct_predictions = 0
-        total_predictions = 0
-        
-        criterion = nn.CrossEntropyLoss()
-        
-        with torch.no_grad():
-            for batch in eval_loader:
-                # Move batch to device
-                batch = {k: v.to(self.device) for k, v in batch.items()}
-                
-                # Forward pass
-                outputs = self.model(**batch)
-                loss = criterion(outputs.logits, batch['labels'])
-                
-                # Calculate accuracy
-                predictions = torch.argmax(outputs.logits, dim=-1)
-                correct_predictions += (predictions == batch['labels']).sum().item()
-                total_predictions += batch['labels'].size(0)
-                total_loss += loss.item()
-        
-        accuracy = correct_predictions / total_predictions
-        avg_loss = total_loss / len(eval_loader)
-        
-        return {'loss': avg_loss, 'accuracy': accuracy}
-    
-    def save_model(self, path: str):
-        """Save the QAT model"""
-        torch.save({
-            'model_state_dict': self.model.state_dict(),
-            'model_name': self.model_name,
-            'weight_bits': self.weight_bits,
-            'activation_bits': self.activation_bits,
-            'num_labels': self.num_labels
-        }, path)
-        logger.info(f"Model saved to {path}")
-    
-    def load_model(self, path: str):
-        """Load a saved QAT model"""
-        checkpoint = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        logger.info(f"Model loaded from {path}")
-    
-    def compare_with_baseline(self, dataset, batch_size: int = 16):
-        """Compare QAT model with FP32 baseline"""
-        logger.info("Loading FP32 baseline model for comparison...")
-        
-        # Load baseline model
-        baseline_model = AutoModelForSequenceClassification.from_pretrained(
-            self.model_name, 
-            num_labels=self.num_labels
-        ).to(self.device)
-        
-        # Create data loader
-        _, eval_loader = self.create_data_loaders(dataset, batch_size)
-        
-        # Evaluate QAT model
-        self.model.eval()
-        qat_metrics = self.evaluate_model(eval_loader)
-        
-        # Evaluate baseline
-        baseline_model.eval()
-        baseline_metrics = self._evaluate_baseline(baseline_model, eval_loader)
-        
-        # Calculate model sizes (approximate)
-        qat_size = sum(p.numel() * self.weight_bits / 8 for p in self.model.parameters()) / (1024**2)  # MB
-        baseline_size = sum(p.numel() * 32 / 8 for p in baseline_model.parameters()) / (1024**2)  # MB
-        
-        logger.info("\n=== QAT vs Baseline Comparison ===")
-        logger.info(f"QAT Model     - Loss: {qat_metrics['loss']:.4f}, Accuracy: {qat_metrics['accuracy']:.4f}")
-        logger.info(f"Baseline (FP32) - Loss: {baseline_metrics['loss']:.4f}, Accuracy: {baseline_metrics['accuracy']:.4f}")
-        logger.info(f"Accuracy Drop: {baseline_metrics['accuracy'] - qat_metrics['accuracy']:.4f}")
-        logger.info(f"Model Size - QAT: {qat_size:.1f}MB, Baseline: {baseline_size:.1f}MB")
-        logger.info(f"Size Reduction: {(1 - qat_size/baseline_size)*100:.1f}%")
-        
-        return {
-            'qat': qat_metrics,
-            'baseline': baseline_metrics,
-            'size_reduction': (1 - qat_size/baseline_size)*100
-        }
-    
-    def _evaluate_baseline(self, model, eval_loader):
-        """Evaluate baseline model"""
-        model.eval()
-        total_loss = 0.0
-        correct_predictions = 0
-        total_predictions = 0
-        criterion = nn.CrossEntropyLoss()
-        
-        with torch.no_grad():
-            for batch in eval_loader:
-                batch = {k: v.to(self.device) for k, v in batch.items()}
-                outputs = model(**batch)
-                loss = criterion(outputs.logits, batch['labels'])
-                
-                predictions = torch.argmax(outputs.logits, dim=-1)
-                correct_predictions += (predictions == batch['labels']).sum().item()
-                total_predictions += batch['labels'].size(0)
-                total_loss += loss.item()
-        
-        return {
-            'loss': total_loss / len(eval_loader),
-            'accuracy': correct_predictions / total_predictions
-        }
 
-def run_complete_bert_qat_experiment():
-    """Run a complete BERT QAT experiment"""
-    logger.info("🚀 Starting Complete BERT QAT Experiment")
-    
-    # Configuration
-    config = {
-        'model_name': 'bert-base-uncased',
-        'dataset': 'sst2',  # or 'imdb'
-        'num_labels': 2,
-        'weight_bits': 8,
-        'activation_bits': 8,
-        'num_epochs': 3,
-        'batch_size': 16,
-        'learning_rate': 2e-5,
-        'max_length': 128,
-        'num_samples': 5000,  # Limit for faster experimentation
-    }
-    
-    # Initialize experiment
-    experiment = BertQATExperiment(
-        model_name=config['model_name'],
-        num_labels=config['num_labels'],
-        weight_bits=config['weight_bits'],
-        activation_bits=config['activation_bits']
+def find_last_checkpoint_dir(fp_output_dir: str) -> str:
+    """
+    Given a base fine-tuning output directory, pick the latest 'checkpoint-*' subdir.
+    If fp_output_dir itself is a checkpoint dir, return it. If none found, return base dir.
+    """
+    if not os.path.isdir(fp_output_dir):
+        raise FileNotFoundError(f"Checkpoint directory not found: {fp_output_dir}")
+
+    base = os.path.basename(fp_output_dir.rstrip("/"))
+    if base.startswith("checkpoint-"):
+        return fp_output_dir
+
+    candidates = []
+    for name in os.listdir(fp_output_dir):
+        path = os.path.join(fp_output_dir, name)
+        if os.path.isdir(path) and name.startswith("checkpoint-"):
+            try:
+                step = int(name.split("-")[-1])
+            except Exception:
+                step = -1
+            candidates.append((step, path))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0])
+        return candidates[-1][1]
+
+    # Fallback: use the directory itself if there is no sub-checkpoint
+    return fp_output_dir
+
+
+# ====== SQuAD QA pipeline helpers (same as FP script) ======
+def prepare_train_features(examples, tokenizer, max_length=384, doc_stride=128):
+    tokenized = tokenizer(
+        examples["question"],
+        examples["context"],
+        truncation="only_second",
+        max_length=max_length,
+        stride=doc_stride,
+        return_overflowing_tokens=True,
+        return_offsets_mapping=True,
+        padding="max_length",
     )
-    
-    # Prepare dataset
-    dataset = experiment.prepare_dataset(
-        dataset_name=config['dataset'],
-        max_length=config['max_length'],
-        num_samples=config['num_samples']
+
+    sample_mapping = tokenized.pop("overflow_to_sample_mapping")
+    offsets_mapping = tokenized.pop("offset_mapping")
+
+    tokenized["start_positions"] = []
+    tokenized["end_positions"] = []
+
+    for i, offsets in enumerate(offsets_mapping):
+        input_ids = tokenized["input_ids"][i]
+        cls_index = input_ids.index(tokenizer.cls_token_id)
+
+        sequence_ids = tokenized.sequence_ids(i)
+        sample_index = sample_mapping[i]
+        answers = examples["answers"][sample_index]
+
+        if len(answers["answer_start"]) == 0:
+            tokenized["start_positions"].append(cls_index)
+            tokenized["end_positions"].append(cls_index)
+            continue
+
+        start_char = answers["answer_start"][0]
+        end_char = start_char + len(answers["text"][0])
+
+        context_index = 1
+
+        token_start_index = 0
+        while sequence_ids[token_start_index] != context_index:
+            token_start_index += 1
+        token_end_index = len(input_ids) - 1
+        while sequence_ids[token_end_index] != context_index:
+            token_end_index -= 1
+
+        if not (offsets[token_start_index][0] <= start_char and offsets[token_end_index][1] >= end_char):
+            tokenized["start_positions"].append(cls_index)
+            tokenized["end_positions"].append(cls_index)
+        else:
+            while token_start_index < len(offsets) and offsets[token_start_index][0] <= start_char and sequence_ids[token_start_index] == context_index:
+                token_start_index += 1
+            start_position = token_start_index - 1
+
+            while offsets[token_end_index][1] >= end_char and sequence_ids[token_end_index] == context_index:
+                token_end_index -= 1
+            end_position = token_end_index + 1
+
+            tokenized["start_positions"].append(start_position)
+            tokenized["end_positions"].append(end_position)
+
+    return tokenized
+
+
+def prepare_validation_features(examples, tokenizer, max_length=384, doc_stride=128):
+    tokenized = tokenizer(
+        examples["question"],
+        examples["context"],
+        truncation="only_second",
+        max_length=max_length,
+        stride=doc_stride,
+        return_overflowing_tokens=True,
+        return_offsets_mapping=True,
+        padding="max_length",
     )
-    
-    # Run QAT training
-    history = experiment.run_qat_training(
-        dataset=dataset,
-        num_epochs=config['num_epochs'],
-        learning_rate=config['learning_rate'],
-        batch_size=config['batch_size'],
-        warmup_epochs=1
+
+    sample_mapping = tokenized.pop("overflow_to_sample_mapping")
+    tokenized["example_id"] = []
+
+    for i in range(len(tokenized["input_ids"])):
+        sequence_ids = tokenized.sequence_ids(i)
+        context_index = 1
+
+        tokenized["offset_mapping"][i] = [
+            (o if sequence_ids[k] == context_index else None)
+            for k, o in enumerate(tokenized["offset_mapping"][i])
+        ]
+
+        sample_index = sample_mapping[i]
+        tokenized["example_id"].append(examples["id"][sample_index])
+
+    return tokenized
+
+
+def postprocess_qa_predictions(
+    examples,
+    features,
+    predictions,
+    n_best_size=20,
+    max_answer_length=30,
+):
+    all_start_logits, all_end_logits = predictions
+    example_id_to_index = {k: i for i, k in enumerate(examples["id"])}
+    features_per_example = collections.defaultdict(list)
+    for i, feat_id in enumerate(features["example_id"]):
+        features_per_example[feat_id].append(i)
+
+    predictions_dict = {}
+
+    for example_id, feature_indices in features_per_example.items():
+        context = examples["context"][example_id_to_index[example_id]]
+        prelim_predictions = []
+
+        for feature_index in feature_indices:
+            start_logits = all_start_logits[feature_index]
+            end_logits = all_end_logits[feature_index]
+            offset_mapping = features["offset_mapping"][feature_index]
+
+            start_indexes = np.argsort(start_logits)[-1 : -n_best_size - 1 : -1].tolist()
+            end_indexes = np.argsort(end_logits)[-1 : -n_best_size - 1 : -1].tolist()
+            for start_index in start_indexes:
+                for end_index in end_indexes:
+                    if (
+                        start_index >= len(offset_mapping)
+                        or end_index >= len(offset_mapping)
+                        or offset_mapping[start_index] is None
+                        or offset_mapping[end_index] is None
+                    ):
+                        continue
+                    if end_index < start_index:
+                        continue
+                    length = end_index - start_index + 1
+                    if length > max_answer_length:
+                        continue
+                    start_char = offset_mapping[start_index][0]
+                    end_char = offset_mapping[end_index][1]
+                    prelim_predictions.append(
+                        {
+                            "score": start_logits[start_index] + end_logits[end_index],
+                            "start": start_char,
+                            "end": end_char,
+                        }
+                    )
+
+        if len(prelim_predictions) == 0:
+            predictions_dict[example_id] = ""
+            continue
+
+        best_pred = max(prelim_predictions, key=lambda x: x["score"])
+        predictions_dict[example_id] = context[best_pred["start"] : best_pred["end"]]
+
+    return predictions_dict
+
+
+class MetricsComputer:
+    def __init__(self, eval_examples, eval_dataset, tokenizer, squad_metric):
+        self.eval_examples = eval_examples
+        self.eval_dataset = eval_dataset
+        self.tokenizer = tokenizer
+        self.squad_metric = squad_metric
+
+    def compute_metrics(self, eval_pred):
+        try:
+            predictions, _ = eval_pred
+            formatted_predictions = postprocess_qa_predictions(
+                examples=self.eval_examples,
+                features=self.eval_dataset,
+                predictions=predictions,
+            )
+            references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(self.eval_examples["id"], self.eval_examples["answers"])]
+            predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
+            result = self.squad_metric.compute(predictions=predictions_for_metric, references=references)
+            return {"f1": result["f1"], "exact_match": result["exact_match"]}
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return {"f1": 0.0, "exact_match": 0.0}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    # Where to load FP model checkpoint from (dir with checkpoint-* or the checkpoint dir itself)
+    parser.add_argument("--fp_checkpoint_dir", type=str, required=True, help="Path to FP fine-tuning output dir or a specific checkpoint-* dir")
+    parser.add_argument("--output_dir", type=str, default="./outputs_qa_qat")
+    parser.add_argument("--seed", type=int, default=42)
+
+    # QAT settings
+    parser.add_argument("--weight_bits", type=int, default=8)
+    parser.add_argument("--activation_bits", type=int, default=8)
+    parser.add_argument("--exclude_head", action="store_true", help="Exclude qa_outputs from quantization")
+    parser.add_argument("--exclude_pooler", action="store_true", help="Exclude pooler from quantization")
+    parser.add_argument("--exclude_embeddings", action="store_true", help="Exclude embeddings from quantization")
+
+    # Data/Trainer settings (same pipeline as FP)
+    parser.add_argument("--num_train_epochs", type=float, default=1.0)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=32)
+    parser.add_argument("--per_device_eval_batch_size", type=int, default=32)
+    parser.add_argument("--learning_rate", type=float, default=3e-5)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--warmup_ratio", type=float, default=0.1)
+    parser.add_argument("--max_length", type=int, default=384)
+    parser.add_argument("--doc_stride", type=int, default=128)
+    parser.add_argument("--eval_steps", type=int, default=200)
+    parser.add_argument("--save_steps", type=int, default=500)
+    parser.add_argument("--fp16", action="store_true")
+    args = parser.parse_args()
+
+    set_seed(args.seed)
+
+    # Resolve the last checkpoint directory
+    last_ckpt = find_last_checkpoint_dir(args.fp_checkpoint_dir)
+    logger.info(f"Loading fine-tuned FP checkpoint from: {last_ckpt}")
+
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    out_dir = os.path.join(args.output_dir, f"squad_qat_{timestamp}")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Load tokenizer from the FP checkpoint to keep exact vocab/tokenization
+    tokenizer = AutoTokenizer.from_pretrained(last_ckpt, use_fast=True)
+    tokenizer.padding_side = "right"
+
+    # Load fine-tuned FP model and convert to QAT
+    model = BertForQuestionAnswering.from_pretrained(last_ckpt)
+
+    exclude_patterns = []
+    if args.exclude_embeddings:
+        exclude_patterns.append("embeddings")
+    if args.exclude_pooler:
+        exclude_patterns.append("pooler")
+    if args.exclude_head:
+        exclude_patterns.append("qa_outputs")
+    if not exclude_patterns:
+        # Default exclusions to mirror typical practice
+        exclude_patterns = ["embeddings", "pooler", "qa_outputs"]
+
+    model = BertQATConverter.replace_linear_with_qat(
+        model,
+        weight_bits=args.weight_bits,
+        activation_bits=args.activation_bits,
+        exclude_patterns=exclude_patterns,
     )
-    
-    # Compare with baseline
-    comparison = experiment.compare_with_baseline(dataset, config['batch_size'])
-    
-    logger.info("🎉 Experiment completed successfully!")
-    return experiment, history, comparison
+
+    stats = BertQATConverter.count_qat_layers(model)
+    logger.info(f"QAT conversion: {stats['qat_linear']} QATLinear, {stats['regular_linear']} remaining Linear, "
+                f"{stats['total_params']:,} params")
+
+    # Data
+    raw = load_dataset("squad")
+    train_dataset = raw["train"].map(
+        lambda x: prepare_train_features(x, tokenizer, args.max_length, args.doc_stride),
+        batched=True,
+        remove_columns=raw["train"].column_names,
+        desc="Tokenizing train",
+    )
+    eval_examples = raw["validation"]
+    eval_dataset = eval_examples.map(
+        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
+        batched=True,
+        remove_columns=eval_examples.column_names,
+        desc="Tokenizing validation",
+    )
+
+    squad_metric = evaluate.load("squad")
+    metrics_computer = MetricsComputer(eval_examples, eval_dataset, tokenizer, squad_metric)
+
+    # TrainingArguments (keep parity with FP pipeline)
+    try:
+        training_args = TrainingArguments(
+            output_dir=out_dir,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            per_device_eval_batch_size=args.per_device_eval_batch_size,
+            learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
+            num_train_epochs=args.num_train_epochs,
+            warmup_ratio=args.warmup_ratio,
+            logging_steps=50,
+            save_strategy="steps",
+            save_steps=args.save_steps,
+            save_total_limit=2,
+            eval_strategy="steps",
+            eval_steps=args.eval_steps,
+            fp16=args.fp16,
+            report_to="none",
+        )
+    except TypeError:
+        training_args = TrainingArguments(
+            output_dir=out_dir,
+            per_device_train_batch_size=args.per_device_train_batch_size,
+            per_device_eval_batch_size=args.per_device_eval_batch_size,
+            learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
+            num_train_epochs=args.num_train_epochs,
+            warmup_steps=0,
+            logging_steps=50,
+            save_steps=args.save_steps,
+            eval_strategy="steps",
+            eval_steps=args.eval_steps,
+            fp16=args.fp16,
+        )
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        tokenizer=tokenizer,
+        data_collator=default_data_collator,
+        compute_metrics=metrics_computer.compute_metrics,
+    )
+
+    logger.info("Starting QAT fine-tuning with HF Trainer...")
+    trainer.train()
+    logger.info("QAT training completed.")
+
+    # Final eval (same as FP script)
+    logger.info("Running final evaluation with F1 computation...")
+    preds = trainer.predict(eval_dataset).predictions
+    formatted = postprocess_qa_predictions(
+        examples=eval_examples,
+        features=eval_dataset,
+        predictions=preds,
+    )
+    refs = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
+    preds_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted.items()]
+    eval_metrics = squad_metric.compute(predictions=preds_for_metric, references=refs)
+
+    logger.info(f"Final F1: {eval_metrics['f1']:.2f}, EM: {eval_metrics['exact_match']:.2f}")
+
+    # Save artifacts
+    trainer.save_model(out_dir)
+    tokenizer.save_pretrained(out_dir)
+
+    with open(os.path.join(out_dir, "eval_metrics.txt"), "w") as f:
+        for k, v in sorted(eval_metrics.items()):
+            f.write(f"{k}: {v}\n")
+
+    print("Final metrics:", eval_metrics)
+    print(f"Artifacts saved to: {out_dir}")
+
 
 if __name__ == "__main__":
-    try:
-        experiment, history, comparison = run_complete_bert_qat_experiment()
-        print("\n✅ BERT QAT Integration successful!")
-        print(f"Final QAT Accuracy: {history[-1]['eval_accuracy']:.4f}")
-        print(f"Size Reduction: {comparison['size_reduction']:.1f}%")
-    except Exception as e:
-        logger.error(f"❌ Experiment failed: {e}")
-        import traceback
-        traceback.print_exc() 
+    main()
