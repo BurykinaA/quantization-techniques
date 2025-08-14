@@ -5,6 +5,7 @@ import collections
 import numpy as np
 import torch
 import evaluate
+import torch
 import matplotlib.pyplot as plt
 
 from datasets import load_dataset
@@ -258,7 +259,7 @@ def main():
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
     parser.add_argument("--max_length", type=int, default=384)
     parser.add_argument("--doc_stride", type=int, default=128)
-    parser.add_argument("--eval_steps", type=int, default=500, help="Number of steps between evaluations")
+    parser.add_argument("--eval_steps", type=int, default=2, help="Number of steps between evaluations")
     parser.add_argument("--save_steps", type=int, default=500, help="Number of steps between saves")
     parser.add_argument("--fp16", action="store_true")
     args = parser.parse_args()
@@ -287,6 +288,9 @@ def main():
         remove_columns=eval_examples.column_names,
         desc="Tokenizing validation",
     )
+    
+    print(f"DEBUG: eval_dataset created with {len(eval_dataset)} samples")
+    print(f"DEBUG: eval_dataset columns: {eval_dataset.column_names}")
 
     metric = evaluate.load("squad")
 
@@ -336,6 +340,13 @@ def main():
     )
     
     print("DEBUG: Trainer created")
+    print(f"DEBUG: Trainer has compute_metrics: {trainer.compute_metrics is not None}")
+    
+    # Test the compute_metrics function directly
+    print("DEBUG: Testing compute_metrics function directly...")
+    dummy_pred = (torch.randn(10, 384, 2), None)
+    test_result = compute_metrics(dummy_pred)
+    print(f"DEBUG: Direct test result: {test_result}")
 
     trainer.train()
 
