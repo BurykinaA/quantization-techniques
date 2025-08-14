@@ -120,6 +120,7 @@ class ADCQuantizer(nn.Module):
         
         # Delta calculation from equation (3)
         self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)
+        self.delta = max(self.delta, 1e-6)
         
         # ADC quantization range
         self.na = -(2**(ba-1))  # Negative clipping value
@@ -201,7 +202,8 @@ class LearnableQuantizer(nn.Module):
                     x_absmax = x_reshaped.abs().max(dim=1)[0]
                 
                 init_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
-                init_scale = torch.clamp(init_scale, min=1e-8)
+                # Ensure scale is never too small
+                init_scale = torch.clamp(init_scale, min=1e-4)
                 
                 # Resize the existing parameter instead of creating new one
                 self.scale.data = self.scale.data.new_zeros(channel_size)
@@ -242,14 +244,16 @@ class LearnableQuantizer(nn.Module):
             if self.symmetric:
                 x_absmax = torch.max(x_min.abs(), x_max.abs())
                 new_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
-                new_scale = torch.clamp(new_scale, min=1e-8)
+                # Ensure scale is never too small
+                new_scale = torch.clamp(new_scale, min=1e-4)
                 
                 # Exponential moving average update
                 momentum = 0.1
                 self.scale.data = (1 - momentum) * self.scale.data + momentum * new_scale
             else:
                 new_scale = (x_max - x_min) / (2 ** self.num_bits - 1)
-                new_scale = torch.clamp(new_scale, min=1e-8)
+                # Ensure scale is never too small
+                new_scale = torch.clamp(new_scale, min=1e-4)
                 new_zero_point = -x_min / new_scale
                 new_zero_point = torch.clamp(new_zero_point, self.qmin, self.qmax)
                 
@@ -364,6 +368,10 @@ class QATLinearADC(nn.Linear):
         x_scale = self.activation_quantizer.scale
         w_scale = self.weight_quantizer.scale
         
+        # Ensure scales are not too small
+        x_scale = torch.clamp(x_scale, min=1e-6)
+        w_scale = torch.clamp(w_scale, min=1e-6)
+        
         if not self.signed_activations:
             x_zp = self.activation_quantizer.zero_point
         else:
@@ -389,6 +397,11 @@ class QATLinearADC(nn.Linear):
         # x_scale: scalar or (1,)
         # w_scale: (out_features,)
         y = y * x_scale * w_scale
+        
+        # Check for NaN and clamp if necessary
+        if torch.isnan(y).any():
+            print("Warning: NaN detected in dequantize output, clamping...")
+            y = torch.nan_to_num(y, nan=0.0, posinf=1e6, neginf=-1e6)
         
         return y
     
