@@ -205,24 +205,35 @@ def plot_curves(log_history, out_dir):
 
 def compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer, squad_metric):
     """Compute metrics during training"""
-    predictions, _ = eval_pred
-    
-    # Postprocess predictions
-    formatted_predictions = postprocess_qa_predictions(
-        examples=eval_examples,
-        features=eval_dataset,
-        predictions=predictions,
-    )
-    
-    # Format for metric computation
-    references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
-    predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
-    
-    # Compute SQuAD metrics
-    result = squad_metric.compute(predictions=predictions_for_metric, references=references)
-    
-    # Return only the metrics that Trainer expects
-    return {"f1": result["f1"], "exact_match": result["exact_match"]}
+    try:
+        predictions, _ = eval_pred
+        print(f"DEBUG: Predictions shape: {predictions[0].shape if len(predictions) > 0 else 'No predictions'}")
+        
+        # Postprocess predictions
+        formatted_predictions = postprocess_qa_predictions(
+            examples=eval_examples,
+            features=eval_dataset,
+            predictions=predictions,
+        )
+        print(f"DEBUG: Formatted {len(formatted_predictions)} predictions")
+        
+        # Format for metric computation
+        references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
+        predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
+        
+        # Compute SQuAD metrics
+        result = squad_metric.compute(predictions=predictions_for_metric, references=references)
+        print(f"DEBUG: SQuAD metrics computed: {result}")
+        
+        # Return only the metrics that Trainer expects
+        return {"f1": result["f1"], "exact_match": result["exact_match"]}
+        
+    except Exception as e:
+        print(f"ERROR in compute_metrics: {e}")
+        import traceback
+        traceback.print_exc()
+        # Return dummy metrics to avoid crash
+        return {"f1": 0.0, "exact_match": 0.0}
 
 
 def main():
@@ -286,9 +297,6 @@ def main():
             save_total_limit=2,
             eval_strategy="steps",
             eval_steps=args.eval_steps,
-            load_best_model_at_end=True,
-            metric_for_best_model="f1",
-            greater_is_better=True,
             fp16=args.fp16,
             report_to="none",
         )
@@ -305,9 +313,6 @@ def main():
             save_steps=args.save_steps,
             eval_strategy="steps",
             eval_steps=args.eval_steps,
-            load_best_model_at_end=True,
-            metric_for_best_model="f1",
-            greater_is_better=True,
             fp16=args.fp16,
         )
 
