@@ -378,19 +378,17 @@ class QATLinearADC(nn.Linear):
         
         # Subtract zero-point correction
         if not self.signed_activations:
-            # Broadcast w_scale for division and weight sum
-            w_scale_broadcast = w_scale.view(-1, 1) if w_scale.dim() > 0 else w_scale
-            weight_sum = self.weight.sum(axis=-1)
-            y = y - (x_zp / w_scale_broadcast.squeeze()) * weight_sum
+            # For zero-point correction: y = y - (x_zp / w_scale) * weight_sum
+            weight_sum = self.weight.sum(axis=-1)  # Sum over input features, shape: (out_features,)
+            correction = (x_zp / w_scale) * weight_sum  # Both should broadcast to (out_features,)
+            # y has shape (batch_size, out_features), correction has shape (out_features,)
+            y = y - correction
         
         # Scale back to full precision
-        # w_scale needs to be broadcast correctly for multiplication
-        if w_scale.dim() > 0:
-            w_scale_broadcast = w_scale.view(-1) if y.dim() == 1 else w_scale.view(-1, 1)
-        else:
-            w_scale_broadcast = w_scale
-            
-        y = y * x_scale * w_scale_broadcast
+        # y: (batch_size, out_features)
+        # x_scale: scalar or (1,)
+        # w_scale: (out_features,)
+        y = y * x_scale * w_scale
         
         return y
     
