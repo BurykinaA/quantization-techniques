@@ -214,27 +214,24 @@ class MetricsComputer:
     def compute_metrics(self, eval_pred):
         """Compute metrics during training"""
         try:
-            # Be robust to different transformers versions:
-            preds = getattr(eval_pred, "predictions", None)
-            if preds is None:
-                preds, _ = eval_pred
-
+            predictions, _ = eval_pred
+            
             # Postprocess predictions
             formatted_predictions = postprocess_qa_predictions(
                 examples=self.eval_examples,
                 features=self.eval_dataset,
-                predictions=preds,
+                predictions=predictions,
             )
-
+            
             # Format for metric computation
             references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(self.eval_examples["id"], self.eval_examples["answers"])]
             predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
-
+            
             # Compute SQuAD metrics
             result = self.squad_metric.compute(predictions=predictions_for_metric, references=references)
-
+            
             return {"f1": result["f1"], "exact_match": result["exact_match"]}
-
+            
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -276,21 +273,11 @@ def main():
         desc="Tokenizing train",
     )
     eval_examples = raw["validation"]
-    # eval_dataset = eval_examples.map(
-    #     lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
-    #     batched=True,
-    #     remove_columns=eval_examples.column_names,
-    #     desc="Tokenizing validation",
-    # )
-    
-    # Add dummy labels so Trainer will call compute_metrics during eval
     eval_dataset = eval_examples.map(
-        lambda x: {
-            "start_positions": [0] * len(x["input_ids"]),
-            "end_positions": [0] * len(x["input_ids"]),
-        },
+        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
         batched=True,
-        desc="Adding dummy labels for eval",
+        remove_columns=eval_examples.column_names,
+        desc="Tokenizing validation",
     )
     
     metric = evaluate.load("squad")
@@ -311,7 +298,6 @@ def main():
             save_total_limit=2,
             eval_strategy="steps",
             eval_steps=args.eval_steps,
-            prediction_loss_only=False,
             fp16=args.fp16,
             report_to="none",
         )
@@ -328,23 +314,12 @@ def main():
             save_steps=args.save_steps,
             eval_strategy="steps",
             eval_steps=args.eval_steps,
-            prediction_loss_only=False,
             fp16=args.fp16,
         )
 
     # Create metrics computer
     metrics_computer = MetricsComputer(eval_examples, eval_dataset, tokenizer, metric)
     
-    # trainer = Trainer(
-    #     model=model,
-    #     args=training_args,
-    #     train_dataset=train_dataset,
-    #     eval_dataset=eval_dataset,
-    #     tokenizer=tokenizer,
-    #     data_collator=default_data_collator,
-    #     compute_metrics=metrics_computer.compute_metrics,
-    # )
-
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -353,7 +328,6 @@ def main():
         tokenizer=tokenizer,
         data_collator=default_data_collator,
         compute_metrics=metrics_computer.compute_metrics,
-        label_names=["start_positions", "end_positions"],
     )
     
     trainer.train()
