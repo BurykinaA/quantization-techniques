@@ -203,7 +203,7 @@ def plot_curves(log_history, out_dir):
             plt.close()
 
 
-def compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer):
+def compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer, squad_metric):
     """Compute metrics during training"""
     predictions, _ = eval_pred
     
@@ -219,8 +219,10 @@ def compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer):
     predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
     
     # Compute SQuAD metrics
-    metric = evaluate.load("squad")
-    return metric.compute(predictions=predictions_for_metric, references=references)
+    result = squad_metric.compute(predictions=predictions_for_metric, references=references)
+    
+    # Return only the metrics that Trainer expects
+    return {"f1": result["f1"], "exact_match": result["exact_match"]}
 
 
 def main():
@@ -316,7 +318,7 @@ def main():
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
         data_collator=default_data_collator,
-        compute_metrics=lambda eval_pred: compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer),
+        compute_metrics=lambda eval_pred: compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer, metric),
     )
 
     trainer.train()
