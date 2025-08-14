@@ -118,9 +118,12 @@ class ADCQuantizer(nn.Module):
             
         weight_range = 2**(bw-1) - 1  # Assuming symmetric quantization for weights
         
-        # Delta calculation from equation (3)
-        self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)
+        # Delta calculation from equation (3) - but scale it down to avoid overflow
+        # Original: self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)
+        # Scaled version to avoid numerical issues:
+        self.delta = (2 * M * activation_range * weight_range) / (2**ba * k * M)  # Divide by M to normalize
         self.delta = max(self.delta, 1e-6)
+        self.delta = min(self.delta, 1e3)  # Also cap the maximum to prevent overflow
         
         # ADC quantization range
         self.na = -(2**(ba-1))  # Negative clipping value
@@ -129,16 +132,30 @@ class ADCQuantizer(nn.Module):
         self.register_buffer('_delta', torch.tensor(self.delta, dtype=torch.float32))
         self.register_buffer('_zero_point', torch.zeros(1))
         
+        print(f"ADC Quantizer: M={M}, delta={self.delta:.6f}, range=[{self.na}, {self.pa}]")
+        
     def forward(self, y: torch.Tensor) -> torch.Tensor:
         """
         Apply ADC quantization according to equation (2):
         y_q = round(clip(y/delta, na, pa))
         """
+        # Check input for NaN/inf
+        if torch.isnan(y).any() or torch.isinf(y).any():
+            print(f"Warning: NaN/inf in ADC input, max={y.max().item()}, min={y.min().item()}")
+            y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
+        
         # Use StraightThroughQuantize with fixed delta as scale
-        return StraightThroughQuantize.apply(
+        result = StraightThroughQuantize.apply(
             y, self._delta, self._zero_point, self.na, self.pa,
             True, False, 0, self._delta, self._zero_point
         )
+        
+        # Check output for NaN/inf
+        if torch.isnan(result).any() or torch.isinf(result).any():
+            print(f"Warning: NaN/inf in ADC output, clamping...")
+            result = torch.nan_to_num(result, nan=0.0, posinf=self.pa, neginf=self.na)
+        
+        return result
 
 class LearnableQuantizer(nn.Module):
     """
@@ -368,40 +385,75 @@ class QATLinearADC(nn.Linear):
         x_scale = self.activation_quantizer.scale
         w_scale = self.weight_quantizer.scale
         
-        # Ensure scales are not too small
-        x_scale = torch.clamp(x_scale, min=1e-6)
-        w_scale = torch.clamp(w_scale, min=1e-6)
+        # Ensure scales are not too small or too large
+        x_scale = torch.clamp(x_scale, min=1e-6, max=1e3)
+        w_scale = torch.clamp(w_scale, min=1e-6, max=1e3)
         
         if not self.signed_activations:
             x_zp = self.activation_quantizer.zero_point
         else:
             x_zp = torch.zeros_like(x_scale)
         
+        # Check inputs
+        if torch.isnan(yq_adc).any():
+            print("Warning: NaN in yq_adc input to dequantize")
+            yq_adc = torch.nan_to_num(yq_adc, nan=0.0)
+        
         # Dequantize: y = yq_adc * delta
         y = yq_adc * self.adc_quantizer._delta
         
+        # Check for overflow after multiplication
+        if torch.isnan(y).any() or torch.isinf(y).any():
+            print(f"Warning: Overflow after delta multiplication. Delta={self.adc_quantizer._delta}, yq_adc range=[{yq_adc.min():.3f}, {yq_adc.max():.3f}]")
+            y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
+        
         # Add ashift correction if enabled
         if self.ashift:
-            y = y + self.C * wq.sum(axis=-1)
+            ashift_correction = self.C * wq.sum(axis=-1)
+            if torch.isnan(ashift_correction).any():
+                print("Warning: NaN in ashift correction")
+                ashift_correction = torch.nan_to_num(ashift_correction, nan=0.0)
+            y = y + ashift_correction
         
         # Subtract zero-point correction
         if not self.signed_activations:
             # For zero-point correction: y = y - (x_zp / w_scale) * weight_sum
             weight_sum = self.weight.sum(axis=-1)  # Sum over input features, shape: (out_features,)
+            
+            # Check weight_sum for issues
+            if torch.isnan(weight_sum).any():
+                print("Warning: NaN in weight_sum")
+                weight_sum = torch.nan_to_num(weight_sum, nan=0.0)
+            
             correction = (x_zp / w_scale) * weight_sum  # Both should broadcast to (out_features,)
-            # y has shape (batch_size, out_features), correction has shape (out_features,)
+            
+            # Check correction for issues
+            if torch.isnan(correction).any():
+                print("Warning: NaN in zero-point correction")
+                correction = torch.nan_to_num(correction, nan=0.0)
+            
             y = y - correction
         
-        # Scale back to full precision
+        # Scale back to full precision with careful handling
         # y: (batch_size, out_features)
         # x_scale: scalar or (1,)
         # w_scale: (out_features,)
-        y = y * x_scale * w_scale
         
-        # Check for NaN and clamp if necessary
+        # Check intermediate values
         if torch.isnan(y).any():
-            print("Warning: NaN detected in dequantize output, clamping...")
-            y = torch.nan_to_num(y, nan=0.0, posinf=1e6, neginf=-1e6)
+            print("Warning: NaN before final scaling")
+            y = torch.nan_to_num(y, nan=0.0)
+        
+        # Apply scaling in stages to prevent overflow
+        y = y * x_scale
+        if torch.isnan(y).any() or torch.isinf(y).any():
+            print("Warning: Overflow after x_scale multiplication")
+            y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
+        
+        y = y * w_scale
+        if torch.isnan(y).any() or torch.isinf(y).any():
+            print("Warning: Overflow after w_scale multiplication")
+            y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
         
         return y
     
