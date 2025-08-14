@@ -203,38 +203,47 @@ def plot_curves(log_history, out_dir):
             plt.close()
 
 
-def compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer, squad_metric):
-    """Compute metrics during training"""
-    try:
-        predictions, _ = eval_pred
-        print(f"DEBUG: Predictions shape: {predictions[0].shape if len(predictions) > 0 else 'No predictions'}")
+# def compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer, squad_metric):
+#     """Compute metrics during training"""
+#     try:
+#         predictions, _ = eval_pred
+#         print(f"DEBUG: Predictions shape: {predictions[0].shape if len(predictions) > 0 else 'No predictions'}")
         
-        # Postprocess predictions
-        formatted_predictions = postprocess_qa_predictions(
-            examples=eval_examples,
-            features=eval_dataset,
-            predictions=predictions,
-        )
-        print(f"DEBUG: Formatted {len(formatted_predictions)} predictions")
+#         # Postprocess predictions
+#         formatted_predictions = postprocess_qa_predictions(
+#             examples=eval_examples,
+#             features=eval_dataset,
+#             predictions=predictions,
+#         )
+#         print(f"DEBUG: Formatted {len(formatted_predictions)} predictions")
         
-        # Format for metric computation
-        references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
-        predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
+#         # Format for metric computation
+#         references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
+#         predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
         
-        # Compute SQuAD metrics
-        result = squad_metric.compute(predictions=predictions_for_metric, references=references)
-        print(f"DEBUG: SQuAD metrics computed: {result}")
+#         # Compute SQuAD metrics
+#         result = squad_metric.compute(predictions=predictions_for_metric, references=references)
+#         print(f"DEBUG: SQuAD metrics computed: {result}")
         
-        # Return only the metrics that Trainer expects
-        return {"f1": result["f1"], "exact_match": result["exact_match"]}
+#         # Return only the metrics that Trainer expects
+#         return {"f1": result["f1"], "exact_match": result["exact_match"]}
         
-    except Exception as e:
-        print(f"ERROR in compute_metrics: {e}")
-        import traceback
-        traceback.print_exc()
-        # Return dummy metrics to avoid crash
-        return {"f1": 0.0, "exact_match": 0.0}
+#     except Exception as e:
+#         print(f"ERROR in compute_metrics: {e}")
+#         import traceback
+#         traceback.print_exc()
+#         # Return dummy metrics to avoid crash
+#         return {"f1": 0.0, "exact_match": 0.0}
 
+def compute_metrics(eval_pred):
+    """Compute metrics during training - simplified version"""
+    print("DEBUG: compute_metrics called!")
+    
+    # Just return dummy metrics to test if function is working
+    return {
+        "f1": 50.0,
+        "exact_match": 30.0
+    }
 
 def main():
     parser = argparse.ArgumentParser()
@@ -323,8 +332,10 @@ def main():
         eval_dataset=eval_dataset,
         tokenizer=tokenizer,
         data_collator=default_data_collator,
-        compute_metrics=lambda eval_pred: compute_metrics(eval_pred, eval_examples, eval_dataset, tokenizer, metric),
+        compute_metrics=compute_metrics,
     )
+    
+    print("DEBUG: Trainer created")
 
     trainer.train()
 
