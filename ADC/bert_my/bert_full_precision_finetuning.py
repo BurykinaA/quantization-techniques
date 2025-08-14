@@ -284,7 +284,7 @@ def main():
     # )
     
     # Add dummy labels so Trainer will call compute_metrics during eval
-    eval_dataset = eval_dataset.map(
+    eval_dataset = eval_examples.map(
         lambda x: {
             "start_positions": [0] * len(x["input_ids"]),
             "end_positions": [0] * len(x["input_ids"]),
