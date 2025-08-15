@@ -440,7 +440,7 @@ class QATLinearADC(nn.Linear):
             yq_adc = torch.nan_to_num(yq_adc, nan=0.0)
         
         # Dequantize: y = yq_adc * delta
-        y = yq_adc * self.adc_quantizer._delta
+        y = yq_adc #* self.adc_quantizer._delta
         
         # Check for overflow after multiplication
         if torch.isnan(y).any() or torch.isinf(y).any():
@@ -517,17 +517,10 @@ class QATLinearADC(nn.Linear):
         y_for_adc = F.linear(xq, wq, bias=None)  # No bias here, add later
         
         # Apply ADC quantization
-        try:
-            yq_adc = self.adc_quantizer(y_for_adc)
-        except:
-            print('===================')
-            print('input ', 'max:', torch.max(x),' min:', torch.min(x), ' M:', self.in_features)
-            print('yq_adc', yq_adc)
-
-
+        #yq_adc = self.adc_quantizer(y_for_adc)
         
         # Dequantize
-        out = self.dequantize(yq_adc, wq)
+        out = self.dequantize(y_for_adc, wq)
         
         # Add bias if present
         if self.bias is not None:
@@ -830,4 +823,5 @@ if __name__ == "__main__":
     
     print("\n" + "="*50)
     print("Testing complete")
-    print("="*50) 
+    print("="*50)
+ 

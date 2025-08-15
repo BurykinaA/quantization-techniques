@@ -446,7 +446,7 @@ def main():
             weight_decay=args.weight_decay,
             num_train_epochs=args.num_train_epochs,
             warmup_ratio=args.warmup_ratio,
-            logging_steps=2,
+            logging_steps=50,
             save_strategy="steps",
             save_steps=args.save_steps,
             save_total_limit=2,
@@ -454,7 +454,6 @@ def main():
             eval_steps=args.eval_steps,
             fp16=args.fp16,
             report_to="none",
-            max_grad_norm=1.0,  # Add gradient clipping
         )
     except TypeError:
         training_args = TrainingArguments(
