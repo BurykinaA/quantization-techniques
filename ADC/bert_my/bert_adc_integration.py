@@ -308,6 +308,37 @@ class MetricsComputer:
             return {"f1": 0.0, "exact_match": 0.0}
 
 
+def add_gradient_hooks(model):
+    """Add hooks to monitor gradients and detect infinite gradients"""
+    
+    def grad_hook(name):
+        def hook(grad):
+            if grad is not None:
+                grad_norm = grad.norm().item()
+                has_nan = torch.isnan(grad).any()
+                has_inf = torch.isinf(grad).any()
+                
+                if has_nan or has_inf or grad_norm > 1000:
+                    print(f"GRADIENT ISSUE in {name}: norm={grad_norm:.6f}, nan={has_nan}, inf={has_inf}")
+                    print(f"  Grad shape: {grad.shape}, min: {grad.min().item():.6f}, max: {grad.max().item():.6f}")
+                    
+                    # Clamp extreme gradients
+                    if has_nan or has_inf:
+                        grad = torch.nan_to_num(grad, nan=0.0, posinf=100.0, neginf=-100.0)
+                    elif grad_norm > 1000:
+                        grad = grad / (grad_norm / 100.0)  # Scale down to norm=100
+                        
+            return grad
+        return hook
+    
+    # Add hooks to all parameters
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            param.register_hook(grad_hook(name))
+    
+    print("Added gradient monitoring hooks to all parameters")
+
+
 def main():
     parser = argparse.ArgumentParser()
     # Where to load FP model checkpoint from (dir with checkpoint-* or the checkpoint dir itself)
@@ -378,6 +409,9 @@ def main():
         signed_activations=args.signed_activations,
         exclude_patterns=exclude_patterns,
     )
+    
+    # Add gradient monitoring
+    add_gradient_hooks(model)
 
     stats = BertADCConverter.count_adc_qat_layers(model)
     logger.info(f"ADC QAT conversion: {stats['adc_qat_linear']} QATLinearADC, {stats['regular_linear']} remaining Linear, "
@@ -420,6 +454,7 @@ def main():
             eval_steps=args.eval_steps,
             fp16=args.fp16,
             report_to="none",
+            max_grad_norm=1.0,  # Add gradient clipping
         )
     except TypeError:
         training_args = TrainingArguments(
