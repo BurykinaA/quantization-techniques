@@ -142,6 +142,7 @@ class ADCQuantizer(nn.Module):
         # Check input for NaN/inf
         if torch.isnan(y).any() or torch.isinf(y).any():
             print(f"Warning: NaN/inf in ADC input, max={y.max().item()}, min={y.min().item()}")
+            raise
             y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
         
         # Use StraightThroughQuantize with fixed delta as scale
@@ -153,6 +154,7 @@ class ADCQuantizer(nn.Module):
         # Check output for NaN/inf
         if torch.isnan(result).any() or torch.isinf(result).any():
             print(f"Warning: NaN/inf in ADC output, clamping...")
+            raise
             result = torch.nan_to_num(result, nan=0.0, posinf=self.pa, neginf=self.na)
         
         return result
@@ -220,7 +222,7 @@ class LearnableQuantizer(nn.Module):
                 
                 init_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
                 # Ensure scale is never too small
-                init_scale = torch.clamp(init_scale, min=1e-3, max=10.0)
+                #init_scale = torch.clamp(init_scale, min=1e-3, max=10.0)
                 
                 # Handle case where x_absmax is 0
                 init_scale = torch.where(init_scale == 0, torch.ones_like(init_scale) * 0.1, init_scale)
@@ -270,7 +272,7 @@ class LearnableQuantizer(nn.Module):
                 x_absmax = torch.max(x_min.abs(), x_max.abs())
                 new_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
                 # Ensure scale is never too small or too large
-                new_scale = torch.clamp(new_scale, min=1e-3, max=10.0)
+                #new_scale = torch.clamp(new_scale, min=1e-3, max=10.0)
                 
                 # Handle zero case
                 new_scale = torch.where(new_scale == 0, torch.ones_like(new_scale) * 0.1, new_scale)
@@ -280,11 +282,11 @@ class LearnableQuantizer(nn.Module):
                 self.scale.data = (1 - momentum) * self.scale.data + momentum * new_scale
                 
                 # Clamp the final scale
-                self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
+                #self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
             else:
                 new_scale = (x_max - x_min) / (2 ** self.num_bits - 1)
                 # Ensure scale is never too small
-                new_scale = torch.clamp(new_scale, min=1e-3, max=10.0)
+                #new_scale = torch.clamp(new_scale, min=1e-3, max=10.0)
                 new_zero_point = -x_min / new_scale
                 new_zero_point = torch.clamp(new_zero_point, self.qmin, self.qmax)
                 
@@ -294,7 +296,7 @@ class LearnableQuantizer(nn.Module):
                 self.zero_point.data = (1 - momentum) * self.zero_point.data + momentum * new_zero_point
                 
                 # Clamp final values
-                self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
+                #self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
     
     def forward(self, x: torch.Tensor, update_stats: bool = None) -> torch.Tensor:
         if update_stats is None:
@@ -499,6 +501,8 @@ class QATLinearADC(nn.Linear):
         if not self.quantization_enabled:
             return F.linear(x, self.weight, self.bias)
         
+        #print('===================')
+        #print('input ', 'max:', torch.max(x),' min:', torch.min(x), ' M:', self.in_features)
         # Quantize activations
         xq = self.activation_quantizer(x)
         
@@ -513,7 +517,14 @@ class QATLinearADC(nn.Linear):
         y_for_adc = F.linear(xq, wq, bias=None)  # No bias here, add later
         
         # Apply ADC quantization
-        yq_adc = self.adc_quantizer(y_for_adc)
+        try:
+            yq_adc = self.adc_quantizer(y_for_adc)
+        except:
+            print('===================')
+            print('input ', 'max:', torch.max(x),' min:', torch.min(x), ' M:', self.in_features)
+            print('yq_adc', yq_adc)
+
+
         
         # Dequantize
         out = self.dequantize(yq_adc, wq)
@@ -522,6 +533,8 @@ class QATLinearADC(nn.Linear):
         if self.bias is not None:
             out = out + self.bias
             
+        #print('output', torch.max(out), torch.min(out))
+        #print()
         return out
 
 class QATMultiHeadAttentionADC(nn.Module):

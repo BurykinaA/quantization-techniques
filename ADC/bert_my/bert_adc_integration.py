@@ -412,7 +412,7 @@ def main():
             weight_decay=args.weight_decay,
             num_train_epochs=args.num_train_epochs,
             warmup_ratio=args.warmup_ratio,
-            logging_steps=50,
+            logging_steps=2,
             save_strategy="steps",
             save_steps=args.save_steps,
             save_total_limit=2,
