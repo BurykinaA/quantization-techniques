@@ -514,14 +514,14 @@ class QATLinearADC(nn.Linear):
         #print('===================')
         #print('input ', 'max:', torch.max(x),' min:', torch.min(x), ' M:', self.in_features)
         # Quantize activations
-        xq = self.activation_quantizer(x, update_stats=False)
+        xq = self.activation_quantizer(x)
         
         # Apply ashift if enabled
         if self.ashift:
             xq = xq - self.C
         
         # Quantize weights
-        wq = self.weight_quantizer(self.weight, update_stats=False)
+        wq = self.weight_quantizer(self.weight)
         
         # Compute matrix-vector multiplication
         y_for_adc = F.linear(xq, wq, bias=None)  # No bias here, add later
