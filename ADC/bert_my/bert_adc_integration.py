@@ -20,7 +20,7 @@ from transformers import (
     set_seed,
 )
 
-from adc_layers import QATLinearADC, LearnableQuantizer  # noqa: F401
+from adc_layers import QATLinearADC, TiledLinearADC, LearnableQuantizer  # noqa: F401
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,9 +39,10 @@ class BertADCConverter:
         ashift: bool = False,
         signed_activations: bool = False,
         exclude_patterns: Optional[List[str]] = None,
+        mvm_limit: int = 512,  # Add mvm_limit parameter for TiledLinearADC
     ) -> nn.Module:
         """
-        Replace all nn.Linear layers in the model with QATLinearADC, except excluded.
+        Replace all nn.Linear layers in the model with TiledLinearADC, except excluded.
 
         Args:
             model: Model to convert.
@@ -52,6 +53,7 @@ class BertADCConverter:
             ashift: Enable ashift functionality.
             signed_activations: Use signed activation quantization.
             exclude_patterns: List of substrings of module names to exclude.
+            mvm_limit: Memory vector multiplication limit for tiling.
         """
         if exclude_patterns is None:
             # Default: don't quantize embeddings/pooler and QA output head unless requested
@@ -65,9 +67,9 @@ class BertADCConverter:
                 full_name = f"{name}.{child_name}" if name else child_name
 
                 if isinstance(child_module, nn.Linear) and not should_exclude(full_name):
-                    adc_qat_layer = QATLinearADC(
-                        child_module.in_features,
-                        child_module.out_features,
+                    adc_qat_layer = TiledLinearADC(
+                        in_features=child_module.in_features,
+                        out_features=child_module.out_features,
                         bias=(child_module.bias is not None),
                         bx=bx,
                         bw=bw,
@@ -75,13 +77,12 @@ class BertADCConverter:
                         k=k,
                         ashift=ashift,
                         signed_activations=signed_activations,
+                        mvm_limit=mvm_limit,
                     )
-                    with torch.no_grad():
-                        adc_qat_layer.weight.copy_(child_module.weight)
-                        if child_module.bias is not None:
-                            adc_qat_layer.bias.copy_(child_module.bias)
+                    # Use the load_weights method instead of manual copying
+                    adc_qat_layer.load_weights(child_module)
                     setattr(module, child_name, adc_qat_layer)
-                    logger.info(f"Replaced {full_name} with QATLinearADC (bx={bx}, bw={bw}, ba={ba}, k={k})")
+                    logger.info(f"Replaced {full_name} with TiledLinearADC (bx={bx}, bw={bw}, ba={ba}, k={k}, mvm_limit={mvm_limit})")
                 else:
                     replace_recursive(child_module, full_name)
 
@@ -92,7 +93,7 @@ class BertADCConverter:
     def count_adc_qat_layers(model: nn.Module) -> Dict[str, int]:
         counts = {"adc_qat_linear": 0, "regular_linear": 0, "total_params": 0}
         for _, module in model.named_modules():
-            if isinstance(module, QATLinearADC):
+            if isinstance(module, (QATLinearADC, TiledLinearADC)):
                 counts["adc_qat_linear"] += 1
             elif isinstance(module, nn.Linear):
                 counts["regular_linear"] += 1
@@ -356,6 +357,7 @@ def main():
     parser.add_argument("--exclude_head", action="store_true", help="Exclude qa_outputs from quantization")
     parser.add_argument("--exclude_pooler", action="store_true", help="Exclude pooler from quantization")
     parser.add_argument("--exclude_embeddings", action="store_true", help="Exclude embeddings from quantization")
+    parser.add_argument("--mvm_limit", type=int, default=512, help="Memory vector multiplication limit for tiling")
 
     # Data/Trainer settings (same pipeline as FP)
     parser.add_argument("--num_train_epochs", type=float, default=1.0)
@@ -408,13 +410,14 @@ def main():
         ashift=args.ashift,
         signed_activations=args.signed_activations,
         exclude_patterns=exclude_patterns,
+        mvm_limit=args.mvm_limit,
     )
     
     # Add gradient monitoring
     add_gradient_hooks(model)
 
     stats = BertADCConverter.count_adc_qat_layers(model)
-    logger.info(f"ADC QAT conversion: {stats['adc_qat_linear']} QATLinearADC, {stats['regular_linear']} remaining Linear, "
+    logger.info(f"ADC QAT conversion: {stats['adc_qat_linear']} TiledLinearADC, {stats['regular_linear']} remaining Linear, "
                 f"{stats['total_params']:,} params")
 
     # Data
@@ -516,6 +519,7 @@ def main():
         f.write(f"ashift: {args.ashift}\n")
         f.write(f"signed_activations: {args.signed_activations}\n")
         f.write(f"exclude_patterns: {exclude_patterns}\n")
+        f.write(f"mvm_limit: {args.mvm_limit}\n")
 
     print("Final metrics:", eval_metrics)
     print(f"Artifacts saved to: {out_dir}")
