@@ -427,85 +427,85 @@ class QATLinearADC(nn.Linear):
     def disable_quantization(self):
         self.quantization_enabled = False
     
-    def dequantize(self, yq_adc: torch.Tensor, wq: torch.Tensor) -> torch.Tensor:
-        """
-        Dequantize ADC output back to full precision
-        """
-        # Get quantization parameters
-        x_scale = self.activation_quantizer.scale
-        w_scale = self.weight_quantizer.scale
+    # def dequantize(self, yq_adc: torch.Tensor, wq: torch.Tensor) -> torch.Tensor:
+    #     """
+    #     Dequantize ADC output back to full precision
+    #     """
+    #     # Get quantization parameters
+    #     x_scale = self.activation_quantizer.scale
+    #     w_scale = self.weight_quantizer.scale
         
-        # Ensure scales are not too small or too large
-        # x_scale = torch.clamp(x_scale, min=1e-6, max=1e3)
-        # w_scale = torch.clamp(w_scale, min=1e-6, max=1e3)
+    #     # Ensure scales are not too small or too large
+    #     # x_scale = torch.clamp(x_scale, min=1e-6, max=1e3)
+    #     # w_scale = torch.clamp(w_scale, min=1e-6, max=1e3)
         
-        if not self.signed_activations:
-            x_zp = self.activation_quantizer.zero_point
-        else:
-            x_zp = torch.zeros_like(x_scale)
+    #     if not self.signed_activations:
+    #         x_zp = self.activation_quantizer.zero_point
+    #     else:
+    #         x_zp = torch.zeros_like(x_scale)
         
-        # Check inputs
-        if torch.isnan(yq_adc).any():
-            print("Warning: NaN in yq_adc input to dequantize")
-            yq_adc = torch.nan_to_num(yq_adc, nan=0.0)
+    #     # Check inputs
+    #     if torch.isnan(yq_adc).any():
+    #         print("Warning: NaN in yq_adc input to dequantize")
+    #         yq_adc = torch.nan_to_num(yq_adc, nan=0.0)
         
-        # Dequantize: y = yq_adc * delta
-        y = yq_adc * self.adc_quantizer._delta
+    #     # Dequantize: y = yq_adc * delta
+    #     y = yq_adc * self.adc_quantizer._delta
         
-        # Check for overflow after multiplication
-        if torch.isnan(y).any() or torch.isinf(y).any():
-            print(f"Warning: Overflow after delta multiplication. Delta={self.adc_quantizer._delta}, yq_adc range=[{yq_adc.min():.3f}, {yq_adc.max():.3f}]")
-            y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
+    #     # Check for overflow after multiplication
+    #     if torch.isnan(y).any() or torch.isinf(y).any():
+    #         print(f"Warning: Overflow after delta multiplication. Delta={self.adc_quantizer._delta}, yq_adc range=[{yq_adc.min():.3f}, {yq_adc.max():.3f}]")
+    #         y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
         
-        # Add ashift correction if enabled
-        if self.ashift:
-            ashift_correction = self.C * wq.sum(axis=-1)
-            if torch.isnan(ashift_correction).any():
-                print("Warning: NaN in ashift correction")
-                ashift_correction = torch.nan_to_num(ashift_correction, nan=0.0)
-            y = y + ashift_correction
+    #     # Add ashift correction if enabled
+    #     if self.ashift:
+    #         ashift_correction = self.C * wq.sum(axis=-1)
+    #         if torch.isnan(ashift_correction).any():
+    #             print("Warning: NaN in ashift correction")
+    #             ashift_correction = torch.nan_to_num(ashift_correction, nan=0.0)
+    #         y = y + ashift_correction
         
-        # Subtract zero-point correction
-        if not self.signed_activations:
-            # For zero-point correction: y = y - (x_zp / w_scale) * weight_sum
-            weight_sum = self.weight.sum(axis=-1)  # Sum over input features, shape: (out_features,)
+    #     # Subtract zero-point correction
+    #     if not self.signed_activations:
+    #         # For zero-point correction: y = y - (x_zp / w_scale) * weight_sum
+    #         weight_sum = self.weight.sum(axis=-1)  # Sum over input features, shape: (out_features,)
             
-            # Check weight_sum for issues
-            if torch.isnan(weight_sum).any():
-                print("Warning: NaN in weight_sum")
-                weight_sum = torch.nan_to_num(weight_sum, nan=0.0)
+    #         # Check weight_sum for issues
+    #         if torch.isnan(weight_sum).any():
+    #             print("Warning: NaN in weight_sum")
+    #             weight_sum = torch.nan_to_num(weight_sum, nan=0.0)
             
-            correction = (x_zp / w_scale) * weight_sum  # Both should broadcast to (out_features,)
+    #         correction = (x_zp / w_scale) * weight_sum  # Both should broadcast to (out_features,)
             
-            # Check correction for issues
-            if torch.isnan(correction).any():
-                print("Warning: NaN in zero-point correction")
-                correction = torch.nan_to_num(correction, nan=0.0)
+    #         # Check correction for issues
+    #         if torch.isnan(correction).any():
+    #             print("Warning: NaN in zero-point correction")
+    #             correction = torch.nan_to_num(correction, nan=0.0)
             
-            y = y - correction
+    #         y = y - correction
         
-        # Scale back to full precision with careful handling
-        # y: (batch_size, out_features)
-        # x_scale: scalar or (1,)
-        # w_scale: (out_features,)
+    #     # Scale back to full precision with careful handling
+    #     # y: (batch_size, out_features)
+    #     # x_scale: scalar or (1,)
+    #     # w_scale: (out_features,)
         
-        # Check intermediate values
-        if torch.isnan(y).any():
-            print("Warning: NaN before final scaling")
-            y = torch.nan_to_num(y, nan=0.0)
+    #     # Check intermediate values
+    #     if torch.isnan(y).any():
+    #         print("Warning: NaN before final scaling")
+    #         y = torch.nan_to_num(y, nan=0.0)
         
-        # Apply scaling in stages to prevent overflow
-        y = y * x_scale
-        if torch.isnan(y).any() or torch.isinf(y).any():
-            print("Warning: Overflow after x_scale multiplication")
-            y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
+    #     # Apply scaling in stages to prevent overflow
+    #     y = y * x_scale
+    #     if torch.isnan(y).any() or torch.isinf(y).any():
+    #         print("Warning: Overflow after x_scale multiplication")
+    #         y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
         
-        y = y * w_scale
-        if torch.isnan(y).any() or torch.isinf(y).any():
-            print("Warning: Overflow after w_scale multiplication")
-            y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
+    #     y = y * w_scale
+    #     if torch.isnan(y).any() or torch.isinf(y).any():
+    #         print("Warning: Overflow after w_scale multiplication")
+    #         y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
         
-        return y
+    #     return y
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.quantization_enabled:
@@ -543,6 +543,139 @@ class QATLinearADC(nn.Linear):
         #print()
         return out
 
+
+class TiledLinearADC(nn.Module):
+    """
+    Плиточный Linear с ADC по плиткам.
+    Делит входные признаки вдоль in_features, чтобы каждая плитка укладывалась в mvm_limit.
+    Каждая плитка — это QATLinearADC со своим M=in_features_tile (для корректного Δa).
+    """
+    def __init__(self,
+                 in_features: int,
+                 out_features: int,
+                 bias: bool = True,
+                 bx: int = 8,
+                 bw: int = 8,
+                 ba: int = 8,
+                 k:  int = 4,
+                 ashift: bool = False,
+                 signed_activations: bool = False,
+                 mvm_limit: int = 512,   # ← твой лимит на M (=число входов на колонку IMC)
+                 logger=None):
+        super().__init__()
+        self.logger = logger
+        self.in_features_total = in_features
+        self.out_features = out_features
+        self.mvm_limit = mvm_limit
+
+        # подбираем число плиток, как в твоём Conv-варианте (делим пополам, пока не влезет)
+        n_tiles = 1
+        tile_in = in_features
+        while (tile_in > mvm_limit) and (tile_in % 2 == 0):
+            n_tiles *= 2
+            tile_in //= 2
+        if tile_in > mvm_limit:
+            raise ValueError("in_features is not divisible by a power of 2 to meet mvm_limit")
+
+        self.n_tiles = n_tiles
+        self.in_features_tile = tile_in
+
+        # создаём плитки; bias кладём в первую (как в TiledConv2dADC)
+        self.tiles = nn.ModuleList()
+        for i in range(n_tiles):
+            use_bias = bias if i == 0 else False
+            self.tiles.append(
+                QATLinearADC(
+                    in_features=tile_in,
+                    out_features=out_features,
+                    bias=use_bias,
+                    bx=bx, bw=bw, ba=ba, k=k,
+                    ashift=ashift,
+                    signed_activations=signed_activations,
+                )
+            )
+
+    # ===== служебные методы управления (по аналогии с TiledConv2dADC) =====
+
+    def enable_adc(self, indices=None):
+        """Включить ADC у всех плиток или у заданных индексов."""
+        idxs = range(self.n_tiles) if indices is None else indices
+        for i in idxs:
+            self.tiles[i].use_adc = True
+
+    def disable_adc(self, indices=None):
+        """Выключить ADC у всех плиток или у заданных индексов."""
+        idxs = range(self.n_tiles) if indices is None else indices
+        for i in idxs:
+            self.tiles[i].use_adc = False
+
+    def _set_quantizer_state(self, enabled: bool):
+        for t in self.tiles:
+            if enabled:
+                t.enable_quantization()
+            else:
+                t.disable_quantization()
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        for t in self.tiles:
+            t.train(mode)
+        return self
+
+    def eval(self):
+        super().eval()
+        for t in self.tiles:
+            t.eval()
+        return self
+
+    def load_weights(self, linear: nn.Linear):
+        """
+        Разложить веса исходного nn.Linear по плиткам вдоль dim=1 (in_features).
+        Bias копируем в первую плитку (если есть).
+        """
+        w = linear.weight  # [out_features, in_features]
+        if w.shape[1] != self.in_features_total:
+            raise ValueError("Input linear width mismatch.")
+
+        splits = torch.split(w, self.in_features_tile, dim=1)
+        if len(splits) != self.n_tiles:
+            raise RuntimeError("Unexpected number of splits; check tiling.")
+
+        with torch.no_grad():
+            for i, t in enumerate(self.tiles):
+                t.weight.copy_(splits[i])
+                if (linear.bias is not None) and (t.bias is not None):
+                    t.bias.copy_(linear.bias)
+
+    # ===== основной forward =====
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: [B, in_features] или [in_features]
+        """
+        added_batch = False
+        if x.dim() == 1:
+            x = x.unsqueeze(0)  # [1, F]
+            added_batch = True
+
+        B, F = x.shape
+        if F != self.in_features_total:
+            raise ValueError(f"Expected in_features={self.in_features_total}, got {F}")
+
+        outs = []
+        for i, t in enumerate(self.tiles):
+            s = i * self.in_features_tile
+            e = (i + 1) * self.in_features_tile
+            xi = x[:, s:e]              # [B, tile_in]
+            yi = t(xi)                  # [B, out_features]
+            outs.append(yi)
+
+        y = torch.stack(outs, dim=0).sum(dim=0)  # суммируем частичные суммы
+
+        if added_batch:
+            y = y.squeeze(0)
+        return y
+
+
 class QATMultiHeadAttentionADC(nn.Module):
     """
     ADC-based Quantization-Aware Training Multi-Head Attention
@@ -563,13 +696,13 @@ class QATMultiHeadAttentionADC(nn.Module):
         self.d_k = d_model // num_heads
         
         # ADC-based QAT linear layers for Q, K, V projections
-        self.w_q = QATLinearADC(d_model, d_model, bias=False, 
+        self.w_q = TiledLinearADC(d_model, d_model, bias=False, 
                                bx=bx, bw=bw, ba=ba, k=k)
-        self.w_k = QATLinearADC(d_model, d_model, bias=False,
+        self.w_k = TiledLinearADC(d_model, d_model, bias=False,
                                bx=bx, bw=bw, ba=ba, k=k)
-        self.w_v = QATLinearADC(d_model, d_model, bias=False,
+        self.w_v = TiledLinearADC(d_model, d_model, bias=False,
                                bx=bx, bw=bw, ba=ba, k=k)
-        self.w_o = QATLinearADC(d_model, d_model, bias=False,
+        self.w_o = TiledLinearADC(d_model, d_model, bias=False,
                                bx=bx, bw=bw, ba=ba, k=k)
         
         # Attention score quantizer
@@ -642,9 +775,9 @@ class QATTransformerBlockADC(nn.Module):
         )
         
         self.feed_forward = nn.Sequential(
-            QATLinearADC(d_model, d_ff, bx=bx, bw=bw, ba=ba, k=k),
+            TiledLinearADC(d_model, d_ff, bx=bx, bw=bw, ba=ba, k=k),
             nn.GELU(),
-            QATLinearADC(d_ff, d_model, bx=bx, bw=bw, ba=ba, k=k),
+            TiledLinearADC(d_ff, d_model, bx=bx, bw=bw, ba=ba, k=k),
             nn.Dropout(dropout)
         )
         
