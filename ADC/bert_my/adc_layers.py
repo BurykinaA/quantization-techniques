@@ -60,7 +60,7 @@ class StraightThroughQuantize(torch.autograd.Function):
         mask = (pre_quant > ctx.qmin) & (pre_quant < ctx.qmax)
         
         # Apply straight-through only where not clamped
-        grad_input = grad_output * mask.float()
+        grad_input = grad_output #* mask.float()
         
         # Compute gradients for scale parameter
         if ctx.symmetric:
