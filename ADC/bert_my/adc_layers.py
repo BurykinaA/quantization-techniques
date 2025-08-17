@@ -91,6 +91,7 @@ class StraightThroughQuantize(torch.autograd.Function):
             if ctx.per_channel:
                 # For per-channel zero point - using gradient = -s approach
                 zp_grad_per_element = -grad_output * scale
+                zp_grad_per_element = torch.clamp(zp_grad_per_element, -1.0, 1.0)
                 dims_to_sum = list(range(input.ndim))
                 dims_to_sum.remove(ctx.channel_dim)
                 grad_zero_point = torch.mean(zp_grad_per_element, dim=dims_to_sum, keepdim=False)
@@ -100,6 +101,7 @@ class StraightThroughQuantize(torch.autograd.Function):
             else:
                 # For per-tensor zero point
                 zp_grad_per_element = -grad_output * scale
+                zp_grad_per_element = torch.clamp(zp_grad_per_element, -1.0, 1.0)
                 grad_zero_point = torch.mean(zp_grad_per_element).view_as(original_zp)
         else:
             grad_zero_point = None

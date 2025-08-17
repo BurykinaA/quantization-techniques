@@ -319,15 +319,15 @@ def add_gradient_hooks(model):
                 has_nan = torch.isnan(grad).any()
                 has_inf = torch.isinf(grad).any()
                 
-                if has_nan or has_inf or grad_norm > 1000:
+                if has_nan or has_inf or grad_norm > 100:  # Reduced threshold
                     print(f"GRADIENT ISSUE in {name}: norm={grad_norm:.6f}, nan={has_nan}, inf={has_inf}")
                     print(f"  Grad shape: {grad.shape}, min: {grad.min().item():.6f}, max: {grad.max().item():.6f}")
                     
-                    # Clamp extreme gradients
+                    # More aggressive gradient clipping
                     if has_nan or has_inf:
-                        grad = torch.nan_to_num(grad, nan=0.0, posinf=100.0, neginf=-100.0)
-                    elif grad_norm > 1000:
-                        grad = grad / (grad_norm / 100.0)  # Scale down to norm=100
+                        grad = torch.nan_to_num(grad, nan=0.0, posinf=10.0, neginf=-10.0)
+                    elif grad_norm > 100:
+                        grad = grad / (grad_norm / 10.0)  # Scale down to norm=10
                         
             return grad
         return hook
@@ -357,13 +357,13 @@ def main():
     parser.add_argument("--exclude_head", action="store_true", help="Exclude qa_outputs from quantization")
     parser.add_argument("--exclude_pooler", action="store_true", help="Exclude pooler from quantization")
     parser.add_argument("--exclude_embeddings", action="store_true", help="Exclude embeddings from quantization")
-    parser.add_argument("--mvm_limit", type=int, default=512, help="Memory vector multiplication limit for tiling")
+    parser.add_argument("--mvm_limit", type=int, default=256, help="Memory vector multiplication limit for tiling")
 
     # Data/Trainer settings (same pipeline as FP)
     parser.add_argument("--num_train_epochs", type=float, default=1.0)
     parser.add_argument("--per_device_train_batch_size", type=int, default=32)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=32)
-    parser.add_argument("--learning_rate", type=float, default=1e-6)
+    parser.add_argument("--learning_rate", type=float, default=1e-7)  # Reduced from 1e-6
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
     parser.add_argument("--max_length", type=int, default=384)
@@ -457,6 +457,9 @@ def main():
             eval_steps=args.eval_steps,
             fp16=args.fp16,
             report_to="none",
+            # Add gradient clipping
+            max_grad_norm=10.0,  # Clip gradients to norm=1.0
+            gradient_accumulation_steps=2,  # Accumulate gradients to reduce variance
         )
     except TypeError:
         training_args = TrainingArguments(
@@ -472,6 +475,9 @@ def main():
             eval_strategy="steps",
             eval_steps=args.eval_steps,
             fp16=args.fp16,
+            # Add gradient clipping
+            max_grad_norm=10.0,
+            gradient_accumulation_steps=2,
         )
 
     trainer = Trainer(
