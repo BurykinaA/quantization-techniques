@@ -57,7 +57,7 @@ class StraightThroughQuantize(torch.autograd.Function):
             pre_quant = input / scale + zero_point
         
         # Create mask for values that are NOT clamped
-        mask = (pre_quant > ctx.qmin) & (pre_quant < ctx.qmax)
+        #mask = (pre_quant > ctx.qmin) & (pre_quant < ctx.qmax)
         
         # Apply straight-through only where not clamped
         grad_input = grad_output #* mask.float()
@@ -77,14 +77,14 @@ class StraightThroughQuantize(torch.autograd.Function):
             # For per-channel, sum over all dimensions except the channel dimension
             dims_to_sum = list(range(input.ndim))
             dims_to_sum.remove(ctx.channel_dim)
-            grad_scale = torch.sum(scale_grad_per_element, dim=dims_to_sum, keepdim=False)
+            grad_scale = torch.mean(scale_grad_per_element, dim=dims_to_sum, keepdim=False)
             
             # Make sure the shape matches exactly
             if grad_scale.shape != original_scale.shape:
                 grad_scale = grad_scale.view_as(original_scale)
         else:
             # For per-tensor, sum over all dimensions but keep as tensor with same shape as scale
-            grad_scale = torch.sum(scale_grad_per_element).view_as(original_scale)
+            grad_scale = torch.mean(scale_grad_per_element).view_as(original_scale)
         
         # Compute gradients for zero_point (if not symmetric)
         if not ctx.symmetric:
@@ -93,14 +93,14 @@ class StraightThroughQuantize(torch.autograd.Function):
                 zp_grad_per_element = -grad_output * scale
                 dims_to_sum = list(range(input.ndim))
                 dims_to_sum.remove(ctx.channel_dim)
-                grad_zero_point = torch.sum(zp_grad_per_element, dim=dims_to_sum, keepdim=False)
+                grad_zero_point = torch.mean(zp_grad_per_element, dim=dims_to_sum, keepdim=False)
                 
                 if grad_zero_point.shape != original_zp.shape:
                     grad_zero_point = grad_zero_point.view_as(original_zp)
             else:
                 # For per-tensor zero point
                 zp_grad_per_element = -grad_output * scale
-                grad_zero_point = torch.sum(zp_grad_per_element).view_as(original_zp)
+                grad_zero_point = torch.mean(zp_grad_per_element).view_as(original_zp)
         else:
             grad_zero_point = None
         
