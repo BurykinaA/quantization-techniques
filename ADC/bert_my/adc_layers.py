@@ -131,8 +131,8 @@ class ADCQuantizer(nn.Module):
         self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)
         
         # Add reasonable bounds to prevent numerical issues
-        self.delta = max(self.delta, 1e-2)  # Minimum bound
-        self.delta = min(self.delta, 1e4)   # Maximum bound to prevent overflow
+        # self.delta = max(self.delta, 1e-2)  # Minimum bound
+        # self.delta = min(self.delta, 1e4)   # Maximum bound to prevent overflow
         
         # ADC quantization range
         self.na = -(2**(ba-1))  # Negative clipping value
@@ -140,6 +140,7 @@ class ADCQuantizer(nn.Module):
         
         self.register_buffer('_delta', torch.tensor(self.delta, dtype=torch.float32))
         self.register_buffer('_zero_point', torch.zeros(1))
+        self.register_buffer('_tmp_scale_1', torch.ones(1))
         
         print(f"ADC Quantizer: M={M}, delta={self.delta:.6f}, range=[{self.na}, {self.pa}]")
         
@@ -156,8 +157,8 @@ class ADCQuantizer(nn.Module):
         
         # Use StraightThroughQuantize with fixed delta as scale
         result = StraightThroughQuantize.apply(
-            y, self._delta, self._zero_point, self.na, self.pa,
-            True, False, 0, self._delta, self._zero_point
+            y, self._tmp_scale_1, self._zero_point, self.na, self.pa,
+            True, False, 0, self._tmp_scale_1, self._zero_point
         )
         
         # Check output for NaN/inf
