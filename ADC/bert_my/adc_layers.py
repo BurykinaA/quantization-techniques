@@ -50,8 +50,17 @@ class StraightThroughQuantize(torch.autograd.Function):
             else:
                 zero_point = torch.zeros_like(scale)
         
-        # Straight-through for input gradients
-        grad_input = grad_output
+        # Compute pre-quantized values to determine where clamping occurs
+        if ctx.symmetric:
+            pre_quant = input / scale
+        else:
+            pre_quant = input / scale + zero_point
+        
+        # Create mask for values that are NOT clamped
+        mask = (pre_quant > ctx.qmin) & (pre_quant < ctx.qmax)
+        
+        # Apply straight-through only where not clamped
+        grad_input = grad_output * mask.float()
         
         # Compute gradients for scale parameter
         if ctx.symmetric:
