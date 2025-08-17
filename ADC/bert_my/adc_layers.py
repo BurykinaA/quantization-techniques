@@ -140,7 +140,7 @@ class ADCQuantizer(nn.Module):
         
         self.register_buffer('_delta', torch.tensor(self.delta, dtype=torch.float32))
         self.register_buffer('_zero_point', torch.zeros(1))
-        self.register_buffer('_tmp_scale_1', torch.ones(1))
+        # self.register_buffer('_tmp_scale_1', torch.ones(1))
         
         print(f"ADC Quantizer: M={M}, delta={self.delta:.6f}, range=[{self.na}, {self.pa}]")
         
@@ -157,8 +157,8 @@ class ADCQuantizer(nn.Module):
         
         # Use StraightThroughQuantize with fixed delta as scale
         result = StraightThroughQuantize.apply(
-            y, self._tmp_scale_1, self._zero_point, self.na, self.pa,
-            True, False, 0, self._tmp_scale_1, self._zero_point
+            y, self._delta, self._zero_point, self.na, self.pa,
+            True, False, 0, self._delta, self._zero_point
         )
         
         # Check output for NaN/inf
@@ -450,7 +450,7 @@ class QATLinearADC(nn.Linear):
             yq_adc = torch.nan_to_num(yq_adc, nan=0.0)
         
         # Dequantize: y = yq_adc * delta
-        y = yq_adc #* self.adc_quantizer._delta
+        y = yq_adc * self.adc_quantizer._delta
         
         # Check for overflow after multiplication
         if torch.isnan(y).any() or torch.isinf(y).any():
@@ -527,11 +527,13 @@ class QATLinearADC(nn.Linear):
         y_for_adc = F.linear(xq, wq, bias=None)  # No bias here, add later
         
         # Apply ADC quantization
-        yq_adc = self.adc_quantizer(y_for_adc)
+        #yq_adc = self.adc_quantizer(y_for_adc)
         
         # Dequantize
         #out = self.dequantize(yq_adc, wq)
-        out = yq_adc
+        #out = yq_adc
+
+        out = self.adc_quantizer(y_for_adc)
         
         # Add bias if present
         if self.bias is not None:
