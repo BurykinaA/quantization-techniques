@@ -527,10 +527,11 @@ class QATLinearADC(nn.Linear):
         y_for_adc = F.linear(xq, wq, bias=None)  # No bias here, add later
         
         # Apply ADC quantization
-        #yq_adc = self.adc_quantizer(y_for_adc)
+        yq_adc = self.adc_quantizer(y_for_adc)
         
         # Dequantize
-        out = self.dequantize(y_for_adc, wq)
+        #out = self.dequantize(yq_adc, wq)
+        out = yq_adc
         
         # Add bias if present
         if self.bias is not None:
