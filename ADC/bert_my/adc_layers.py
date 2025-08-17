@@ -649,31 +649,25 @@ class TiledLinearADC(nn.Module):
 
     # ===== основной forward =====
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        x: [B, in_features] или [in_features]
-        """
-        added_batch = False
-        if x.dim() == 1:
-            x = x.unsqueeze(0)  # [1, F]
-            added_batch = True
+        # Accept (..., in_features)
+        if x.shape[-1] != self.in_features_total:
+            raise ValueError(f"Expected last dim={self.in_features_total}, got {x.shape[-1]}")
 
-        B, F = x.shape
-        if F != self.in_features_total:
-            raise ValueError(f"Expected in_features={self.in_features_total}, got {F}")
+        orig_shape = x.shape                  # (..., F)
+        x2d = x.reshape(-1, self.in_features_total)   # [B*, F]
 
         outs = []
         for i, t in enumerate(self.tiles):
             s = i * self.in_features_tile
             e = (i + 1) * self.in_features_tile
-            xi = x[:, s:e]              # [B, tile_in]
-            yi = t(xi)                  # [B, out_features]
+            xi = x2d[:, s:e]                  # [B*, tile_in]
+            yi = t(xi)                        # [B*, out_features]
             outs.append(yi)
 
-        y = torch.stack(outs, dim=0).sum(dim=0)  # суммируем частичные суммы
-
-        if added_batch:
-            y = y.squeeze(0)
+        y2d = torch.stack(outs, dim=0).sum(dim=0)     # [B*, out_features]
+        y = y2d.reshape(*orig_shape[:-1], self.out_features)  # (..., out_features)
         return y
+
 
 
 class QATMultiHeadAttentionADC(nn.Module):
