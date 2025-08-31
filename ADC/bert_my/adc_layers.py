@@ -112,7 +112,7 @@ class ADCQuantizer(nn.Module):
     """
     ADC Quantizer implementing the quantization described in equation (2) and (3)
     """
-    def __init__(self, M: int, bx: int, bw: int, ba: int, k: int = 4, signed_activations: bool = False):
+    def __init__(self, M: int, bx: int, bw: int, ba: int, k: int = 4, signed_activations: bool = False, use_dynamic_delta: bool = True, delta_momentum: float = 0.05):
         super().__init__()
         self.M = M  # Memory dimension
         self.bx = bx  # Activation bits
@@ -120,7 +120,9 @@ class ADCQuantizer(nn.Module):
         self.ba = ba  # ADC bits
         self.k = k   # Hardware design parameter
         self.signed_activations = signed_activations
-        
+        self.use_dynamic_delta = use_dynamic_delta
+        self.delta_momentum = delta_momentum
+
         # Calculate quantization step (delta) according to equation (3)
         if signed_activations:
             activation_range = 2**(bx-1) - 1
@@ -141,10 +143,12 @@ class ADCQuantizer(nn.Module):
         self.pa = 2**(ba-1) - 1  # Positive clipping value
         
         self.register_buffer('_delta', torch.tensor(self.delta, dtype=torch.float32))
+        # Running absmax for dynamic delta calibration
+        self.register_buffer('_running_absmax', torch.tensor(0.0, dtype=torch.float32))
         self.register_buffer('_zero_point', torch.zeros(1))
         # self.register_buffer('_tmp_scale_1', torch.ones(1))
         
-        print(f"ADC Quantizer: M={M}, delta={self.delta:.6f}, range=[{self.na}, {self.pa}]")
+        # print(f"ADC Quantizer: M={M}, delta={self.delta:.6f}, range=[{self.na}, {self.pa}]")
         
     def forward(self, y: torch.Tensor) -> torch.Tensor:
         """
@@ -156,10 +160,24 @@ class ADCQuantizer(nn.Module):
             print(f"Warning: NaN/inf in ADC input, sanitizing. stats: max={y.nan_to_num().max().item()}, min={y.nan_to_num().min().item()}")
             y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
         
-        # Use StraightThroughQuantize with fixed delta as scale
+        # Optionally adapt delta using EMA of absmax to avoid saturation
+        scale_for_quant = self._delta
+        if self.use_dynamic_delta:
+            with torch.no_grad():
+                current_absmax = y.detach().abs().max()
+                if torch.isfinite(current_absmax):
+                    if self._running_absmax.item() == 0.0:
+                        self._running_absmax.copy_(current_absmax)
+                    else:
+                        self._running_absmax.copy_((1 - self.delta_momentum) * self._running_absmax + self.delta_momentum * current_absmax)
+            # Derive delta from running absmax targeting full-scale usage
+            dynamic_delta = torch.clamp(self._running_absmax / max(self.pa, 1), min=1e-6)
+            scale_for_quant = dynamic_delta
+
+        # Use StraightThroughQuantize with selected delta as scale
         result = StraightThroughQuantize.apply(
-            y, self._delta, self._zero_point, self.na, self.pa,
-            True, False, 0, self._delta, self._zero_point
+            y, scale_for_quant, self._zero_point, self.na, self.pa,
+            True, False, 0, scale_for_quant, self._zero_point
         )
         
         # Check output for NaN/inf and sanitize instead of raising
