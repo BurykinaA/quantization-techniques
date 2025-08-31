@@ -151,10 +151,9 @@ class ADCQuantizer(nn.Module):
         Apply ADC quantization according to equation (2):
         y_q = round(clip(y/delta, na, pa))
         """
-        # Check input for NaN/inf
+        # Check input for NaN/inf and sanitize instead of raising
         if torch.isnan(y).any() or torch.isinf(y).any():
-            print(f"Warning: NaN/inf in ADC input, max={y.max().item()}, min={y.min().item()}")
-            raise
+            print(f"Warning: NaN/inf in ADC input, sanitizing. stats: max={y.nan_to_num().max().item()}, min={y.nan_to_num().min().item()}")
             y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
         
         # Use StraightThroughQuantize with fixed delta as scale
@@ -163,11 +162,10 @@ class ADCQuantizer(nn.Module):
             True, False, 0, self._delta, self._zero_point
         )
         
-        # Check output for NaN/inf
+        # Check output for NaN/inf and sanitize instead of raising
         if torch.isnan(result).any() or torch.isinf(result).any():
-            print(f"Warning: NaN/inf in ADC output, clamping...")
-            raise
-            result = torch.nan_to_num(result, nan=0.0, posinf=self.pa, neginf=self.na)
+            print(f"Warning: NaN/inf in ADC output, sanitizing...")
+            result = torch.nan_to_num(result, nan=0.0, posinf=float(self.pa), neginf=float(self.na))
         
         return result
 

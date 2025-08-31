@@ -13,6 +13,7 @@ import evaluate
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
+    AutoConfig,
     BertForQuestionAnswering,
     TrainingArguments,
     Trainer,
@@ -39,7 +40,7 @@ class BertADCConverter:
         ashift: bool = False,
         signed_activations: bool = False,
         exclude_patterns: Optional[List[str]] = None,
-        mvm_limit: int = 512,  # Add mvm_limit parameter for TiledLinearADC
+        mvm_limit: int = 256,  # Default to 256 to match CLI default
     ) -> nn.Module:
         """
         Replace all nn.Linear layers in the model with TiledLinearADC, except excluded.
@@ -133,6 +134,105 @@ def find_last_checkpoint_dir(fp_output_dir: str) -> str:
 
 
 # ====== SQuAD QA pipeline helpers (same as FP script) ======
+def load_qa_model_robust(checkpoint_dir: str) -> BertForQuestionAnswering:
+    """
+    Load BertForQuestionAnswering from a checkpoint that may contain extra
+    keys from QAT layers. Falls back to strict=False state_dict load.
+    """
+    try:
+        return BertForQuestionAnswering.from_pretrained(checkpoint_dir)
+    except Exception as e:
+        logger.warning(f"Standard from_pretrained failed, retrying with strict=False. Error: {e}")
+        state_path = os.path.join(checkpoint_dir, 'pytorch_model.bin')
+        state = torch.load(state_path, map_location='cpu')
+        # Build fresh model from config and load weights with strict=False (ignore extra QAT keys)
+        config = AutoConfig.from_pretrained(checkpoint_dir)
+        model = BertForQuestionAnswering(config)
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if unexpected:
+            logger.info(f"Ignored {len(unexpected)} unexpected keys (likely QAT quantizer params).")
+        if missing:
+            logger.info(f"Missing keys count: {len(missing)} (randomly initialized).")
+        return model
+
+def warm_start_adc_quantizers_from_qat(model: nn.Module, checkpoint_dir: str) -> int:
+    """
+    Initialize ADC quantizers (per-tile LearnableQuantizer scales/zero-points)
+    from a QAT checkpoint's quantizer parameters. Returns number of modules updated.
+    """
+    state_path = os.path.join(checkpoint_dir, 'pytorch_model.bin')
+    if not os.path.exists(state_path):
+        logger.info("No state dict found to warm-start quantizers.")
+        return 0
+
+    state = torch.load(state_path, map_location='cpu')
+
+    # Build map from base module name -> quantizer params
+    quant_map: Dict[str, Dict[str, torch.Tensor]] = {}
+    def get_entry(base: str) -> Dict[str, torch.Tensor]:
+        if base not in quant_map:
+            quant_map[base] = {}
+        return quant_map[base]
+
+    for key, tensor in state.items():
+        if key.endswith('.activation_quantizer.scale'):
+            base = key[: -len('.activation_quantizer.scale')]
+            get_entry(base)['act_scale'] = tensor
+        elif key.endswith('.activation_quantizer.zero_point'):
+            base = key[: -len('.activation_quantizer.zero_point')]
+            get_entry(base)['act_zp'] = tensor
+        elif key.endswith('.weight_quantizer.scale'):
+            base = key[: -len('.weight_quantizer.scale')]
+            get_entry(base)['w_scale'] = tensor
+        elif key.endswith('.weight_quantizer.zero_point'):
+            base = key[: -len('.weight_quantizer.zero_point')]
+            get_entry(base)['w_zp'] = tensor
+
+    updated = 0
+    # Assign into each TiledLinearADC's tiles
+    for name, module in model.named_modules():
+        if isinstance(module, TiledLinearADC):
+            base_name = name  # matches original linear path in checkpoint
+            if base_name in quant_map:
+                params = quant_map[base_name]
+                for tile in module.tiles:
+                    # Activation quantizer (per-tensor, likely asymmetric)
+                    if hasattr(tile, 'activation_quantizer'):
+                        aq = tile.activation_quantizer
+                        if 'act_scale' in params:
+                            aq.scale.data.copy_(params['act_scale'].to(aq.scale.device).type_as(aq.scale))
+                        if hasattr(aq, 'zero_point') and 'act_zp' in params:
+                            aq.zero_point.data.copy_(params['act_zp'].to(aq.zero_point.device).type_as(aq.zero_point))
+                        if hasattr(aq, '_scale_initialized'):
+                            aq._scale_initialized = True
+                        if hasattr(aq, '_zp_initialized'):
+                            aq._zp_initialized = True
+
+                    # Weight quantizer (per-channel symmetric)
+                    if hasattr(tile, 'weight_quantizer'):
+                        wq = tile.weight_quantizer
+                        if 'w_scale' in params:
+                            wq.scale.data.copy_(
+                                params['w_scale'].to(wq.scale.device).type_as(wq.scale)
+                            )
+                        if hasattr(wq, 'zero_point') and 'w_zp' in params:
+                            try:
+                                wq.zero_point.data.copy_(
+                                    params['w_zp'].to(wq.zero_point.device).type_as(wq.zero_point)
+                                )
+                            except Exception:
+                                pass
+                        if hasattr(wq, '_scale_initialized'):
+                            wq._scale_initialized = True
+                        if hasattr(wq, '_zp_initialized'):
+                            wq._zp_initialized = True
+
+                updated += 1
+
+    logger.info(f"Warm-started quantizers for {updated} TiledLinearADC modules from QAT checkpoint.")
+    return updated
+
+ 
 def prepare_train_features(examples, tokenizer, max_length=384, doc_stride=128):
     tokenized = tokenizer(
         examples["question"],
@@ -387,8 +487,8 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(last_ckpt, use_fast=True)
     tokenizer.padding_side = "right"
 
-    # Load fine-tuned FP model and convert to ADC QAT
-    model = BertForQuestionAnswering.from_pretrained(last_ckpt)
+    # Load fine-tuned model robustly (works for FP and QAT checkpoints)
+    model = load_qa_model_robust(last_ckpt)
 
     exclude_patterns = []
     if args.exclude_embeddings:
@@ -412,6 +512,11 @@ def main():
         exclude_patterns=exclude_patterns,
         mvm_limit=args.mvm_limit,
     )
+    # Warm-start ADC quantizer parameters from QAT checkpoint if available
+    try:
+        warm_start_adc_quantizers_from_qat(model, last_ckpt)
+    except Exception as e:
+        logger.warning(f"Quantizer warm-start failed: {e}")
     
     # Add gradient monitoring
     add_gradient_hooks(model)
