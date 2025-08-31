@@ -4,6 +4,7 @@ import time
 import collections
 import logging
 from typing import Dict, Any, Optional, List, Tuple
+import json
 
 import numpy as np
 import torch
@@ -160,12 +161,56 @@ def warm_start_adc_quantizers_from_qat(model: nn.Module, checkpoint_dir: str) ->
     Initialize ADC quantizers (per-tile LearnableQuantizer scales/zero-points)
     from a QAT checkpoint's quantizer parameters. Returns number of modules updated.
     """
-    state_path = os.path.join(checkpoint_dir, 'pytorch_model.bin')
-    if not os.path.exists(state_path):
+    # Support both .bin/.safetensors (single) and sharded variants
+    state: Dict[str, torch.Tensor]
+    bin_path = os.path.join(checkpoint_dir, 'pytorch_model.bin')
+    safetensors_path = os.path.join(checkpoint_dir, 'model.safetensors')
+    bin_index = os.path.join(checkpoint_dir, 'pytorch_model.bin.index.json')
+    safe_index = os.path.join(checkpoint_dir, 'model.safetensors.index.json')
+    state = {}
+    if os.path.exists(bin_path):
+        state = torch.load(bin_path, map_location='cpu')
+    elif os.path.exists(safetensors_path):
+        try:
+            from safetensors.torch import load_file as safe_load_file  # type: ignore
+        except Exception as e:
+            logger.info(f"Safetensors present but not loadable ({e}). Skipping warm-start.")
+            return 0
+        state = safe_load_file(safetensors_path)
+    elif os.path.exists(bin_index):
+        try:
+            with open(bin_index, 'r') as f:
+                index = json.load(f)
+            weight_map: Dict[str, str] = index.get('weight_map', {})
+            shard_files = sorted(set(weight_map.values()))
+            for shard in shard_files:
+                shard_path = os.path.join(checkpoint_dir, shard)
+                if os.path.exists(shard_path):
+                    shard_sd = torch.load(shard_path, map_location='cpu')
+                    state.update({k: v for k, v in shard_sd.items() if 'quantizer' in k})
+        except Exception as e:
+            logger.info(f"Failed loading sharded bin checkpoint for warm-start: {e}")
+            return 0
+    elif os.path.exists(safe_index):
+        try:
+            with open(safe_index, 'r') as f:
+                index = json.load(f)
+            weight_map: Dict[str, str] = index.get('weight_map', {})
+            shard_files = sorted(set(weight_map.values()))
+            from safetensors import safe_open  # type: ignore
+            for shard in shard_files:
+                shard_path = os.path.join(checkpoint_dir, shard)
+                if os.path.exists(shard_path):
+                    with safe_open(shard_path, framework="pt", device="cpu") as f:
+                        for k in f.keys():
+                            if 'quantizer' in k:
+                                state[k] = f.get_tensor(k)
+        except Exception as e:
+            logger.info(f"Failed loading sharded safetensors checkpoint for warm-start: {e}")
+            return 0
+    else:
         logger.info("No state dict found to warm-start quantizers.")
         return 0
-
-    state = torch.load(state_path, map_location='cpu')
 
     # Build map from base module name -> quantizer params
     quant_map: Dict[str, Dict[str, torch.Tensor]] = {}
@@ -419,15 +464,16 @@ def add_gradient_hooks(model):
                 has_nan = torch.isnan(grad).any()
                 has_inf = torch.isinf(grad).any()
                 
-                if has_nan or has_inf or grad_norm > 100:  # Reduced threshold
+                # Log at a slightly higher threshold to reduce noise; still clip
+                if has_nan or has_inf or grad_norm > 500:
                     print(f"GRADIENT ISSUE in {name}: norm={grad_norm:.6f}, nan={has_nan}, inf={has_inf}")
                     print(f"  Grad shape: {grad.shape}, min: {grad.min().item():.6f}, max: {grad.max().item():.6f}")
                     
                     # More aggressive gradient clipping
                     if has_nan or has_inf:
                         grad = torch.nan_to_num(grad, nan=0.0, posinf=10.0, neginf=-10.0)
-                    elif grad_norm > 100:
-                        grad = grad / (grad_norm / 10.0)  # Scale down to norm=10
+                    elif grad_norm > 500:
+                        grad = grad / (grad_norm / 50.0)  # Scale down to norm≈50
                         
             return grad
         return hook
