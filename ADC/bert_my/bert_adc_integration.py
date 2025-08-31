@@ -233,6 +233,32 @@ def warm_start_adc_quantizers_from_qat(model: nn.Module, checkpoint_dir: str) ->
             base = key[: -len('.weight_quantizer.zero_point')]
             get_entry(base)['w_zp'] = tensor
 
+    def _safe_copy_(dst: torch.nn.Parameter, src: torch.Tensor) -> None:
+        """Copy with shape safety: match, expand scalar, or reduce by mean."""
+        with torch.no_grad():
+            if dst.shape == src.shape:
+                dst.copy_(src.to(dst.device).type_as(dst))
+                return
+            # Scalar source -> expand
+            if src.numel() == 1 and dst.numel() > 1:
+                dst.copy_(src.to(dst.device).type_as(dst).expand_as(dst))
+                return
+            # Larger source -> reduce to first dim if 1D dst
+            if dst.dim() == 1 and src.numel() > dst.numel():
+                reduced = src.to(dst.device).type_as(dst)
+                # If first dim matches, take slice; else mean over all dims
+                if reduced.dim() > 0 and reduced.shape[0] >= dst.shape[0]:
+                    reduced = reduced.reshape(-1)[: dst.shape[0]]
+                else:
+                    reduced = reduced.reshape(-1).mean().expand_as(dst)
+                dst.copy_(reduced)
+                return
+            # Fallback: broadcast if possible, else do mean
+            try:
+                dst.copy_(src.to(dst.device).type_as(dst))
+            except Exception:
+                dst.copy_(src.to(dst.device).type_as(dst).reshape(-1).mean().expand_as(dst))
+
     updated = 0
     # Assign into each TiledLinearADC's tiles
     for name, module in model.named_modules():
@@ -245,9 +271,11 @@ def warm_start_adc_quantizers_from_qat(model: nn.Module, checkpoint_dir: str) ->
                     if hasattr(tile, 'activation_quantizer'):
                         aq = tile.activation_quantizer
                         if 'act_scale' in params:
-                            aq.scale.data.copy_(params['act_scale'].to(aq.scale.device).type_as(aq.scale))
+                            _safe_copy_(aq.scale, params['act_scale'])
                         if hasattr(aq, 'zero_point') and 'act_zp' in params:
-                            aq.zero_point.data.copy_(params['act_zp'].to(aq.zero_point.device).type_as(aq.zero_point))
+                            # Only copy if not symmetric
+                            if not getattr(aq, 'symmetric', False):
+                                _safe_copy_(aq.zero_point, params['act_zp'])
                         if hasattr(aq, '_scale_initialized'):
                             aq._scale_initialized = True
                         if hasattr(aq, '_zp_initialized'):
@@ -257,16 +285,10 @@ def warm_start_adc_quantizers_from_qat(model: nn.Module, checkpoint_dir: str) ->
                     if hasattr(tile, 'weight_quantizer'):
                         wq = tile.weight_quantizer
                         if 'w_scale' in params:
-                            wq.scale.data.copy_(
-                                params['w_scale'].to(wq.scale.device).type_as(wq.scale)
-                            )
-                        if hasattr(wq, 'zero_point') and 'w_zp' in params:
-                            try:
-                                wq.zero_point.data.copy_(
-                                    params['w_zp'].to(wq.zero_point.device).type_as(wq.zero_point)
-                                )
-                            except Exception:
-                                pass
+                            _safe_copy_(wq.scale, params['w_scale'])
+                        # Skip copying zero_point for symmetric weight quantizer
+                        if hasattr(wq, 'zero_point') and 'w_zp' in params and not getattr(wq, 'symmetric', True):
+                            _safe_copy_(wq.zero_point, params['w_zp'])
                         if hasattr(wq, '_scale_initialized'):
                             wq._scale_initialized = True
                         if hasattr(wq, '_zp_initialized'):
@@ -609,7 +631,7 @@ def main():
             fp16=args.fp16,
             report_to="none",
             # Add gradient clipping
-            max_grad_norm=10.0,  # Clip gradients to norm=1.0
+            max_grad_norm=1.0,  # Tighter clipping to stabilize early training
             gradient_accumulation_steps=2,  # Accumulate gradients to reduce variance
         )
     except TypeError:
@@ -627,7 +649,7 @@ def main():
             eval_steps=args.eval_steps,
             fp16=args.fp16,
             # Add gradient clipping
-            max_grad_norm=10.0,
+            max_grad_norm=1.0,
             gradient_accumulation_steps=2,
         )
 
