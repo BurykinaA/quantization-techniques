@@ -4,34 +4,71 @@ from torch import nn # For criterion
 from tqdm import tqdm
 import wandb
 
-def calibrate_model(model, calib_loader, device):
-    model.train() # Set to train mode for observers to work
+def calibrate_model(model, calib_loader, device, portion=0.1):
+    model.train()  # Enable train mode so observers collect stats
     print("Calibrating quantizers...")
-    # Ensure all relevant quantizers are enabled for calibration
+
+    # Enable all relevant quantizers for calibration
     for _, module in model.named_modules():
-        if hasattr(module, '_set_quantizer_state'): # For LinearADC, LinearQuant
+        if hasattr(module, '_set_quantizer_state'):  # For LinearADC, LinearQuant
             module._set_quantizer_state(enabled=True)
-        elif hasattr(module, 'enable'): # For standalone quantizers if any (not typical in layers)
-             module.enable()
+        elif hasattr(module, 'enable'):  # Standalone quantizers
+            module.enable()
 
+    # Determine how many batches to use based on portion
+    total_batches = len(calib_loader)
+    num_batches = max(1, int(total_batches * portion))
 
-    with torch.no_grad(): # No gradients needed for calibration
-        for i, (inputs, _) in enumerate(calib_loader):
+    with torch.no_grad():  # No gradients needed
+        for i, (inputs, _) in tqdm(
+            enumerate(calib_loader), 
+            total=num_batches, 
+            desc="Calibrating", 
+            leave=False
+        ):
             inputs = inputs.to(device)
-            model(inputs)
-            #model(inputs.view(inputs.size(0), -1)) # Forward pass to update observers
-            if i >= 20:  # Calibrate on a few batches (e.g., 20 batches)
+            model(inputs)  # Forward pass to update observers
+            if i + 1 >= num_batches:
                 break
-    
-    # After calibration, disable observers so their parameters (scale/zp) are fixed
+
+    # After calibration, freeze quantizer parameters
     for _, module in model.named_modules():
         if hasattr(module, '_set_quantizer_state'):
-             module._set_quantizer_state(enabled=False) # Observers no longer update scale/zp
+            module._set_quantizer_state(enabled=False)
         elif hasattr(module, 'disable'):
-             module.disable()
+            module.disable()
 
     print("Calibration done. Quantizer observers are now disabled.")
-    model.eval() # Set back to eval mode or train() will be called by the main loop again
+    model.eval()  # Return to eval mod
+
+# def calibrate_model(model, calib_loader, device, portion=0.1):
+#     model.train() # Set to train mode for observers to work
+#     print("Calibrating quantizers...")
+#     # Ensure all relevant quantizers are enabled for calibration
+#     for _, module in model.named_modules():
+#         if hasattr(module, '_set_quantizer_state'): # For LinearADC, LinearQuant
+#             module._set_quantizer_state(enabled=True)
+#         elif hasattr(module, 'enable'): # For standalone quantizers if any (not typical in layers)
+#              module.enable()
+
+
+#     with torch.no_grad(): # No gradients needed for calibration
+#         for i, (inputs, _) in enumerate(calib_loader):
+#             inputs = inputs.to(device)
+#             model(inputs)
+#             #model(inputs.view(inputs.size(0), -1)) # Forward pass to update observers
+#             if i >= 20:  # Calibrate on a few batches (e.g., 20 batches)
+#                 break
+    
+#     # After calibration, disable observers so their parameters (scale/zp) are fixed
+#     for _, module in model.named_modules():
+#         if hasattr(module, '_set_quantizer_state'):
+#              module._set_quantizer_state(enabled=False) # Observers no longer update scale/zp
+#         elif hasattr(module, 'disable'):
+#              module.disable()
+
+#     print("Calibration done. Quantizer observers are now disabled.")
+#     model.eval() # Set back to eval mode or train() will be called by the main loop again
 
 
 def train_model(model, optimizer, scheduler, train_loader, test_loader, criterion, device, num_epochs=20, model_name="Model", calib_loader=None, lambda_kurtosis=0.0):

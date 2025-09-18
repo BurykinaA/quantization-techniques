@@ -337,7 +337,7 @@ class ADCQuantizer(nn.Module):
         if (self.logger):
             cl1 = (xq < mnval).sum().float().item()
             cl2 = (xq > mxval).sum().float().item()
-            self.logger.log(self.info, "Clipped%: ", 100. * (cl1 + cl2) / xq.numel())
+            self.logger.log_string(self.info, "Clipped%: ", 100. * (cl1 + cl2) / xq.numel())
         xq = ste_floor(torch.clamp(xq, mnval, mxval))
         return xq
     

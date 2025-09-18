@@ -5,8 +5,9 @@ class LayerwiseStatsLogger:
     def __init__(self):
         # Structure: {layer_name: {stat_name: [values]}}
         self.stats = defaultdict(lambda: defaultdict(list))
+        self.enabled = True
 
-    def log(self, layer_name: str, stat_name: str, value: float):
+    def log_string(self, layer_name: str, stat_name: str, value: float):
         """
         Log a single scalar statistic for a specific layer.
         
@@ -16,6 +17,14 @@ class LayerwiseStatsLogger:
             value (float): Value of the statistic for this batch.
         """
         self.stats[layer_name][stat_name].append(value)
+    
+    def log_data(self, layer, tensors, names):
+        for i in range(len(tensors)):
+            if (names[i] not in self.stats[layer.name]):
+                self.stats[layer.name][names[i]] = []
+            self.stats[layer.name][names[i]].append(tensors[i].cpu())
+        
+
 
     def _finalize_stat(self, stat, values):
         if (stat[:3] == "min"):
@@ -23,6 +32,9 @@ class LayerwiseStatsLogger:
         if (stat[:3] == "max"):
             return max(values)
         return sum(values) / len(values)
+
+    def get_stats(self):
+        return self.stats
 
     def get_epoch_summary(self) -> Dict[str, Dict[str, float]]:
         """

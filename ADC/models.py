@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from ADC.quantized_layers import LinearADC, LinearQuant, LinearADCAshift, Conv2dADC, TiledConv2dADC
+import random
 
 class MLP(nn.Module):
     def __init__(self):
@@ -99,19 +100,23 @@ class BasicBlock(nn.Module):
 class BasicBlockADC(nn.Module):
     expansion = 1
 
-    def __init__(self, in_channels, out_channels, stride=1, downsample=None, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None, conv_type=Conv2dADC):
+    def __init__(self, in_channels, out_channels, stride=1, downsample=None, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None, conv_type=Conv2dADC, name=None):
         super(BasicBlockADC, self).__init__()
         self.bx = bx
         self.bw = bw
         self.ba = ba
         self.k = k
         self.logger = logger
+        if name:
+            self.name = name
+        else:
+            self.name = "BasicBlock" + str(random.randint(10 ** 5, 10**6 - 1))
         self.conv1 = conv_type(in_channels, out_channels, kernel_size=3,
-                               stride=stride, padding=1, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=ashift, logger=self.logger)
+                               stride=stride, padding=1, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=ashift, logger=self.logger, name=self.name + "_conv1")
         self.bn1 = nn.BatchNorm2d(out_channels)
         
         self.conv2 = conv_type(out_channels, out_channels, kernel_size=3,
-                               stride=1, padding=1, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=ashift, logger=self.logger)
+                               stride=1, padding=1, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=ashift, logger=self.logger, name=self.name + "_conv2")
         self.bn2 = nn.BatchNorm2d(out_channels)
         
         self.relu = nn.ReLU(inplace=True)
@@ -204,7 +209,7 @@ class ResNetCIFAR_ADC(nn.Module):
 
         
         self.conv1 = conv_type(3, 64, kernel_size=3, stride=1,
-                                padding=1, bias=False, bx=8, bw=8, ba=8, k=self.k, ashift=ashift, logger=self.logger)
+                                padding=1, bias=False, bx=8, bw=8, ba=8, k=self.k, ashift=ashift, logger=self.logger, name="conv1")
         self.conv1.disable_adc()
         
         # First layer is kept in original precision
@@ -214,10 +219,10 @@ class ResNetCIFAR_ADC(nn.Module):
         self.relu = nn.ReLU(inplace=True)
 
         # No maxpool for CIFAR
-        self.layer1 = self._make_layer(block, 64,  layers[0], stride=1)
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+        self.layer1 = self._make_layer(block, 64,  layers[0], stride=1, name="layer1")
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2, name="layer2")
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, name="layer3")
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, name="layer4")
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
@@ -225,7 +230,7 @@ class ResNetCIFAR_ADC(nn.Module):
         # Last layer is kept in original precision
         #self.fc = nn.Linear(512 * block.expansion, num_classes)
 
-        self.fc = LinearADC(512 * block.expansion, num_classes, bx=8, bw=8, ba=8, k=self.k, ashift=ashift, logger=self.logger)
+        self.fc = LinearADC(512 * block.expansion, num_classes, bx=8, bw=8, ba=8, k=self.k, ashift=ashift, logger=self.logger, name="fc")
         self.fc.disable_adc()
     
         # Weight init
@@ -236,21 +241,21 @@ class ResNetCIFAR_ADC(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-    def _make_layer(self, block, out_channels, blocks, stride):
+    def _make_layer(self, block, out_channels, blocks, stride, name):
         downsample = None
 
         if stride != 1 or self.in_channels != out_channels * block.expansion:
             downsample = nn.Sequential(
                 self.conv_type(self.in_channels, out_channels * block.expansion,
-                          kernel_size=1, stride=stride, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger),
+                          kernel_size=1, stride=stride, bias=False, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger, name=name+"_downsample_conv"),
                 nn.BatchNorm2d(out_channels * block.expansion)
             )
 
-        layers = [block(self.in_channels, out_channels, stride, downsample, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger, conv_type=self.conv_type)]
+        layers = [block(self.in_channels, out_channels, stride, downsample, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger, conv_type=self.conv_type, name=name+"_block0")]
         self.in_channels = out_channels * block.expansion
 
-        for _ in range(1, blocks):
-            layers.append(block(self.in_channels, out_channels, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger, conv_type=self.conv_type))
+        for ij in range(1, blocks):
+            layers.append(block(self.in_channels, out_channels, bx=self.bx, bw=self.bw, ba=self.ba, k=self.k, ashift=self.ashift, logger=self.logger, conv_type=self.conv_type, name=name+f"_block{ij}"))
 
         return nn.Sequential(*layers)
 

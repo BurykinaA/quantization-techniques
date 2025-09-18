@@ -7,7 +7,7 @@ import random
 MVM_LIMIT = 512
 
 class LinearADC(nn.Linear):
-    def __init__(self, in_features, out_features, bx=8, bw=8, ba=8, k=4, bias=True, ashift=False, logger=None):
+    def __init__(self, in_features, out_features, bx=8, bw=8, ba=8, k=4, bias=True, ashift=False, logger=None, name=None):
         super(LinearADC, self).__init__(in_features, out_features, bias)
         self.bx = bx
         self.bw = bw
@@ -18,7 +18,10 @@ class LinearADC(nn.Linear):
         self.ashift = ashift
         self.C = 2 ** (bx - 1)
         self.adc_enabled = True
-        self.name = "Linear" + str(random.randint(10 ** 5, 10**6 - 1))
+        if (name):
+            self.name = name
+        else:
+            self.name = "Linear" + str(random.randint(10 ** 5, 10**6 - 1))
         self.logger = logger
 
     def enable_adc(self):
@@ -184,9 +187,13 @@ class Conv2dADC(nn.Conv2d):
                  ba=8,
                  k=4,
                  ashift=False,
-                 logger=None):
+                 logger=None,
+                 name=None):
         super(Conv2dADC, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode, device, dtype)
-        self.name = f"Conv2d" + str(random.randint(10 ** 5, 10**6 - 1))
+        if name:
+            self.name = name
+        else:
+            self.name = f"Conv2d" + str(random.randint(10 ** 5, 10**6 - 1))
         self.bx = bx
         self.bw = bw
         self.ba = ba
@@ -212,7 +219,7 @@ class Conv2dADC(nn.Conv2d):
         self.x_quantizer.enabled = enabled
         self.w_quantizer.enabled = enabled
 
-    def dequantize(self, yq, wq):
+    def dequantize(self, yq, wq, xshape=None):
         # yq: out x H_out x W_out
         # self.weight: out x in x H_out x W_out
         
@@ -221,10 +228,23 @@ class Conv2dADC(nn.Conv2d):
         #y = yq
         # -------------------------------------
 
+
+        # mask = torch.nn.functional.conv2d(torch.ones(xshape[1:]).unsqueeze(0).to(wq.device), 
+        #                                        wq, 
+        #                                        bias=None, 
+        #                                        stride=self.stride, 
+        #                                        padding=self.padding, 
+        #                                        dilation=self.dilation, 
+        #                                        groups=self.groups)
+
         if (self.ashift):
-            print("ashift dequantize")
+            #print("ashift dequantize")
+            # Here we didn't take padding into account
             y = y + self.C * (wq.sum(axis=(1, 2, 3)))[None, :, None, None]
-        out = y - self.x_quantizer.zero_point / self.w_quantizer.scale * (self.weight.sum(axis=(1, 2, 3)))[None, :, None, None]
+            #y = y + self.C * mask
+        
+        out = y - self.x_quantizer.zero_point / self.w_quantizer.scale * (self.weight.sum(axis=(1, 2, 3)))[None, :, None, None] # We might have an error here because of the padding
+        #out = y - self.x_quantizer.zero_point / self.w_quantizer.scale * mask
         out = out * self.x_quantizer.scale * self.w_quantizer.scale
         return out
     
@@ -268,10 +288,10 @@ class Conv2dADC(nn.Conv2d):
                                                groups=self.groups)
         #yq_adc = y_for_adc
         yq_adc = self.adc_quantizer(y_for_adc)
-        out = self.dequantize(yq_adc, wq)
+        out = self.dequantize(yq_adc, wq, x.shape)
         if self.bias is not None:
             out += self.bias
-        if self.logger:
+        if self.logger and self.logger.enabled:
             with torch.no_grad():
                 out_gth = torch.nn.functional.conv2d(x, 
                                                self.weight, 
@@ -280,12 +300,14 @@ class Conv2dADC(nn.Conv2d):
                                                padding=self.padding, 
                                                dilation=self.dilation, 
                                                groups=self.groups)
-                self.logger.log(self.name, "max_val", y_for_adc.max().item())
-                self.logger.log(self.name, "min_val", y_for_adc.min().item())
-                diff = torch.linalg.norm(out - out_gth).cpu().item()
-                gth_norm = torch.linalg.norm(out_gth).cpu().item()
-                self.logger.log(self.name, "out_norm_ratio", diff / gth_norm)
-                #print(self.name + "_diff: ", diff / gth_norm)
+                self.logger.log_data(self, [x, self.weight, xq, wq, y_for_adc, yq_adc, out, out_gth], ["x", "w", "xq", "wq", "y_for_adc", "yq_adc", "out", "out_gth"])
+                
+            #     self.logger.log(self.name, "max_val", y_for_adc.max().item())
+            #     self.logger.log(self.name, "min_val", y_for_adc.min().item())
+            #     diff = torch.linalg.norm(out - out_gth).cpu().item()
+            #     gth_norm = torch.linalg.norm(out_gth).cpu().item()
+            #     self.logger.log(self.name, "out_norm_ratio", diff / gth_norm)
+            #     print(self.name + "_diff: ", diff / gth_norm)
 
         return out
 
@@ -308,9 +330,15 @@ class TiledConv2dADC(nn.Module):
                  ba=8,
                  k=4,
                  ashift=False,
-                 logger=None):
+                 logger=None,
+                 name=None):
         super(TiledConv2dADC, self).__init__()
         
+        if (name):
+            self.name = name
+        else:
+            self.name = "TiledConv2ADC" + str(random.randint(10 ** 5, 10**6 - 1))
+
         if type(kernel_size) == int:
             ksz = (kernel_size**2)
         else:
@@ -327,7 +355,7 @@ class TiledConv2dADC(nn.Module):
 
         for i in range(n_conv):
             bias = bias if i == 0 else None
-            self.convs.append(Conv2dADC(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode, device, dtype, bx, bw, ba, k, ashift, logger))
+            self.convs.append(Conv2dADC(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias, padding_mode, device, dtype, bx, bw, ba, k, ashift, logger, self.name + f"_{i+1}/{n_conv}"))
     
     def enable_adc(self):
         for i in range(len(self.convs)):
