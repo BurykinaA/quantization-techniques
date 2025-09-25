@@ -22,10 +22,57 @@ from transformers import (
     set_seed,
 )
 
-from adc_layers import QATLinearADC, TiledLinearADC, LearnableQuantizer  # noqa: F401
+from adc_layers import QATLinearADC, TiledLinearADC, LearnableQuantizer, ADCQuantizer  # noqa: F401
+
+from transformers import TrainerCallback, TrainingArguments, TrainerState, TrainerControl
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class ADCLossTrainer(Trainer):
+    """Custom trainer that handles ADC delta loss"""
+
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        Override compute_loss to handle models that return (outputs, delta_loss)
+        """
+        outputs = model(**inputs)
+
+        # Handle case where model returns (outputs, delta_loss) tuple
+        if isinstance(outputs, tuple) and len(outputs) == 2:
+            outputs, delta_loss = outputs
+            # Add delta loss to the main loss if it exists
+            if hasattr(outputs, 'loss') and delta_loss is not None:
+                outputs.loss = outputs.loss + delta_loss
+        elif isinstance(outputs, dict) and 'loss' in outputs:
+            # Standard case - loss is already in outputs
+            pass
+        else:
+            # Fallback - assume outputs is the loss
+            outputs = {'loss': outputs}
+
+        return (outputs['loss'], outputs) if return_outputs else outputs['loss']
+
+
+class EpochCallback(TrainerCallback):
+    """Callback to set current epoch on ADC quantizers for delta annealing"""
+
+    def on_epoch_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        """Set the current epoch on all ADC quantizers in the model"""
+        model = kwargs.get('model')
+        if model is not None:
+            current_epoch = state.epoch or 0.0
+            self._set_epoch_recursive(model, current_epoch)
+            logger.info(f"Set epoch {current_epoch:.2f} on ADC quantizers")
+
+    def _set_epoch_recursive(self, module, epoch):
+        """Recursively set epoch on all modules that have set_epoch method"""
+        if hasattr(module, 'set_epoch'):
+            module.set_epoch(epoch)
+
+        for child in module.children():
+            self._set_epoch_recursive(child, epoch)
 
 
 class BertADCConverter:
@@ -511,7 +558,7 @@ def add_gradient_hooks(model):
 def main():
     parser = argparse.ArgumentParser()
     # Where to load FP model checkpoint from (dir with checkpoint-* or the checkpoint dir itself)
-    parser.add_argument("--fp_checkpoint_dir", type=str, required=True, help="Path to FP fine-tuning output dir or a specific checkpoint-* dir")
+    parser.add_argument("--fp_checkpoint_dir", type=str, required=False, help="Path to FP fine-tuning output dir or a specific checkpoint-* dir")
     parser.add_argument("--output_dir", type=str, default="./outputs_qa_adc_qat")
     parser.add_argument("--seed", type=int, default=42)
 
@@ -526,6 +573,7 @@ def main():
     parser.add_argument("--exclude_pooler", action="store_true", help="Exclude pooler from quantization")
     parser.add_argument("--exclude_embeddings", action="store_true", help="Exclude embeddings from quantization")
     parser.add_argument("--mvm_limit", type=int, default=256, help="Memory vector multiplication limit for tiling")
+    parser.add_argument("--adc_resume_dir", type=str, required=False, help="Path to ADC checkpoint dir to resume from")
 
     # Data/Trainer settings (same pipeline as FP)
     parser.add_argument("--num_train_epochs", type=float, default=1.0)
@@ -534,57 +582,68 @@ def main():
     parser.add_argument("--learning_rate", type=float, default=5e-8)  # Reduced from 1e-6
     parser.add_argument("--weight_decay", type=float, default=0.01)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
+    parser.add_argument("--warmup_steps", type=int, default=None)
     parser.add_argument("--max_length", type=int, default=384)
     parser.add_argument("--doc_stride", type=int, default=128)
     parser.add_argument("--eval_steps", type=int, default=200)
     parser.add_argument("--save_steps", type=int, default=500)
+    parser.add_argument("--save_total_limit", type=int, default=2)
     parser.add_argument("--fp16", action="store_true")
+    parser.add_argument("--eval_only", action="store_true", help="Skip training and run evaluation only with analytical ADC delta")
     args = parser.parse_args()
 
     set_seed(args.seed)
 
-    # Resolve the last checkpoint directory
-    last_ckpt = find_last_checkpoint_dir(args.fp_checkpoint_dir)
-    logger.info(f"Loading fine-tuned FP checkpoint from: {last_ckpt}")
+    last_ckpt = None
+    resume_ckpt = None
+    if args.adc_resume_dir:
+        resume_ckpt = find_last_checkpoint_dir(args.adc_resume_dir)
+        logger.info(f"Resuming ADC training from: {resume_ckpt}")
+        model = BertForQuestionAnswering.from_pretrained(resume_ckpt)
+        tokenizer = AutoTokenizer.from_pretrained(resume_ckpt, use_fast=True)
+        tokenizer.padding_side = "right"
+        do_convert = False
+        do_warm_start = False
+    else:
+        if not args.fp_checkpoint_dir:
+            parser.error("Either --fp_checkpoint_dir or --adc_resume_dir is required")
+        last_ckpt = find_last_checkpoint_dir(args.fp_checkpoint_dir)
+        logger.info(f"Loading fine-tuned FP checkpoint from: {last_ckpt}")
+        tokenizer = AutoTokenizer.from_pretrained(last_ckpt, use_fast=True)
+        tokenizer.padding_side = "right"
+        model = load_qa_model_robust(last_ckpt)
+        do_convert = True
+        do_warm_start = True
 
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    out_dir = os.path.join(args.output_dir, f"squad_adc_qat_{timestamp}")
-    os.makedirs(out_dir, exist_ok=True)
+    if do_convert:
+        exclude_patterns = []
+        if args.exclude_embeddings:
+            exclude_patterns.append("embeddings")
+        if args.exclude_pooler:
+            exclude_patterns.append("pooler")
+        if args.exclude_head:
+            exclude_patterns.append("qa_outputs")
+        if not exclude_patterns:
+            exclude_patterns = ["embeddings", "pooler", "qa_outputs"]
 
-    # Load tokenizer from the FP checkpoint to keep exact vocab/tokenization
-    tokenizer = AutoTokenizer.from_pretrained(last_ckpt, use_fast=True)
-    tokenizer.padding_side = "right"
+        model = BertADCConverter.replace_linear_with_adc_qat(
+            model,
+            bx=args.bx,
+            bw=args.bw,
+            ba=args.ba,
+            k=args.k,
+            ashift=args.ashift,
+            signed_activations=args.signed_activations,
+            exclude_patterns=exclude_patterns,
+            # When eval_only, force analytical delta (disable dynamics)
+            mvm_limit=args.mvm_limit,
+        )
 
-    # Load fine-tuned model robustly (works for FP and QAT checkpoints)
-    model = load_qa_model_robust(last_ckpt)
-
-    exclude_patterns = []
-    if args.exclude_embeddings:
-        exclude_patterns.append("embeddings")
-    if args.exclude_pooler:
-        exclude_patterns.append("pooler")
-    if args.exclude_head:
-        exclude_patterns.append("qa_outputs")
-    if not exclude_patterns:
-        # Default exclusions to mirror typical practice
-        exclude_patterns = ["embeddings", "pooler", "qa_outputs"]
-
-    model = BertADCConverter.replace_linear_with_adc_qat(
-        model,
-        bx=args.bx,
-        bw=args.bw,
-        ba=args.ba,
-        k=args.k,
-        ashift=args.ashift,
-        signed_activations=args.signed_activations,
-        exclude_patterns=exclude_patterns,
-        mvm_limit=args.mvm_limit,
-    )
-    # Warm-start ADC quantizer parameters from QAT checkpoint if available
-    try:
-        warm_start_adc_quantizers_from_qat(model, last_ckpt)
-    except Exception as e:
-        logger.warning(f"Quantizer warm-start failed: {e}")
+    if do_warm_start:
+        try:
+            warm_start_adc_quantizers_from_qat(model, last_ckpt)
+        except Exception as e:
+            logger.warning(f"Quantizer warm-start failed: {e}")
     
     # Add gradient monitoring
     add_gradient_hooks(model)
@@ -613,19 +672,24 @@ def main():
     metrics_computer = MetricsComputer(eval_examples, eval_dataset, tokenizer, squad_metric)
 
     # TrainingArguments (keep parity with FP pipeline)
+    # Normalize warmup settings so ratio is never None
+    _warmup_steps = args.warmup_steps if args.warmup_steps not in (None, 0) else 0
+    _warmup_ratio = args.warmup_ratio if _warmup_steps == 0 else 0.0
+
     try:
         training_args = TrainingArguments(
-            output_dir=out_dir,
+            output_dir=args.output_dir,
             per_device_train_batch_size=args.per_device_train_batch_size,
             per_device_eval_batch_size=args.per_device_eval_batch_size,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             num_train_epochs=args.num_train_epochs,
-            warmup_ratio=args.warmup_ratio,
+            warmup_ratio=_warmup_ratio,
+            warmup_steps=_warmup_steps,
             logging_steps=50,
             save_strategy="steps",
             save_steps=args.save_steps,
-            save_total_limit=2,
+            save_total_limit=args.save_total_limit,
             eval_strategy="steps",
             eval_steps=args.eval_steps,
             fp16=args.fp16,
@@ -634,26 +698,33 @@ def main():
             max_grad_norm=1.0,  # Tighter clipping to stabilize early training
             gradient_accumulation_steps=2,  # Accumulate gradients to reduce variance
         )
+        if resume_ckpt:
+            training_args.resume_from_checkpoint = resume_ckpt
     except TypeError:
         training_args = TrainingArguments(
-            output_dir=out_dir,
+            output_dir=args.output_dir,
             per_device_train_batch_size=args.per_device_train_batch_size,
             per_device_eval_batch_size=args.per_device_eval_batch_size,
             learning_rate=args.learning_rate,
             weight_decay=args.weight_decay,
             num_train_epochs=args.num_train_epochs,
-            warmup_steps=0,
+            warmup_steps=_warmup_steps,
             logging_steps=50,
             save_steps=args.save_steps,
+            save_total_limit=args.save_total_limit,
             eval_strategy="steps",
             eval_steps=args.eval_steps,
             fp16=args.fp16,
+            report_to="none",
             # Add gradient clipping
             max_grad_norm=1.0,
             gradient_accumulation_steps=2,
         )
+        if resume_ckpt:
+            training_args.resume_from_checkpoint = resume_ckpt
 
-    trainer = Trainer(
+    # Create custom trainer with ADC loss handling
+    trainer = ADCLossTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -661,10 +732,14 @@ def main():
         tokenizer=tokenizer,
         data_collator=default_data_collator,
         compute_metrics=metrics_computer.compute_metrics,
+        callbacks=[EpochCallback()],
     )
 
-    logger.info("Starting ADC QAT fine-tuning with HF Trainer...")
-    trainer.train()
+    if args.eval_only:
+        logger.info("Skipping training; running evaluation only...")
+    else:
+        logger.info("Starting ADC QAT fine-tuning with HF Trainer...")
+        trainer.train()
     logger.info("ADC QAT training completed.")
 
     # Final eval (same as FP script)
@@ -682,26 +757,27 @@ def main():
     logger.info(f"Final F1: {eval_metrics['f1']:.2f}, EM: {eval_metrics['exact_match']:.2f}")
 
     # Save artifacts
-    trainer.save_model(out_dir)
-    tokenizer.save_pretrained(out_dir)
+    trainer.save_model(args.output_dir)
+    tokenizer.save_pretrained(args.output_dir)
 
-    with open(os.path.join(out_dir, "eval_metrics.txt"), "w") as f:
+    with open(os.path.join(args.output_dir, "eval_metrics.txt"), "w") as f:
         for k, v in sorted(eval_metrics.items()):
             f.write(f"{k}: {v}\n")
 
     # Save ADC configuration
-    with open(os.path.join(out_dir, "adc_config.txt"), "w") as f:
+    with open(os.path.join(args.output_dir, "adc_config.txt"), "w") as f:
         f.write(f"bx (activation bits): {args.bx}\n")
         f.write(f"bw (weight bits): {args.bw}\n")
         f.write(f"ba (ADC bits): {args.ba}\n")
         f.write(f"k (hardware parameter): {args.k}\n")
         f.write(f"ashift: {args.ashift}\n")
         f.write(f"signed_activations: {args.signed_activations}\n")
-        f.write(f"exclude_patterns: {exclude_patterns}\n")
+        if 'exclude_patterns' in locals():
+            f.write(f"exclude_patterns: {exclude_patterns}\n")
         f.write(f"mvm_limit: {args.mvm_limit}\n")
 
     print("Final metrics:", eval_metrics)
-    print(f"Artifacts saved to: {out_dir}")
+    print(f"Artifacts saved to: {args.output_dir}")
 
 
 if __name__ == "__main__":

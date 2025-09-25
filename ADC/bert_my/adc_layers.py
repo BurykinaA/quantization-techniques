@@ -112,7 +112,7 @@ class ADCQuantizer(nn.Module):
     """
     ADC Quantizer implementing the quantization described in equation (2) and (3)
     """
-    def __init__(self, M: int, bx: int, bw: int, ba: int, k: int = 4, signed_activations: bool = False, use_dynamic_delta: bool = True, delta_momentum: float = 0.05):
+    def __init__(self, M: int, bx: int, bw: int, ba: int, k: int = 4, signed_activations: bool = False, use_dynamic_delta: bool = True, delta_momentum: float = 0.05, use_delta_anneal: bool = True, delta_anneal_epochs: float = 1.0, delta_loss_weight: float = 0.01):
         super().__init__()
         self.M = M  # Memory dimension
         self.bx = bx  # Activation bits
@@ -122,46 +122,51 @@ class ADCQuantizer(nn.Module):
         self.signed_activations = signed_activations
         self.use_dynamic_delta = use_dynamic_delta
         self.delta_momentum = delta_momentum
+        self.use_delta_anneal = use_delta_anneal
+        self.delta_anneal_epochs = delta_anneal_epochs  # Number of epochs for annealing
+        self.delta_loss_weight = delta_loss_weight  # Weight for delta MSE loss
 
         # Calculate quantization step (delta) according to equation (3)
         if signed_activations:
             activation_range = 2**(bx-1) - 1
         else:
             activation_range = 2**bx - 1
-            
-        weight_range = 2**(bw-1) - 1  # Assuming symmetric quantization for weights
-        
-        # Delta calculation from equation (3) - corrected formula
+
+        weight_range = 2**(bw-1) - 1  # symmetric weights
+
+        # Delta calculation from equation (3)
         self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)
-        
-        # Add reasonable bounds to prevent numerical issues
-        # self.delta = max(self.delta, 1e-2)  # Minimum bound
-        # self.delta = min(self.delta, 1e4)   # Maximum bound to prevent overflow
-        
+
         # ADC quantization range
         self.na = -(2**(ba-1))  # Negative clipping value
         self.pa = 2**(ba-1) - 1  # Positive clipping value
-        
+
         self.register_buffer('_delta', torch.tensor(self.delta, dtype=torch.float32))
         # Running absmax for dynamic delta calibration
         self.register_buffer('_running_absmax', torch.tensor(0.0, dtype=torch.float32))
+        # Current epoch for annealing
+        self.register_buffer('_current_epoch', torch.tensor(0.0, dtype=torch.float32))
         self.register_buffer('_zero_point', torch.zeros(1))
-        # self.register_buffer('_tmp_scale_1', torch.ones(1))
-        
-        # print(f"ADC Quantizer: M={M}, delta={self.delta:.6f}, range=[{self.na}, {self.pa}]")
-        
-    def forward(self, y: torch.Tensor) -> torch.Tensor:
+
+    def set_epoch(self, epoch: float):
+        """Set the current training epoch for delta annealing"""
+        self._current_epoch.copy_(torch.tensor(epoch, dtype=torch.float32))
+
+    def forward(self, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Apply ADC quantization according to equation (2):
         y_q = round(clip(y/delta, na, pa))
+
+        Returns:
+            Tuple of (quantized_output, delta_loss)
         """
-        # Check input for NaN/inf and sanitize instead of raising
         if torch.isnan(y).any() or torch.isinf(y).any():
             print(f"Warning: NaN/inf in ADC input, sanitizing. stats: max={y.nan_to_num().max().item()}, min={y.nan_to_num().min().item()}")
             y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
-        
-        # Optionally adapt delta using EMA of absmax to avoid saturation
+
         scale_for_quant = self._delta
+        delta_loss = torch.tensor(0.0, device=y.device, dtype=y.dtype)
+
         if self.use_dynamic_delta:
             with torch.no_grad():
                 current_absmax = y.detach().abs().max()
@@ -170,22 +175,36 @@ class ADCQuantizer(nn.Module):
                         self._running_absmax.copy_(current_absmax)
                     else:
                         self._running_absmax.copy_((1 - self.delta_momentum) * self._running_absmax + self.delta_momentum * current_absmax)
-            # Derive delta from running absmax targeting full-scale usage
+
             dynamic_delta = torch.clamp(self._running_absmax / max(self.pa, 1), min=1e-6)
-            scale_for_quant = dynamic_delta
+            # Never go below analytical delta
+            dynamic_candidate = torch.maximum(self._delta, dynamic_delta)
+
+            # Add MSE loss between dynamic and analytical delta
+            if self.training and self.delta_loss_weight > 0:
+                delta_loss = self.delta_loss_weight * F.mse_loss(dynamic_candidate, self._delta)
+
+            if self.use_delta_anneal:
+                # Epoch-based annealing: linearly anneal from dynamic_candidate to analytical over delta_anneal_epochs
+                current_epoch = self._current_epoch.item()
+                alpha = min(current_epoch / self.delta_anneal_epochs, 1.0)
+                mixed = (1.0 - alpha) * dynamic_candidate + alpha * self._delta
+                scale_for_quant = torch.maximum(self._delta, mixed)
+            else:
+                scale_for_quant = dynamic_candidate
 
         # Use StraightThroughQuantize with selected delta as scale
         result = StraightThroughQuantize.apply(
             y, scale_for_quant, self._zero_point, self.na, self.pa,
             True, False, 0, scale_for_quant, self._zero_point
         )
-        
+
         # Check output for NaN/inf and sanitize instead of raising
         if torch.isnan(result).any() or torch.isinf(result).any():
             print(f"Warning: NaN/inf in ADC output, sanitizing...")
             result = torch.nan_to_num(result, nan=0.0, posinf=float(self.pa), neginf=float(self.na))
-        
-        return result
+
+        return result, delta_loss
 
 class LearnableQuantizer(nn.Module):
     """
@@ -423,12 +442,14 @@ class QATLinearADC(nn.Linear):
         
         # ADC quantizer
         self.adc_quantizer = ADCQuantizer(
-            M=in_features, 
-            bx=bx, 
-            bw=bw, 
-            ba=ba, 
+            M=in_features,
+            bx=bx,
+            bw=bw,
+            ba=ba,
             k=k,
-            signed_activations=signed_activations
+            signed_activations=signed_activations,
+            delta_anneal_epochs=1.0,  # Anneal over 1 epoch
+            delta_loss_weight=0.01    # Small weight for delta MSE loss
         )
         
         # Ashift constant
@@ -528,38 +549,106 @@ class QATLinearADC(nn.Linear):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.quantization_enabled:
             return F.linear(x, self.weight, self.bias)
-        
-        #print('===================')
-        #print('input ', 'max:', torch.max(x),' min:', torch.min(x), ' M:', self.in_features)
-        # Quantize activations
-        xq = self.activation_quantizer(x)
-        
-        # Apply ashift if enabled
-        if self.ashift:
-            xq = xq - self.C
-        
-        # Quantize weights
-        wq = self.weight_quantizer(self.weight)
-        
-        # Compute matrix-vector multiplication
-        y_for_adc = F.linear(xq, wq, bias=None)  # No bias here, add later
-        
-        # Apply ADC quantization
-        #yq_adc = self.adc_quantizer(y_for_adc)
-        
-        # Dequantize
-        #out = self.dequantize(yq_adc, wq)
-        #out = yq_adc
 
-        out = self.adc_quantizer(y_for_adc)
-        
-        # Add bias if present
+        # Integer-path computation:
+        # 1) Build activation codes (per-tensor quantizer)
+        act_q = self.activation_quantizer
+        s_x = act_q.scale  # shape: ()
+        if act_q.symmetric:
+            code_x = torch.round(x / s_x)
+            qmin_x, qmax_x = act_q.qmin, act_q.qmax
+            code_x = torch.clamp(code_x, qmin_x, qmax_x)
+        else:
+            zp_x = act_q.zero_point
+            code_x = torch.round(x / s_x + zp_x)
+            qmin_x, qmax_x = act_q.qmin, act_q.qmax
+            code_x = torch.clamp(code_x, qmin_x, qmax_x)
+
+        # Apply ashift in code domain if enabled
+        if self.ashift:
+            code_x = code_x - self.C
+
+        # 2) Build weight codes (per-channel symmetric, channel_dim=0)
+        w_q = self.weight_quantizer
+        s_w_vec = w_q.scale  # shape: (out_features,)
+        # Broadcast scales to weight shape for division
+        s_w_b = s_w_vec.view(-1, 1)
+        code_w = torch.round(self.weight / s_w_b)
+        qmin_w, qmax_w = w_q.qmin, w_q.qmax
+        code_w = torch.clamp(code_w, qmin_w, qmax_w)
+
+        # 3) Integer MM in code domain
+        y_int = F.linear(code_x, code_w, bias=None)
+
+        # 4) ADC quantization with dynamic delta and annealing
+        adc_output, delta_loss = self._adc_quantize_with_loss(y_int)
+
+        # 5) Dequantize back to real domain
+        # y_real = adc_output * s_x * s_w (per out channel)
+        y_real = adc_output * s_x
+        y_real = y_real * s_w_vec  # broadcast over out_features
+
+        # 6) Add bias if present
         if self.bias is not None:
-            out = out + self.bias
-            
-        #print('output', torch.max(out), torch.min(out))
-        #print()
-        return out
+            y_real = y_real + self.bias
+
+        return y_real, delta_loss
+
+    def _adc_quantize_with_loss(self, y_int: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Apply ADC quantization with dynamic delta, annealing, and loss calculation"""
+        delta = self.adc_quantizer._delta
+        na = self.adc_quantizer.na
+        pa = self.adc_quantizer.pa
+
+        # Start with analytical delta
+        scale_for_quant = delta
+        delta_loss = torch.tensor(0.0, device=y_int.device, dtype=y_int.dtype)
+
+        if self.adc_quantizer.use_dynamic_delta:
+            with torch.no_grad():
+                current_absmax = y_int.detach().abs().max()
+                if torch.isfinite(current_absmax):
+                    if self.adc_quantizer._running_absmax.item() == 0.0:
+                        self.adc_quantizer._running_absmax.copy_(current_absmax)
+                    else:
+                        self.adc_quantizer._running_absmax.copy_(
+                            (1 - self.adc_quantizer.delta_momentum) * self.adc_quantizer._running_absmax +
+                            self.adc_quantizer.delta_momentum * current_absmax
+                        )
+
+            dynamic_delta = torch.clamp(self.adc_quantizer._running_absmax / max(pa, 1), min=1e-6)
+            # Never go below analytical delta
+            dynamic_candidate = torch.maximum(delta, dynamic_delta)
+
+            # Add MSE loss between dynamic and analytical delta
+            if self.training and self.adc_quantizer.delta_loss_weight > 0:
+                delta_loss = self.adc_quantizer.delta_loss_weight * F.mse_loss(dynamic_candidate, delta)
+
+            if self.adc_quantizer.use_delta_anneal:
+                # Epoch-based annealing: linearly anneal from dynamic_candidate to analytical over delta_anneal_epochs
+                current_epoch = self.adc_quantizer._current_epoch.item()
+                alpha = min(current_epoch / self.adc_quantizer.delta_anneal_epochs, 1.0)
+                mixed = (1.0 - alpha) * dynamic_candidate + alpha * delta
+                scale_for_quant = torch.maximum(delta, mixed)
+            else:
+                scale_for_quant = dynamic_candidate
+
+        # Apply ADC quantization
+        y_adc_codes = torch.round(y_int / scale_for_quant)
+        y_adc_codes = torch.clamp(y_adc_codes, na, pa)
+
+        # Dequantize back to the scale used for quantization
+        adc_output = y_adc_codes * scale_for_quant
+
+        return adc_output, delta_loss
+
+    def set_epoch(self, epoch: float):
+        """Set the current training epoch for delta annealing"""
+        self.adc_quantizer.set_epoch(epoch)
+        # Also set epoch for all tiles if they have ADC quantizers
+        for tile in self.tiles:
+            if hasattr(tile, 'adc_quantizer'):
+                tile.adc_quantizer.set_epoch(epoch)
 
 
 class TiledLinearADC(nn.Module):
@@ -579,7 +668,8 @@ class TiledLinearADC(nn.Module):
                  ashift: bool = False,
                  signed_activations: bool = False,
                  mvm_limit: int = 512,   # ← твой лимит на M (=число входов на колонку IMC)
-                 logger=None):
+                 logger=None,
+                 use_jit: bool = False):
         super().__init__()
         self.logger = logger
         self.in_features_total = in_features
@@ -597,6 +687,7 @@ class TiledLinearADC(nn.Module):
 
         self.n_tiles = n_tiles
         self.in_features_tile = tile_in
+        self.use_jit = use_jit
 
         # создаём плитки; bias кладём в первую (как в TiledConv2dADC)
         self.tiles = nn.ModuleList()
@@ -612,6 +703,10 @@ class TiledLinearADC(nn.Module):
                     signed_activations=signed_activations,
                 )
             )
+
+        # JIT compile the helper method if requested for better performance
+        if self.use_jit:
+            self._forward_jit = torch.jit.script(self._forward_jit)
 
     # ===== служебные методы управления (по аналогии с TiledConv2dADC) =====
 
@@ -666,25 +761,53 @@ class TiledLinearADC(nn.Module):
                     t.bias.copy_(linear.bias)
 
     # ===== основной forward =====
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # Accept (..., in_features)
         if x.shape[-1] != self.in_features_total:
             raise ValueError(f"Expected last dim={self.in_features_total}, got {x.shape[-1]}")
 
         orig_shape = x.shape                  # (..., F)
         x2d = x.reshape(-1, self.in_features_total)   # [B*, F]
+        batch_size_2d = x2d.shape[0]
 
-        outs = []
-        for i, t in enumerate(self.tiles):
-            s = i * self.in_features_tile
-            e = (i + 1) * self.in_features_tile
-            xi = x2d[:, s:e]                  # [B*, tile_in]
-            yi = t(xi)                        # [B*, out_features]
-            outs.append(yi)
+        # Use JIT-compiled version for better performance if enabled
+        if self.use_jit:
+            y2d = self._forward_jit(x2d, batch_size_2d, self.in_features_tile)
+            total_delta_loss = torch.tensor(0.0, device=x2d.device, dtype=x2d.dtype)
+        else:
+            # Pre-allocate output tensor for better memory efficiency
+            y2d = torch.zeros(batch_size_2d, self.out_features, dtype=x2d.dtype, device=x2d.device)
+            total_delta_loss = torch.tensor(0.0, device=x2d.device, dtype=x2d.dtype)
 
-        y2d = torch.stack(outs, dim=0).sum(dim=0)     # [B*, out_features]
+            # Process tiles with optimized memory access and minimal slicing
+            tile_in = self.in_features_tile
+            for i, t in enumerate(self.tiles):
+                # Use narrow() for zero-copy slicing when possible, fallback to slice
+                if x2d.is_contiguous():
+                    xi = x2d.narrow(1, i * tile_in, tile_in)  # Zero-copy slice
+                else:
+                    xi = x2d[:, i * tile_in:(i + 1) * tile_in]  # Regular slice
+
+                yi, delta_loss = t(xi)            # [B*, out_features], scalar
+                y2d.add_(yi)  # In-place addition for better performance
+                total_delta_loss.add_(delta_loss)
+
         y = y2d.reshape(*orig_shape[:-1], self.out_features)  # (..., out_features)
-        return y
+        return y, total_delta_loss
+
+    def _forward_jit(self, x2d: torch.Tensor, batch_size_2d: int, tile_in: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """JIT-compiled forward pass for better performance"""
+        y2d = torch.zeros(batch_size_2d, self.out_features, dtype=x2d.dtype, device=x2d.device)
+        delta_loss = torch.tensor(0.0, device=x2d.device, dtype=x2d.dtype)
+
+        # Process tiles with optimized operations (JIT doesn't support delta loss calculation)
+        for i in range(self.n_tiles):
+            # Use narrow for zero-copy slicing
+            xi = x2d.narrow(1, i * tile_in, tile_in)
+            yi, _ = self.tiles[i](xi)  # Ignore delta loss in JIT mode
+            y2d.add_(yi)
+
+        return y2d, delta_loss
 
 
 
@@ -726,34 +849,41 @@ class QATMultiHeadAttentionADC(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.scale = 1.0 / (self.d_k ** 0.5)
     
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, _ = x.size()
-        
+
         # Generate Q, K, V
-        Q = self.w_q(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        K = self.w_k(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        V = self.w_v(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        
+        Q, loss_q = self.w_q(x)
+        Q = Q.view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        K, loss_k = self.w_k(x)
+        K = K.view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+        V, loss_v = self.w_v(x)
+        V = V.view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+
         # Compute attention scores
         scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
-        
+
         if mask is not None:
             scores = scores.masked_fill(mask == 0, -1e9)
-        
+
         # Quantize attention scores
         attention_weights = F.softmax(scores, dim=-1)
         attention_weights = self.attention_quantizer(attention_weights)
         attention_weights = self.dropout(attention_weights)
-        
+
         # Apply attention
         context = torch.matmul(attention_weights, V)
         context = context.transpose(1, 2).contiguous().view(
             batch_size, seq_len, self.d_model
         )
-        
+
         # Output projection
-        output = self.w_o(context)
-        return output
+        output, loss_o = self.w_o(context)
+
+        # Accumulate delta losses
+        total_delta_loss = loss_q + loss_k + loss_v + loss_o
+
+        return output, total_delta_loss
     
     def enable_quantization(self):
         self.w_q.enable_quantization()
@@ -797,16 +927,33 @@ class QATTransformerBlockADC(nn.Module):
         self.norm2 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
     
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # Self-attention with residual connection
-        attn_output = self.attention(x, mask)
+        attn_output, attn_loss = self.attention(x, mask)
         x = self.norm1(x + self.dropout(attn_output))
-        
+
         # Feed-forward with residual connection
-        ff_output = self.feed_forward(x)
+        ff_output, ff_loss = self._feed_forward_with_loss(x)
         x = self.norm2(x + ff_output)
-        
-        return x
+
+        # Accumulate losses
+        total_delta_loss = attn_loss + ff_loss
+
+        return x, total_delta_loss
+
+    def _feed_forward_with_loss(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Apply feed-forward with loss accumulation"""
+        total_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+
+        for module in self.feed_forward:
+            if hasattr(module, 'forward'):
+                if isinstance(module, TiledLinearADC):
+                    x, loss = module(x)
+                    total_loss = total_loss + loss
+                else:
+                    x = module(x)
+
+        return x, total_loss
     
     def enable_quantization(self):
         self.attention.enable_quantization()
