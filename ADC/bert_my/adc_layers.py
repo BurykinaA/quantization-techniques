@@ -644,11 +644,8 @@ class QATLinearADC(nn.Linear):
 
     def set_epoch(self, epoch: float):
         """Set the current training epoch for delta annealing"""
-        self.adc_quantizer.set_epoch(epoch)
-        # Also set epoch for all tiles if they have ADC quantizers
-        for tile in self.tiles:
-            if hasattr(tile, 'adc_quantizer'):
-                tile.adc_quantizer.set_epoch(epoch)
+        if hasattr(self, 'adc_quantizer'):
+            self.adc_quantizer.set_epoch(epoch)
 
 
 class TiledLinearADC(nn.Module):
@@ -707,6 +704,14 @@ class TiledLinearADC(nn.Module):
         # JIT compile the helper method if requested for better performance
         if self.use_jit:
             self._forward_jit = torch.jit.script(self._forward_jit)
+
+    def set_epoch(self, epoch: float):
+        """Set the current training epoch for delta annealing"""
+        # Call parent method first
+        super().set_epoch(epoch)
+        # Also set epoch for all tiles
+        for tile in self.tiles:
+            tile.set_epoch(epoch)
 
     # ===== служебные методы управления (по аналогии с TiledConv2dADC) =====
 
