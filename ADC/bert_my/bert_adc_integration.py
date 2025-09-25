@@ -541,8 +541,9 @@ def add_gradient_hooks(model):
                 
                 # Log at a slightly higher threshold to reduce noise; still clip
                 if has_nan or has_inf or grad_norm > 500:
-                    print(f"GRADIENT ISSUE in {name}: norm={grad_norm:.6f}, nan={has_nan}, inf={has_inf}")
-                    print(f"  Grad shape: {grad.shape}, min: {grad.min().item():.6f}, max: {grad.max().item():.6f}")
+                    # print(f"GRADIENT ISSUE in {name}: norm={grad_norm:.6f}, nan={has_nan}, inf={has_inf}")
+                    # print(f"  Grad shape: {grad.shape}, min: {grad.min().item():.6f}, max: {grad.max().item():.6f}")
+                    # pass  # Comment out gradient logging to reduce noise
                     
                     # More aggressive gradient clipping
                     if has_nan or has_inf:
