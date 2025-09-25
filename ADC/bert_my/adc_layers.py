@@ -709,9 +709,7 @@ class TiledLinearADC(nn.Module):
 
     def set_epoch(self, epoch: float):
         """Set the current training epoch for delta annealing"""
-        # Call parent method first
-        super().set_epoch(epoch)
-        # Also set epoch for all tiles
+        # Set epoch for all tiles
         for tile in self.tiles:
             tile.set_epoch(epoch)
 
