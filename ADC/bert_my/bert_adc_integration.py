@@ -31,28 +31,34 @@ logger = logging.getLogger(__name__)
 
 
 class ADCLossTrainer(Trainer):
-    """Custom trainer that handles ADC delta loss"""
+    """Custom trainer that handles ADC delta loss by summing per-layer stored losses"""
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
-        """
-        Override compute_loss to handle models that return (outputs, delta_loss)
-        """
         outputs = model(**inputs)
 
-        # Handle case where model returns (outputs, delta_loss) tuple
-        if isinstance(outputs, tuple) and len(outputs) == 2:
-            outputs, delta_loss = outputs
-            # Add delta loss to the main loss if it exists
-            if hasattr(outputs, 'loss') and delta_loss is not None:
-                outputs.loss = outputs.loss + delta_loss
-        elif isinstance(outputs, dict) and 'loss' in outputs:
-            # Standard case - loss is already in outputs
-            pass
+        # Standard HF output cases
+        if isinstance(outputs, tuple):
+            loss = outputs[0] if hasattr(outputs[0], 'loss') else outputs[0]
+        elif isinstance(outputs, dict):
+            loss = outputs.get('loss', None)
         else:
-            # Fallback - assume outputs is the loss
-            outputs = {'loss': outputs}
+            loss = outputs
 
-        return (outputs['loss'], outputs) if return_outputs else outputs['loss']
+        # Aggregate delta losses from modules that expose `_last_delta_loss`
+        delta_reg = 0.0
+        for module in model.modules():
+            if hasattr(module, '_last_delta_loss') and module._last_delta_loss is not None:
+                try:
+                    delta_reg = delta_reg + module._last_delta_loss
+                except Exception:
+                    pass
+
+        if isinstance(loss, torch.Tensor):
+            loss = loss + delta_reg
+        else:
+            loss = delta_reg
+
+        return (loss, outputs) if return_outputs else loss
 
 
 class EpochCallback(TrainerCallback):

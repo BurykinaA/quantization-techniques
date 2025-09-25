@@ -582,6 +582,8 @@ class QATLinearADC(nn.Linear):
 
         # 4) ADC quantization with dynamic delta and annealing
         adc_output, delta_loss = self._adc_quantize_with_loss(y_int)
+        # Store latest delta loss for external aggregation
+        self._last_delta_loss = delta_loss
 
         # 5) Dequantize back to real domain
         # y_real = adc_output * s_x * s_w (per out channel)
@@ -592,7 +594,7 @@ class QATLinearADC(nn.Linear):
         if self.bias is not None:
             y_real = y_real + self.bias
 
-        return y_real, delta_loss
+        return y_real
 
     def _adc_quantize_with_loss(self, y_int: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Apply ADC quantization with dynamic delta, annealing, and loss calculation"""
@@ -766,7 +768,7 @@ class TiledLinearADC(nn.Module):
                     t.bias.copy_(linear.bias)
 
     # ===== основной forward =====
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Accept (..., in_features)
         if x.shape[-1] != self.in_features_total:
             raise ValueError(f"Expected last dim={self.in_features_total}, got {x.shape[-1]}")
@@ -778,11 +780,9 @@ class TiledLinearADC(nn.Module):
         # Use JIT-compiled version for better performance if enabled
         if self.use_jit:
             y2d = self._forward_jit(x2d, batch_size_2d, self.in_features_tile)
-            total_delta_loss = torch.tensor(0.0, device=x2d.device, dtype=x2d.dtype)
         else:
             # Pre-allocate output tensor for better memory efficiency
             y2d = torch.zeros(batch_size_2d, self.out_features, dtype=x2d.dtype, device=x2d.device)
-            total_delta_loss = torch.tensor(0.0, device=x2d.device, dtype=x2d.dtype)
 
             # Process tiles with optimized memory access and minimal slicing
             tile_in = self.in_features_tile
@@ -793,26 +793,24 @@ class TiledLinearADC(nn.Module):
                 else:
                     xi = x2d[:, i * tile_in:(i + 1) * tile_in]  # Regular slice
 
-                yi, delta_loss = t(xi)            # [B*, out_features], scalar
+                yi = t(xi)                         # [B*, out_features]
                 y2d.add_(yi)  # In-place addition for better performance
-                total_delta_loss.add_(delta_loss)
 
         y = y2d.reshape(*orig_shape[:-1], self.out_features)  # (..., out_features)
-        return y, total_delta_loss
+        return y
 
-    def _forward_jit(self, x2d: torch.Tensor, batch_size_2d: int, tile_in: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _forward_jit(self, x2d: torch.Tensor, batch_size_2d: int, tile_in: int) -> torch.Tensor:
         """JIT-compiled forward pass for better performance"""
         y2d = torch.zeros(batch_size_2d, self.out_features, dtype=x2d.dtype, device=x2d.device)
-        delta_loss = torch.tensor(0.0, device=x2d.device, dtype=x2d.dtype)
 
-        # Process tiles with optimized operations (JIT doesn't support delta loss calculation)
+        # Process tiles with optimized operations
         for i in range(self.n_tiles):
             # Use narrow for zero-copy slicing
             xi = x2d.narrow(1, i * tile_in, tile_in)
-            yi, _ = self.tiles[i](xi)  # Ignore delta loss in JIT mode
+            yi = self.tiles[i](xi)
             y2d.add_(yi)
 
-        return y2d, delta_loss
+        return y2d
 
 
 
@@ -854,15 +852,15 @@ class QATMultiHeadAttentionADC(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.scale = 1.0 / (self.d_k ** 0.5)
     
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         batch_size, seq_len, _ = x.size()
 
         # Generate Q, K, V
-        Q, loss_q = self.w_q(x)
+        Q = self.w_q(x)
         Q = Q.view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        K, loss_k = self.w_k(x)
+        K = self.w_k(x)
         K = K.view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        V, loss_v = self.w_v(x)
+        V = self.w_v(x)
         V = V.view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
 
         # Compute attention scores
@@ -883,12 +881,9 @@ class QATMultiHeadAttentionADC(nn.Module):
         )
 
         # Output projection
-        output, loss_o = self.w_o(context)
+        output = self.w_o(context)
 
-        # Accumulate delta losses
-        total_delta_loss = loss_q + loss_k + loss_v + loss_o
-
-        return output, total_delta_loss
+        return output
     
     def enable_quantization(self):
         self.w_q.enable_quantization()
@@ -934,31 +929,20 @@ class QATTransformerBlockADC(nn.Module):
     
     def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
         # Self-attention with residual connection
-        attn_output, attn_loss = self.attention(x, mask)
+        attn_output = self.attention(x, mask)
         x = self.norm1(x + self.dropout(attn_output))
 
         # Feed-forward with residual connection
-        ff_output, ff_loss = self._feed_forward_with_loss(x)
+        ff_output = self._feed_forward_no_loss(x)
         x = self.norm2(x + ff_output)
 
-        # Accumulate losses
-        total_delta_loss = attn_loss + ff_loss
+        return x, torch.tensor(0.0, device=x.device, dtype=x.dtype)
 
-        return x, total_delta_loss
-
-    def _feed_forward_with_loss(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Apply feed-forward with loss accumulation"""
-        total_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
-
+    def _feed_forward_no_loss(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply feed-forward ignoring internal ADC delta loss (handled elsewhere)"""
         for module in self.feed_forward:
-            if hasattr(module, 'forward'):
-                if isinstance(module, TiledLinearADC):
-                    x, loss = module(x)
-                    total_loss = total_loss + loss
-                else:
-                    x = module(x)
-
-        return x, total_loss
+            x = module(x)
+        return x
     
     def enable_quantization(self):
         self.attention.enable_quantization()
