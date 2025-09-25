@@ -136,6 +136,10 @@ class ADCQuantizer(nn.Module):
 
         # Delta calculation from equation (3)
         self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)
+        
+        # Clamp delta to reasonable bounds to prevent gradient explosion
+        self.delta = max(self.delta, 1e-3)  # Minimum bound
+        self.delta = min(self.delta, 100.0)  # Maximum bound to prevent overflow
 
         # ADC quantization range
         self.na = -(2**(ba-1))  # Negative clipping value
@@ -632,8 +636,9 @@ class QATLinearADC(nn.Linear):
                 alpha = min(current_epoch / self.adc_quantizer.delta_anneal_epochs, 1.0)
                 mixed = (1.0 - alpha) * dynamic_candidate + alpha * delta
                 scale_for_quant = torch.maximum(delta, mixed)
+                scale_for_quant = torch.clamp(scale_for_quant, min=1e-3, max=100.0)
             else:
-                scale_for_quant = dynamic_candidate
+                scale_for_quant = torch.clamp(dynamic_candidate, min=1e-3, max=100.0)
 
         # Apply ADC quantization
         y_adc_codes = torch.round(y_int / scale_for_quant)
