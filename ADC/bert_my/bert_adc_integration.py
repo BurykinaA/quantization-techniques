@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 class ADCLossTrainer(Trainer):
     """Custom trainer that handles ADC delta loss"""
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
         """
         Override compute_loss to handle models that return (outputs, delta_loss)
         """
@@ -599,9 +599,44 @@ def main():
     if args.adc_resume_dir:
         resume_ckpt = find_last_checkpoint_dir(args.adc_resume_dir)
         logger.info(f"Resuming ADC training from: {resume_ckpt}")
-        model = BertForQuestionAnswering.from_pretrained(resume_ckpt)
+        # Load the ADC model by first creating a base BERT model, then converting to ADC layers
+        # and loading the state dict
+        config = AutoConfig.from_pretrained(resume_ckpt)
+        base_model = BertForQuestionAnswering(config)
         tokenizer = AutoTokenizer.from_pretrained(resume_ckpt, use_fast=True)
         tokenizer.padding_side = "right"
+
+        # Convert to ADC layers
+        model = BertADCConverter.replace_linear_with_adc_qat(
+            base_model,
+            bx=8, bw=8, ba=8, k=4,  # Use default ADC parameters
+            ashift=False,
+            signed_activations=False,
+            exclude_patterns=["embeddings", "pooler", "qa_outputs"],
+            mvm_limit=256,
+        )
+
+        # Load the state dict with strict=False to handle quantizer parameters
+        bin_path = os.path.join(resume_ckpt, 'pytorch_model.bin')
+        safe_path = os.path.join(resume_ckpt, 'model.safetensors')
+
+        if os.path.exists(bin_path):
+            state_dict = torch.load(bin_path, map_location='cpu')
+        elif os.path.exists(safe_path):
+            try:
+                from safetensors.torch import load_file as safe_load_file
+                state_dict = safe_load_file(safe_path)
+            except ImportError:
+                raise ImportError("safetensors not available, but checkpoint uses safetensors format")
+        else:
+            raise FileNotFoundError(f"No model file found in {resume_ckpt}")
+
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        if unexpected_keys:
+            logger.info(f"Ignored {len(unexpected_keys)} unexpected keys from checkpoint")
+        if missing_keys:
+            logger.warning(f"Missing {len(missing_keys)} keys when loading checkpoint")
+
         do_convert = False
         do_warm_start = False
     else:
