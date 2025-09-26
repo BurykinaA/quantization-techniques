@@ -1,5 +1,7 @@
 import torch
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 import seaborn as sns
 from collections import defaultdict
@@ -417,7 +419,13 @@ if __name__ == "__main__":
         
         logger.step()
     
+    # Generate final plots manually
+    logger.plot_distributions(save_plots=True)
+    logger.plot_scalar_trends(save_plots=True)
+    logger.plot_adc_delta_analysis(save_plots=True)
+    
     # Save final statistics
     logger.save_stats_json()
     
     print("Example complete! Check the ./test_stats directory for plots and data.")
+    print(f"Generated plots should be in: {os.path.abspath(logger.save_dir)}")
