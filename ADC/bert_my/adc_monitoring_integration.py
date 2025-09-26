@@ -114,9 +114,12 @@ def create_adc_training_monitor(output_dir: str = "./adc_monitoring",
                     before_tensor = torch.from_numpy(latest_before)
                     after_tensor = torch.from_numpy(latest_after)
                     
-                    plotter.plot_current_batch_distribution(
-                        layer_name, before_tensor, after_tensor, step=step_count
-                    )
+                    try:
+                        plotter.plot_current_batch_distribution(
+                            layer_name, before_tensor, after_tensor, step=step_count
+                        )
+                    except Exception as e:
+                        print(f"Failed to plot {layer_name}: {e}")
             
             print(f"ADC plots saved to: {output_dir}")
         

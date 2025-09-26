@@ -609,6 +609,14 @@ class QATLinearADC(nn.Linear):
         # Start with analytical delta
         scale_for_quant = delta
         delta_loss = torch.tensor(0.0, device=y_int.device, dtype=y_int.dtype)
+        
+        # Debug info for first few calls
+        if not hasattr(self, '_debug_count'):
+            self._debug_count = 0
+        if self._debug_count < 3:
+            print(f"ADC Debug: Input range=[{y_int.min().item():.6f}, {y_int.max().item():.6f}], "
+                  f"delta={delta:.6f}, na={na}, pa={pa}")
+            self._debug_count += 1
 
         if self.adc_quantizer.use_dynamic_delta:
             with torch.no_grad():

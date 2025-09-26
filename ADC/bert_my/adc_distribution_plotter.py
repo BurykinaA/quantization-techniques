@@ -59,6 +59,11 @@ class ADCDistributionPlotter:
         before_np = before_adc.detach().cpu().numpy().flatten()
         after_np = after_adc.detach().cpu().numpy().flatten()
         
+        # Debug print to check actual values
+        print(f"ADC Debug {layer_name}: Before range=[{before_np.min():.6f}, {before_np.max():.6f}], "
+              f"After range=[{after_np.min():.6f}, {after_np.max():.6f}], "
+              f"Max diff={np.abs(after_np - before_np[:len(after_np)]).max():.6f}")
+        
         self.batch_data[layer_name]['before'].append(before_np)
         self.batch_data[layer_name]['after'].append(after_np)
         self.batch_data[layer_name]['steps'].append(step)
@@ -94,9 +99,14 @@ class ADCDistributionPlotter:
         
         # Plot 1: Histograms comparison
         ax1 = axes[0, 0]
-        ax1.hist(before_np, bins=50, alpha=0.7, label='Before ADC', density=True, color='blue')
-        ax1.hist(after_np, bins=50, alpha=0.7, label='After ADC', density=True, color='red')
-        ax1.set_title('Distribution Comparison')
+        
+        # Use more bins and better range for small differences
+        value_range = (min(before_np.min(), after_np.min()), max(before_np.max(), after_np.max()))
+        bins = np.linspace(value_range[0], value_range[1], 100)
+        
+        ax1.hist(before_np, bins=bins, alpha=0.6, label='Before ADC', density=True, color='blue', edgecolor='blue', linewidth=0.5)
+        ax1.hist(after_np, bins=bins, alpha=0.6, label='After ADC', density=True, color='red', edgecolor='red', linewidth=0.5)
+        ax1.set_title(f'Distribution Comparison\nRange: [{value_range[0]:.4f}, {value_range[1]:.4f}]')
         ax1.set_xlabel('Value')
         ax1.set_ylabel('Density')
         ax1.legend()
