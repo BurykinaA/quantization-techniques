@@ -26,12 +26,24 @@ from adc_layers import QATLinearADC, TiledLinearADC, LearnableQuantizer, ADCQuan
 
 from transformers import TrainerCallback, TrainingArguments, TrainerState, TrainerControl
 
+# Import ADC monitoring
+try:
+    from adc_monitoring_integration import create_adc_training_monitor, add_adc_monitoring_to_model
+    ADC_MONITORING_AVAILABLE = True
+except ImportError:
+    print("ADC monitoring not available")
+    ADC_MONITORING_AVAILABLE = False
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class ADCLossTrainer(Trainer):
     """Custom trainer that handles ADC delta loss by summing per-layer stored losses"""
+
+    def __init__(self, *args, adc_step_monitor=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.adc_step_monitor = adc_step_monitor
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
         outputs = model(**inputs)
@@ -57,6 +69,13 @@ class ADCLossTrainer(Trainer):
             loss = loss + delta_reg
         else:
             loss = delta_reg
+
+        # Call ADC monitoring after each batch
+        if self.adc_step_monitor:
+            try:
+                self.adc_step_monitor()
+            except Exception as e:
+                print(f"ADC monitoring error: {e}")
 
         return (loss, outputs) if return_outputs else loss
 
@@ -690,6 +709,33 @@ def main():
     # Add gradient monitoring
     add_gradient_hooks(model)
 
+    # Setup ADC distribution monitoring
+    adc_step_monitor = None
+    if ADC_MONITORING_AVAILABLE:
+        try:
+            logger.info("Setting up ADC distribution monitoring...")
+            adc_plotter, adc_step_monitor = create_adc_training_monitor(
+                output_dir=os.path.join(args.output_dir, "adc_distributions"),
+                plot_every_n_batches=50,  # Generate plots every 50 batches
+                max_layers=3  # Monitor max 3 layers to avoid too many plots
+            )
+            
+            # Add monitoring to key layers
+            monitored_layers = add_adc_monitoring_to_model(
+                model, adc_plotter, 
+                layer_patterns=["attention.output.dense", "intermediate.dense", "output.dense"],
+                max_layers=3
+            )
+            
+            if monitored_layers > 0:
+                logger.info(f"ADC distribution monitoring enabled for {monitored_layers} layers")
+            else:
+                logger.warning("No ADC layers found for monitoring")
+                adc_step_monitor = None
+        except Exception as e:
+            logger.warning(f"Failed to setup ADC monitoring: {e}")
+            adc_step_monitor = None
+
     stats = BertADCConverter.count_adc_qat_layers(model)
     logger.info(f"ADC QAT conversion: {stats['adc_qat_linear']} TiledLinearADC, {stats['regular_linear']} remaining Linear, "
                 f"{stats['total_params']:,} params")
@@ -775,6 +821,7 @@ def main():
         data_collator=default_data_collator,
         compute_metrics=metrics_computer.compute_metrics,
         callbacks=[EpochCallback()],
+        adc_step_monitor=adc_step_monitor,  # Add ADC monitoring
     )
 
     if args.eval_only:
@@ -798,6 +845,16 @@ def main():
 
     logger.info(f"Final F1: {eval_metrics['f1']:.2f}, EM: {eval_metrics['exact_match']:.2f}")
 
+    # Generate final ADC distribution plots
+    if ADC_MONITORING_AVAILABLE and adc_step_monitor:
+        try:
+            logger.info("Generating final ADC distribution evolution plots...")
+            for layer_name in adc_plotter.batch_data.keys():
+                adc_plotter.plot_evolution_over_batches(layer_name, max_batches=50)
+            logger.info(f"ADC distribution plots saved to: {os.path.join(args.output_dir, 'adc_distributions')}")
+        except Exception as e:
+            logger.warning(f"Failed to generate final ADC plots: {e}")
+
     # Save artifacts
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
@@ -820,6 +877,8 @@ def main():
 
     print("Final metrics:", eval_metrics)
     print(f"Artifacts saved to: {args.output_dir}")
+    if ADC_MONITORING_AVAILABLE and adc_step_monitor:
+        print(f"ADC distribution plots: {os.path.join(args.output_dir, 'adc_distributions')}")
 
 
 if __name__ == "__main__":
