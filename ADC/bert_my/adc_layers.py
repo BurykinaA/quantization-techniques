@@ -134,12 +134,14 @@ class ADCQuantizer(nn.Module):
 
         weight_range = 2**(bw-1) - 1  # symmetric weights
 
-        # Delta calculation from equation (3)
-        self.delta = (2 * M * activation_range * weight_range) / (2**ba * k)
-        
-        # Clamp delta to reasonable bounds to prevent gradient explosion
-        self.delta = max(self.delta, 1e-3)  # Minimum bound
-        self.delta = min(self.delta, 100.0)  # Maximum bound to prevent overflow
+        # Analytical delta calculation similar to MLP path
+        if signed_activations:
+            activation_level_magnitude = float(2 ** (bx - 1))
+        else:
+            activation_level_magnitude = float(2 ** bx - 1)
+        weight_level_max = float(2 ** (bw - 1) - 1) if bw > 1 else 1.0
+        denom = float(max((2 ** ba - 1) * k, 1))
+        self.delta = (2.0 * float(M) * activation_level_magnitude * weight_level_max) / denom
 
         # ADC quantization range
         self.na = -(2**(ba-1))  # Negative clipping value
@@ -181,21 +183,19 @@ class ADCQuantizer(nn.Module):
                         self._running_absmax.copy_((1 - self.delta_momentum) * self._running_absmax + self.delta_momentum * current_absmax)
 
             dynamic_delta = torch.clamp(self._running_absmax / max(self.pa, 1), min=1e-6)
-            # Never go below analytical delta
-            dynamic_candidate = torch.maximum(self._delta, dynamic_delta)
 
             # Add MSE loss between dynamic and analytical delta
             if self.training and self.delta_loss_weight > 0:
-                delta_loss = self.delta_loss_weight * F.mse_loss(dynamic_candidate, self._delta)
+                delta_loss = self.delta_loss_weight * F.mse_loss(dynamic_delta, self._delta)
 
             if self.use_delta_anneal:
-                # Epoch-based annealing: linearly anneal from dynamic_candidate to analytical over delta_anneal_epochs
+                # Epoch-based annealing: alpha from 0->1 over delta_anneal_epochs
                 current_epoch = self._current_epoch.item()
                 alpha = min(current_epoch / self.delta_anneal_epochs, 1.0)
-                mixed = (1.0 - alpha) * dynamic_candidate + alpha * self._delta
-                scale_for_quant = torch.maximum(self._delta, mixed)
+                blended = (1.0 - alpha) * dynamic_delta + alpha * self._delta
+                scale_for_quant = torch.clamp(blended, min=1e-3, max=100.0)
             else:
-                scale_for_quant = dynamic_candidate
+                scale_for_quant = torch.clamp(dynamic_delta, min=1e-3, max=100.0)
 
         # Use StraightThroughQuantize with selected delta as scale
         result = StraightThroughQuantize.apply(
@@ -419,7 +419,11 @@ class QATLinearADC(nn.Linear):
                  ba: int = 8,  # ADC bits
                  k: int = 4,   # Hardware design parameter
                  ashift: bool = False,
-                 signed_activations: bool = False):
+                 signed_activations: bool = False,
+                 use_dynamic_delta: bool = True,
+                 use_delta_anneal: bool = True,
+                 delta_loss_weight: float = 0.01,
+                 delta_anneal_epochs: float = 1.0):
         super().__init__(in_features, out_features, bias)
         
         self.bx = bx
@@ -452,8 +456,10 @@ class QATLinearADC(nn.Linear):
             ba=ba,
             k=k,
             signed_activations=signed_activations,
-            delta_anneal_epochs=1.0,  # Anneal over 1 epoch
-            delta_loss_weight=0.01    # Small weight for delta MSE loss
+            use_dynamic_delta=use_dynamic_delta,
+            use_delta_anneal=use_delta_anneal,
+            delta_anneal_epochs=delta_anneal_epochs,
+            delta_loss_weight=delta_loss_weight
         )
         
         # Ashift constant
@@ -554,6 +560,10 @@ class QATLinearADC(nn.Linear):
         if not self.quantization_enabled:
             return F.linear(x, self.weight, self.bias)
 
+        # Store raw inputs for monitoring
+        x_raw = x.clone().detach()
+        w_raw = self.weight.clone().detach()
+
         # Integer-path computation:
         # 1) Build activation codes (per-tensor quantizer)
         act_q = self.activation_quantizer
@@ -572,6 +582,11 @@ class QATLinearADC(nn.Linear):
         if self.ashift:
             code_x = code_x - self.C
 
+        # Store quantized activations (dequantized for comparison)
+        x_quantized = code_x * s_x
+        if not act_q.symmetric:
+            x_quantized = (code_x - zp_x) * s_x
+
         # 2) Build weight codes (per-channel symmetric, channel_dim=0)
         w_q = self.weight_quantizer
         s_w_vec = w_q.scale  # shape: (out_features,)
@@ -581,6 +596,9 @@ class QATLinearADC(nn.Linear):
         qmin_w, qmax_w = w_q.qmin, w_q.qmax
         code_w = torch.clamp(code_w, qmin_w, qmax_w)
 
+        # Store quantized weights (dequantized for comparison)
+        w_quantized = code_w * s_w_b
+
         # 3) Integer MM in code domain
         y_int = F.linear(code_x, code_w, bias=None)
 
@@ -589,10 +607,35 @@ class QATLinearADC(nn.Linear):
         # Store latest delta loss for external aggregation
         self._last_delta_loss = delta_loss
 
+        # Store pipeline data for monitoring if we have a monitor attached
+        if hasattr(self, '_pipeline_monitor') and self._pipeline_monitor is not None:
+            self._pipeline_monitor(
+                layer_name=getattr(self, '_layer_name', 'unknown'),
+                x_raw=x_raw,
+                x_quantized=x_quantized,
+                w_raw=w_raw,
+                w_quantized=w_quantized,
+                before_adc=y_int,
+                after_adc=adc_output
+            )
+
         # 5) Dequantize back to real domain
         # y_real = adc_output * s_x * s_w (per out channel)
         y_real = adc_output * s_x
         y_real = y_real * s_w_vec  # broadcast over out_features
+
+        # A-shift add-back correction (mirror MLP math) using weight codes
+        if self.ashift:
+            # sum over input features for each out channel
+            wq_sum = code_w.sum(dim=1)  # shape: (out_features,)
+            # scale factor s_x * s_w per out channel, broadcasts over batch
+            y_real = y_real + (self.C * s_x) * (s_w_vec * wq_sum)
+
+        # Zero-point correction for asymmetric activations
+        if not act_q.symmetric:
+            # Subtract x_zp * s_x * sum(W_fp) per out channel
+            weight_sum_fp = self.weight.sum(dim=1)  # (out_features,)
+            y_real = y_real - (act_q.zero_point * s_x) * weight_sum_fp
 
         # 6) Add bias if present
         if self.bias is not None:
@@ -610,12 +653,11 @@ class QATLinearADC(nn.Linear):
         scale_for_quant = delta
         delta_loss = torch.tensor(0.0, device=y_int.device, dtype=y_int.dtype)
         
-        # Debug info for first few calls
+        # Debug info for first few calls (reduced output)
         if not hasattr(self, '_debug_count'):
             self._debug_count = 0
-        if self._debug_count < 3:
-            print(f"ADC Debug: Input range=[{y_int.min().item():.6f}, {y_int.max().item():.6f}], "
-                  f"delta={delta:.6f}, na={na}, pa={pa}")
+        if self._debug_count < 2:  # Only first 2 calls per layer
+            print(f"ADC: range=[{y_int.min().item():.2f}, {y_int.max().item():.2f}], delta={delta:.2f}")
             self._debug_count += 1
 
         if self.adc_quantizer.use_dynamic_delta:
@@ -631,22 +673,18 @@ class QATLinearADC(nn.Linear):
                         )
 
             dynamic_delta = torch.clamp(self.adc_quantizer._running_absmax / max(pa, 1), min=1e-6)
-            # Never go below analytical delta
-            dynamic_candidate = torch.maximum(delta, dynamic_delta)
 
             # Add MSE loss between dynamic and analytical delta
             if self.training and self.adc_quantizer.delta_loss_weight > 0:
-                delta_loss = self.adc_quantizer.delta_loss_weight * F.mse_loss(dynamic_candidate, delta)
+                delta_loss = self.adc_quantizer.delta_loss_weight * F.mse_loss(dynamic_delta, delta)
 
             if self.adc_quantizer.use_delta_anneal:
-                # Epoch-based annealing: linearly anneal from dynamic_candidate to analytical over delta_anneal_epochs
                 current_epoch = self.adc_quantizer._current_epoch.item()
                 alpha = min(current_epoch / self.adc_quantizer.delta_anneal_epochs, 1.0)
-                mixed = (1.0 - alpha) * dynamic_candidate + alpha * delta
-                scale_for_quant = torch.maximum(delta, mixed)
-                scale_for_quant = torch.clamp(scale_for_quant, min=1e-3, max=100.0)
+                blended = (1.0 - alpha) * dynamic_delta + alpha * delta
+                scale_for_quant = torch.clamp(blended, min=1e-3, max=100.0)
             else:
-                scale_for_quant = torch.clamp(dynamic_candidate, min=1e-3, max=100.0)
+                scale_for_quant = torch.clamp(dynamic_delta, min=1e-3, max=100.0)
 
         # Apply ADC quantization
         y_adc_codes = torch.round(y_int / scale_for_quant)
@@ -680,6 +718,10 @@ class TiledLinearADC(nn.Module):
                  ashift: bool = False,
                  signed_activations: bool = False,
                  mvm_limit: int = 512,   # ← твой лимит на M (=число входов на колонку IMC)
+                 use_dynamic_delta: bool = True,
+                 use_delta_anneal: bool = True,
+                 delta_loss_weight: float = 0.01,
+                 delta_anneal_epochs: float = 1.0,
                  logger=None,
                  use_jit: bool = False):
         super().__init__()
@@ -712,7 +754,11 @@ class TiledLinearADC(nn.Module):
                     bias=use_bias,
                     bx=bx, bw=bw, ba=ba, k=k,
                     ashift=ashift,
-                    signed_activations=signed_activations,
+                        signed_activations=signed_activations,
+                        use_dynamic_delta=use_dynamic_delta,
+                        use_delta_anneal=use_delta_anneal,
+                        delta_loss_weight=delta_loss_weight,
+                        delta_anneal_epochs=delta_anneal_epochs,
                 )
             )
 

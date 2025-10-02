@@ -6,7 +6,7 @@ import torch
 from adc_distribution_plotter import ADCDistributionPlotter
 
 
-def add_adc_monitoring_to_layer(layer, layer_name: str, plotter: ADCDistributionPlotter):
+def add_adc_monitoring_to_layer(layer, layer_name: str, plotter: ADCDistributionPlotter, monitor_full_pipeline: bool = True):
     """
     Add monitoring to a single QATLinearADC layer
     
@@ -14,38 +14,53 @@ def add_adc_monitoring_to_layer(layer, layer_name: str, plotter: ADCDistribution
         layer: QATLinearADC instance
         layer_name: Name for saving plots
         plotter: ADCDistributionPlotter instance
+        monitor_full_pipeline: If True, monitor the complete pipeline, else just ADC
     """
     if not hasattr(layer, '_adc_quantize_with_loss'):
         print(f"Warning: Layer {layer_name} doesn't have _adc_quantize_with_loss method")
         return
     
-    # Store original method
-    original_method = layer._adc_quantize_with_loss
+    # Store layer name for internal use
+    layer._layer_name = layer_name
     
-    def monitored_adc_quantize(y_int):
-        """Wrapper that captures before/after ADC data"""
-        # Capture input (before ADC)
-        before_adc = y_int.clone().detach()
+    if monitor_full_pipeline:
+        # Set up full pipeline monitoring
+        def pipeline_monitor(layer_name, x_raw, x_quantized, w_raw, w_quantized, before_adc, after_adc):
+            plotter.log_full_quantization_pipeline(
+                layer_name, x_raw, x_quantized, w_raw, w_quantized, before_adc, after_adc
+            )
         
-        # Call original ADC quantization
-        adc_output, delta_loss = original_method(y_int)
+        layer._pipeline_monitor = pipeline_monitor
+        print(f"Added full pipeline monitoring to layer: {layer_name}")
+    else:
+        # Original ADC-only monitoring
+        original_method = layer._adc_quantize_with_loss
         
-        # Capture output (after ADC)
-        after_adc = adc_output.clone().detach()
+        def monitored_adc_quantize(y_int):
+            """Wrapper that captures before/after ADC data"""
+            # Capture input (before ADC)
+            before_adc = y_int.clone().detach()
+            
+            # Call original ADC quantization
+            adc_output, delta_loss = original_method(y_int)
+            
+            # Capture output (after ADC)
+            after_adc = adc_output.clone().detach()
+            
+            # Log to plotter
+            plotter.log_batch_distributions(layer_name, before_adc, after_adc)
+            
+            return adc_output, delta_loss
         
-        # Log to plotter
-        plotter.log_batch_distributions(layer_name, before_adc, after_adc)
-        
-        return adc_output, delta_loss
-    
-    # Replace the method
-    layer._adc_quantize_with_loss = monitored_adc_quantize
-    print(f"Added ADC monitoring to layer: {layer_name}")
+        # Replace the method
+        layer._adc_quantize_with_loss = monitored_adc_quantize
+        print(f"Added ADC-only monitoring to layer: {layer_name}")
 
 
 def add_adc_monitoring_to_model(model, plotter: ADCDistributionPlotter, 
                                layer_patterns: list = None,
-                               max_layers: int = 5):
+                               max_layers: int = 5,
+                               monitor_full_pipeline: bool = True):
     """
     Add ADC monitoring to multiple layers in the model
     
@@ -54,6 +69,7 @@ def add_adc_monitoring_to_model(model, plotter: ADCDistributionPlotter,
         plotter: ADCDistributionPlotter instance
         layer_patterns: List of patterns to match layer names (e.g., ['attention', 'dense'])
         max_layers: Maximum number of layers to monitor (to avoid too many plots)
+        monitor_full_pipeline: If True, monitor complete pipeline, else just ADC
     """
     monitored_count = 0
     
@@ -67,10 +83,10 @@ def add_adc_monitoring_to_model(model, plotter: ADCDistributionPlotter,
                 should_monitor = any(pattern in name for pattern in layer_patterns)
             
             if should_monitor and monitored_count < max_layers:
-                add_adc_monitoring_to_layer(module, name, plotter)
+                add_adc_monitoring_to_layer(module, name, plotter, monitor_full_pipeline)
                 monitored_count += 1
     
-    print(f"Added ADC monitoring to {monitored_count} layers")
+    print(f"Added {'full pipeline' if monitor_full_pipeline else 'ADC-only'} monitoring to {monitored_count} layers")
     return monitored_count
 
 
@@ -105,21 +121,60 @@ def create_adc_training_monitor(output_dir: str = "./adc_monitoring",
             
             # Plot current distributions for all monitored layers
             for layer_name in plotter.batch_data.keys():
-                if plotter.batch_data[layer_name]['before']:
-                    # Get latest data
-                    latest_before = plotter.batch_data[layer_name]['before'][-1]
-                    latest_after = plotter.batch_data[layer_name]['after'][-1]
-                    
-                    # Convert back to tensors for plotting
-                    before_tensor = torch.from_numpy(latest_before)
-                    after_tensor = torch.from_numpy(latest_after)
-                    
+                data = plotter.batch_data[layer_name]
+                
+                # Check if we have full pipeline data
+                if 'x_raw' in data and data['x_raw']:
+                    # Full pipeline plot
                     try:
+                        # Get latest data
+                        x_raw = torch.from_numpy(data['x_raw'][-1])
+                        x_quantized = torch.from_numpy(data['x_quantized'][-1])
+                        w_raw = torch.from_numpy(data['w_raw'][-1])
+                        w_quantized = torch.from_numpy(data['w_quantized'][-1])
+                        before_adc = torch.from_numpy(data['before_adc'][-1])
+                        after_adc = torch.from_numpy(data['after_adc'][-1])
+                        
+                        plotter.plot_full_quantization_pipeline(
+                            layer_name, x_raw, x_quantized, w_raw, w_quantized,
+                            before_adc, after_adc, step=step_count
+                        )
+                    except Exception as e:
+                        print(f"Failed to plot full pipeline for {layer_name}: {e}")
+                        
+                elif 'before_adc' in data and data['before_adc']:
+                    # ADC-only plot
+                    try:
+                        # Get latest data
+                        latest_before = data['before_adc'][-1]
+                        latest_after = data['after_adc'][-1]
+                        
+                        # Convert back to tensors for plotting
+                        before_tensor = torch.from_numpy(latest_before)
+                        after_tensor = torch.from_numpy(latest_after)
+                        
                         plotter.plot_current_batch_distribution(
                             layer_name, before_tensor, after_tensor, step=step_count
                         )
                     except Exception as e:
-                        print(f"Failed to plot {layer_name}: {e}")
+                        print(f"Failed to plot ADC for {layer_name}: {e}")
+                        
+                elif 'before' in data and data['before']:
+                    # Legacy format
+                    try:
+                        # Get latest data
+                        latest_before = data['before'][-1]
+                        latest_after = data['after'][-1]
+                        
+                        # Convert back to tensors for plotting
+                        before_tensor = torch.from_numpy(latest_before)
+                        after_tensor = torch.from_numpy(latest_after)
+                        
+                        plotter.plot_current_batch_distribution(
+                            layer_name, before_tensor, after_tensor, step=step_count
+                        )
+                    except Exception as e:
+                        print(f"Failed to plot legacy format for {layer_name}: {e}")
             
             print(f"ADC plots saved to: {output_dir}")
         

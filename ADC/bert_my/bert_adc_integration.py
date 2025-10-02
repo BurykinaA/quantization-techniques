@@ -41,9 +41,10 @@ logger = logging.getLogger(__name__)
 class ADCLossTrainer(Trainer):
     """Custom trainer that handles ADC delta loss by summing per-layer stored losses"""
 
-    def __init__(self, *args, adc_step_monitor=None, **kwargs):
+    def __init__(self, *args, adc_step_monitor=None, kurtosis_lambda: float = 0.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.adc_step_monitor = adc_step_monitor
+        self.kurtosis_lambda = float(kurtosis_lambda)
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
         outputs = model(**inputs)
@@ -65,10 +66,30 @@ class ADCLossTrainer(Trainer):
                 except Exception:
                     pass
 
+        # W-reshape: kurtosis penalty over ADC QAT linear tiles
+        kurtosis_reg = 0.0
+        if self.kurtosis_lambda > 0.0 and model.training:
+            eps = 1e-6
+            for module in model.modules():
+                try:
+                    # Target QAT ADC linear tiles specifically
+                    if isinstance(module, QATLinearADC):
+                        w = module.weight
+                        if w is None:
+                            continue
+                        w_flat = w.view(-1)
+                        mu = torch.mean(w_flat)
+                        std = torch.std(w_flat) + eps
+                        z = (w_flat - mu) / std
+                        kappa = torch.mean(z ** 4)
+                        kurtosis_reg = kurtosis_reg + kappa
+                except Exception:
+                    pass
+
         if isinstance(loss, torch.Tensor):
-            loss = loss + delta_reg
+            loss = loss + delta_reg + (self.kurtosis_lambda * kurtosis_reg)
         else:
-            loss = delta_reg
+            loss = delta_reg + (self.kurtosis_lambda * kurtosis_reg)
 
         # Call ADC monitoring after each batch
         if self.adc_step_monitor:
@@ -114,6 +135,10 @@ class BertADCConverter:
         signed_activations: bool = False,
         exclude_patterns: Optional[List[str]] = None,
         mvm_limit: int = 256,  # Default to 256 to match CLI default
+        use_dynamic_delta: bool = True,
+        use_delta_anneal: bool = True,
+        delta_loss_weight: float = 0.01,
+        delta_anneal_epochs: float = 1.0,
     ) -> nn.Module:
         """
         Replace all nn.Linear layers in the model with TiledLinearADC, except excluded.
@@ -152,6 +177,10 @@ class BertADCConverter:
                         ashift=ashift,
                         signed_activations=signed_activations,
                         mvm_limit=mvm_limit,
+                        use_dynamic_delta=use_dynamic_delta,
+                        use_delta_anneal=use_delta_anneal,
+                        delta_loss_weight=delta_loss_weight,
+                        delta_anneal_epochs=delta_anneal_epochs,
                     )
                     # Use the load_weights method instead of manual copying
                     adc_qat_layer.load_weights(child_module)
@@ -599,6 +628,7 @@ def main():
     parser.add_argument("--exclude_pooler", action="store_true", help="Exclude pooler from quantization")
     parser.add_argument("--exclude_embeddings", action="store_true", help="Exclude embeddings from quantization")
     parser.add_argument("--mvm_limit", type=int, default=256, help="Memory vector multiplication limit for tiling")
+    parser.add_argument("--fixed_delta", action="store_true", help="Use fixed analytical ADC delta (disable dynamic delta and annealing)")
     parser.add_argument("--adc_resume_dir", type=str, required=False, help="Path to ADC checkpoint dir to resume from")
 
     # Data/Trainer settings (same pipeline as FP)
@@ -616,6 +646,7 @@ def main():
     parser.add_argument("--save_total_limit", type=int, default=2)
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--eval_only", action="store_true", help="Skip training and run evaluation only with analytical ADC delta")
+    parser.add_argument("--kurtosis_lambda", type=float, default=0.0, help="Lambda for W-reshape kurtosis regularization (0 disables)")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -640,6 +671,10 @@ def main():
             signed_activations=False,
             exclude_patterns=["embeddings", "pooler", "qa_outputs"],
             mvm_limit=256,
+            use_dynamic_delta=(not args.fixed_delta),
+            use_delta_anneal=(not args.fixed_delta),
+            delta_loss_weight=(0.0 if args.fixed_delta else 0.01),
+            delta_anneal_epochs=1.0,
         )
 
         # Load the state dict with strict=False to handle quantizer parameters
@@ -698,6 +733,10 @@ def main():
             exclude_patterns=exclude_patterns,
             # When eval_only, force analytical delta (disable dynamics)
             mvm_limit=args.mvm_limit,
+            use_dynamic_delta=(not args.fixed_delta),
+            use_delta_anneal=(not args.fixed_delta),
+            delta_loss_weight=(0.0 if args.fixed_delta else 0.01),
+            delta_anneal_epochs=1.0,
         )
 
     if do_warm_start:
@@ -720,11 +759,12 @@ def main():
                 max_layers=3  # Monitor max 3 layers to avoid too many plots
             )
             
-            # Add monitoring to key layers
+            # Add monitoring to key layers - enable full pipeline monitoring
             monitored_layers = add_adc_monitoring_to_model(
                 model, adc_plotter, 
                 layer_patterns=["attention.output.dense", "intermediate.dense", "output.dense"],
-                max_layers=3
+                max_layers=3,
+                monitor_full_pipeline=True  # Enable full pipeline monitoring
             )
             
             if monitored_layers > 0:
@@ -822,6 +862,7 @@ def main():
         compute_metrics=metrics_computer.compute_metrics,
         callbacks=[EpochCallback()],
         adc_step_monitor=adc_step_monitor,  # Add ADC monitoring
+        kurtosis_lambda=args.kurtosis_lambda,
     )
 
     if args.eval_only:
