@@ -630,6 +630,7 @@ def main():
     parser.add_argument("--mvm_limit", type=int, default=256, help="Memory vector multiplication limit for tiling")
     parser.add_argument("--fixed_delta", action="store_true", help="Use fixed analytical ADC delta (disable dynamic delta and annealing)")
     parser.add_argument("--adc_resume_dir", type=str, required=False, help="Path to ADC checkpoint dir to resume from")
+    parser.add_argument("--disable_adc_monitoring", action="store_true", help="Disable ADC distribution monitoring and pipeline logs")
 
     # Data/Trainer settings (same pipeline as FP)
     parser.add_argument("--num_train_epochs", type=float, default=1.0)
@@ -750,7 +751,7 @@ def main():
 
     # Setup ADC distribution monitoring
     adc_step_monitor = None
-    if ADC_MONITORING_AVAILABLE:
+    if ADC_MONITORING_AVAILABLE and (not args.disable_adc_monitoring):
         try:
             logger.info("Setting up ADC distribution monitoring...")
             adc_plotter, adc_step_monitor = create_adc_training_monitor(

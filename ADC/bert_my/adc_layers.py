@@ -653,12 +653,7 @@ class QATLinearADC(nn.Linear):
         scale_for_quant = delta
         delta_loss = torch.tensor(0.0, device=y_int.device, dtype=y_int.dtype)
         
-        # Debug info for first few calls (reduced output)
-        if not hasattr(self, '_debug_count'):
-            self._debug_count = 0
-        if self._debug_count < 2:  # Only first 2 calls per layer
-            print(f"ADC: range=[{y_int.min().item():.2f}, {y_int.max().item():.2f}], delta={delta:.2f}")
-            self._debug_count += 1
+        # Debug logging removed per user request
 
         if self.adc_quantizer.use_dynamic_delta:
             with torch.no_grad():
