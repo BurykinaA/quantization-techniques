@@ -121,6 +121,20 @@ class EpochCallback(TrainerCallback):
             self._set_epoch_recursive(child, epoch)
 
 
+class EvalMetricsLogger(TrainerCallback):
+    """Callback to log F1/EM at each evaluation."""
+
+    def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, metrics=None, **kwargs):
+        try:
+            if metrics is None:
+                return
+            f1 = metrics.get("eval_f1", metrics.get("f1"))
+            em = metrics.get("eval_exact_match", metrics.get("exact_match"))
+            if f1 is not None and em is not None:
+                logger.info(f"Eval F1: {float(f1):.2f}, EM: {float(em):.2f}")
+        except Exception:
+            pass
+
 class BertADCConverter:
     """Convert BERT model to use ADC QAT layers for QA."""
 
@@ -819,7 +833,7 @@ def main():
             save_strategy="steps",
             save_steps=args.save_steps,
             save_total_limit=args.save_total_limit,
-            eval_strategy="steps",
+            evaluation_strategy="steps",
             eval_steps=args.eval_steps,
             fp16=args.fp16,
             report_to="none",
@@ -841,7 +855,7 @@ def main():
             logging_steps=50,
             save_steps=args.save_steps,
             save_total_limit=args.save_total_limit,
-            eval_strategy="steps",
+            evaluation_strategy="steps",
             eval_steps=args.eval_steps,
             fp16=args.fp16,
             report_to="none",
@@ -861,7 +875,7 @@ def main():
         tokenizer=tokenizer,
         data_collator=default_data_collator,
         compute_metrics=metrics_computer.compute_metrics,
-        callbacks=[EpochCallback()],
+        callbacks=[EpochCallback(), EvalMetricsLogger()],
         adc_step_monitor=adc_step_monitor,  # Add ADC monitoring
         kurtosis_lambda=args.kurtosis_lambda,
     )
