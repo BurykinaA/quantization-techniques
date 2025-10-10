@@ -13,6 +13,7 @@ import evaluate
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
+    AutoConfig,
     BertForQuestionAnswering,
     TrainingArguments,
     Trainer,
@@ -132,6 +133,35 @@ class BertQATConverter:
             if hasattr(module, "parameters"):
                 counts["total_params"] += sum(p.numel() for p in module.parameters())
         return counts
+def _load_state_dict_from_dir(model_dir: str) -> Dict[str, torch.Tensor]:
+    """Load a HF checkpoint state dict from a directory supporting safetensors and PT."""
+    safetensors_path = os.path.join(model_dir, "model.safetensors")
+    pytorch_bin_path = os.path.join(model_dir, "pytorch_model.bin")
+
+    # Try safetensors first
+    try:
+        from safetensors.torch import load_file as safe_load_file  # type: ignore
+        if os.path.isfile(safetensors_path):
+            return safe_load_file(safetensors_path)
+    except Exception:
+        pass
+
+    # Fallback to PyTorch bin
+    if os.path.isfile(pytorch_bin_path):
+        return torch.load(pytorch_bin_path, map_location="cpu")
+
+    raise FileNotFoundError(
+        f"No model state file found in {model_dir} (expected 'model.safetensors' or 'pytorch_model.bin')"
+    )
+
+
+def _is_qat_state_dict(state_dict: Dict[str, torch.Tensor]) -> bool:
+    """Heuristically detect presence of QAT parameters in a state dict."""
+    for key in state_dict.keys():
+        if ".weight_quantizer." in key or ".activation_quantizer." in key:
+            return True
+    return False
+
 
 
 def find_last_checkpoint_dir(fp_output_dir: str) -> str:
@@ -384,9 +414,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(last_ckpt, use_fast=True)
     tokenizer.padding_side = "right"
 
-    # Load fine-tuned FP model and convert to QAT
-    model = BertForQuestionAnswering.from_pretrained(last_ckpt)
-
+    # Build exclude patterns from flags
     exclude_patterns = []
     if args.exclude_embeddings:
         exclude_patterns.append("embeddings")
@@ -398,12 +426,44 @@ def main():
         # Default exclusions to mirror typical practice
         exclude_patterns = ["embeddings", "pooler", "qa_outputs"]
 
-    model = BertQATConverter.replace_linear_with_qat(
-        model,
-        weight_bits=args.weight_bits,
-        activation_bits=args.activation_bits,
-        exclude_patterns=exclude_patterns,
-    )
+    # Decide how to initialize model depending on checkpoint contents
+    model = None
+    qat_sd: Optional[Dict[str, torch.Tensor]] = None
+    try:
+        cand_state_dict = _load_state_dict_from_dir(last_ckpt)
+        if _is_qat_state_dict(cand_state_dict):
+            qat_sd = cand_state_dict
+            logger.info("Detected QAT checkpoint: will initialize QAT architecture and load full state dict.")
+        else:
+            logger.info("Checkpoint appears FP (no QAT keys found): will load FP then convert to QAT.")
+    except Exception:
+        # If we cannot read the raw state dict, fallback to FP load path
+        pass
+
+    if qat_sd is not None:
+        # Initialize from config (no weights), then swap to QAT modules, then load QAT weights
+        config = AutoConfig.from_pretrained(last_ckpt)
+        model = BertForQuestionAnswering(config)
+        model = BertQATConverter.replace_linear_with_qat(
+            model,
+            weight_bits=args.weight_bits,
+            activation_bits=args.activation_bits,
+            exclude_patterns=exclude_patterns,
+        )
+        load_res = model.load_state_dict(qat_sd, strict=False)
+        if getattr(load_res, "missing_keys", None):
+            logger.warning(f"Missing keys when loading QAT checkpoint: {len(load_res.missing_keys)}")
+        if getattr(load_res, "unexpected_keys", None):
+            logger.warning(f"Unexpected keys when loading QAT checkpoint: {len(load_res.unexpected_keys)}")
+    else:
+        # Load fine-tuned FP model and convert to QAT
+        model = BertForQuestionAnswering.from_pretrained(last_ckpt)
+        model = BertQATConverter.replace_linear_with_qat(
+            model,
+            weight_bits=args.weight_bits,
+            activation_bits=args.activation_bits,
+            exclude_patterns=exclude_patterns,
+        )
 
     stats = BertQATConverter.count_qat_layers(model)
     logger.info(f"QAT conversion: {stats['qat_linear']} QATLinear, {stats['regular_linear']} remaining Linear, "
