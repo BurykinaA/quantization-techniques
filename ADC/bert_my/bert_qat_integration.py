@@ -163,6 +163,59 @@ def _is_qat_state_dict(state_dict: Dict[str, torch.Tensor]) -> bool:
     return False
 
 
+def _coerce_state_dict_to_model_shapes(model: nn.Module, state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    """Return a copy of state_dict with tensors reshaped/dropped to fit model shapes.
+
+    Rules:
+    - If shapes match: keep as-is.
+    - If both are 1D and one has length 1 and the other length N:
+      - If model wants [1] and checkpoint has [N]: use mean to reduce to [1].
+      - If model wants [N] and checkpoint has [1]: expand to [N].
+    - Otherwise: drop the key so load_state_dict ignores it.
+    """
+    model_sd = model.state_dict()
+    fixed: Dict[str, torch.Tensor] = {}
+    adapted_count = 0
+    dropped_count = 0
+
+    for key, tensor in state_dict.items():
+        if key not in model_sd:
+            # Let strict=False ignore unexpected keys; we don't include them
+            continue
+        target = model_sd[key]
+
+        if tuple(tensor.shape) == tuple(target.shape):
+            fixed[key] = tensor.to(dtype=target.dtype)
+            continue
+
+        # Handle common 1D per-channel vs per-tensor mismatch
+        if tensor.ndim == 1 and target.ndim == 1:
+            src_len = int(tensor.shape[0])
+            dst_len = int(target.shape[0])
+            if dst_len == 1 and src_len > 1:
+                # Reduce many->one via mean
+                reduced = tensor.float().mean().reshape(1).to(dtype=target.dtype)
+                fixed[key] = reduced
+                adapted_count += 1
+                continue
+            if src_len == 1 and dst_len > 1:
+                # Broadcast one->many
+                expanded = tensor.reshape(1).to(dtype=target.dtype).expand(dst_len)
+                fixed[key] = expanded
+                adapted_count += 1
+                continue
+
+        # As a safe default, drop mismatched keys
+        dropped_count += 1
+
+    if adapted_count or dropped_count:
+        logger.info(
+            f"Adjusted state_dict shapes for loading: adapted={adapted_count}, dropped={dropped_count}"
+        )
+
+    return fixed
+
+
 
 def find_last_checkpoint_dir(fp_output_dir: str) -> str:
     """
@@ -450,7 +503,8 @@ def main():
             activation_bits=args.activation_bits,
             exclude_patterns=exclude_patterns,
         )
-        load_res = model.load_state_dict(qat_sd, strict=False)
+        qat_sd_fixed = _coerce_state_dict_to_model_shapes(model, qat_sd)
+        load_res = model.load_state_dict(qat_sd_fixed, strict=False)
         if getattr(load_res, "missing_keys", None):
             logger.warning(f"Missing keys when loading QAT checkpoint: {len(load_res.missing_keys)}")
         if getattr(load_res, "unexpected_keys", None):
