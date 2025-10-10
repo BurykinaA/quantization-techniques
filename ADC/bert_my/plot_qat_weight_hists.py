@@ -37,6 +37,48 @@ def load_qa_model_robust(checkpoint_dir: str) -> BertForQuestionAnswering:
         return model
 
 
+def load_state_dict_maybe_sharded(checkpoint_dir: str) -> Dict[str, torch.Tensor]:
+    """Load state dict from pytorch_model.bin or model.safetensors (single-file)."""
+    bin_path = os.path.join(checkpoint_dir, 'pytorch_model.bin')
+    safe_path = os.path.join(checkpoint_dir, 'model.safetensors')
+    if os.path.exists(bin_path):
+        return torch.load(bin_path, map_location='cpu')
+    if os.path.exists(safe_path):
+        try:
+            from safetensors.torch import load_file as safe_load_file  # type: ignore
+        except Exception as e:
+            raise RuntimeError(f"safetensors present but not loadable: {e}")
+        return safe_load_file(safe_path)
+    raise FileNotFoundError(f"No model weights found in {checkpoint_dir}")
+
+
+def build_qat_model_from_checkpoint(checkpoint_dir: str, weight_bits: int, activation_bits: int,
+                                    exclude_patterns=None) -> BertForQuestionAnswering:
+    """Rebuild a model with QATLinear wrappers and load state dict with strict=False."""
+    if exclude_patterns is None:
+        exclude_patterns = ["embeddings", "pooler", "qa_outputs"]
+
+    # Import converter locally to avoid circulars if script is moved
+    from bert_qat_integration import BertQATConverter  # type: ignore
+
+    config = AutoConfig.from_pretrained(checkpoint_dir)
+    base = BertForQuestionAnswering(config)
+    model_qat = BertQATConverter.replace_linear_with_qat(
+        base,
+        weight_bits=weight_bits,
+        activation_bits=activation_bits,
+        exclude_patterns=exclude_patterns,
+    )
+
+    state = load_state_dict_maybe_sharded(checkpoint_dir)
+    missing, unexpected = model_qat.load_state_dict(state, strict=False)
+    if unexpected:
+        logger.info(f"Ignored {len(unexpected)} unexpected keys when loading QAT model (ok)")
+    if missing:
+        logger.info(f"Missing {len(missing)} keys when loading QAT model (random init for those)")
+    return model_qat
+
+
 def collect_linear_weights(model: nn.Module) -> Dict[str, torch.Tensor]:
     """Return a mapping from module name to its weight tensor for all Linear-like layers."""
     weights: Dict[str, torch.Tensor] = {}
@@ -142,6 +184,8 @@ def main():
     parser.add_argument('--out_dir', type=str, default='./qat_weight_hists', help='Directory to save histograms')
     parser.add_argument('--bins', type=int, default=100, help='Number of bins in histograms (float/dequant modes)')
     parser.add_argument('--plot_int_codes', action='store_true', help='Plot integer code histograms for QATLinear weights')
+    parser.add_argument('--weight_bits', type=int, default=8, help='Weight bits for QAT reconstruction (if needed)')
+    parser.add_argument('--activation_bits', type=int, default=8, help='Activation bits for QAT reconstruction (if needed)')
     args = parser.parse_args()
 
     logger.info(f"Loading model from {args.checkpoint_dir}")
@@ -150,6 +194,26 @@ def main():
     if args.plot_int_codes:
         logger.info("Collecting QATLinear modules for integer-code histograms")
         qat_modules = collect_qat_linear_modules(model)
+        if not qat_modules:
+            # Auto-detect: if checkpoint contains quantizer keys, rebuild QAT model and reload
+            try:
+                state = load_state_dict_maybe_sharded(args.checkpoint_dir)
+                has_qat_keys = any('quantizer' in k for k in state.keys())
+            except Exception:
+                has_qat_keys = False
+
+            if has_qat_keys:
+                logger.info("No QATLinear modules in loaded model; reconstructing QAT architecture and reloading weights...")
+                try:
+                    model = build_qat_model_from_checkpoint(
+                        args.checkpoint_dir,
+                        weight_bits=args.weight_bits,
+                        activation_bits=args.activation_bits,
+                    )
+                    qat_modules = collect_qat_linear_modules(model)
+                except Exception as e:
+                    logger.warning(f"Failed to reconstruct QAT model: {e}")
+
         if not qat_modules:
             logger.warning("No QATLinear modules found; cannot plot integer codes. Did you run a QAT model?")
         else:
