@@ -26,6 +26,51 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class KurtosisLossTrainer(Trainer):
+    """Custom Trainer that adds kurtosis regularization over QATLinear weights."""
+
+    def __init__(self, *args, kurtosis_lambda: float = 0.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.kurtosis_lambda = float(kurtosis_lambda)
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
+        outputs = model(**inputs)
+
+        # Handle standard HF output structures
+        if isinstance(outputs, tuple):
+            loss = outputs[0] if hasattr(outputs[0], 'loss') else outputs[0]
+        elif isinstance(outputs, dict):
+            loss = outputs.get('loss', None)
+        else:
+            loss = outputs
+
+        # Kurtosis penalty over QATLinear weights (W-reshape regularization analogue)
+        kurtosis_reg = 0.0
+        if self.kurtosis_lambda > 0.0 and model.training:
+            eps = 1e-6
+            for module in model.modules():
+                try:
+                    if isinstance(module, QATLinear):
+                        w = module.weight
+                        if w is None:
+                            continue
+                        w_flat = w.view(-1)
+                        mu = torch.mean(w_flat)
+                        std = torch.std(w_flat) + eps
+                        z = (w_flat - mu) / std
+                        kappa = torch.mean(z ** 4)
+                        kurtosis_reg = kurtosis_reg + kappa
+                except Exception:
+                    pass
+
+        if isinstance(loss, torch.Tensor):
+            loss = loss + (self.kurtosis_lambda * kurtosis_reg)
+        else:
+            loss = (self.kurtosis_lambda * kurtosis_reg)
+
+        return (loss, outputs) if return_outputs else loss
+
+
 class BertQATConverter:
     """Convert BERT model to use QAT layers for QA."""
 
@@ -322,6 +367,7 @@ def main():
     parser.add_argument("--eval_steps", type=int, default=200)
     parser.add_argument("--save_steps", type=int, default=500)
     parser.add_argument("--fp16", action="store_true")
+    parser.add_argument("--kurtosis_lambda", type=float, default=0.0, help="Lambda for W-reshape kurtosis regularization (0 disables)")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -417,7 +463,8 @@ def main():
             fp16=args.fp16,
         )
 
-    trainer = Trainer(
+    #trainer = Trainer(
+    trainer = KurtosisLossTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,
@@ -425,6 +472,7 @@ def main():
         tokenizer=tokenizer,
         data_collator=default_data_collator,
         compute_metrics=metrics_computer.compute_metrics,
+        kurtosis_lambda=args.kurtosis_lambda,
     )
 
     logger.info("Starting QAT fine-tuning with HF Trainer...")
