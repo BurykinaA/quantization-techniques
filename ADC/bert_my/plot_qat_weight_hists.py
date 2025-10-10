@@ -152,6 +152,61 @@ def plot_qat_int_code_histograms(qat_modules: Dict[str, nn.Module], out_dir: str
             logger.info(f"Saved integer-code histogram for {name} -> {out_path}")
 
 
+def plot_int_codes_from_state_dict(state: Dict[str, torch.Tensor], out_dir: str, weight_bits: int = 8) -> None:
+    os.makedirs(out_dir, exist_ok=True)
+    qmin = -(2 ** (weight_bits - 1))
+    qmax = 2 ** (weight_bits - 1) - 1
+    summary_path = os.path.join(out_dir, 'summary_int_codes_from_state.txt')
+    with open(summary_path, 'w') as fsum:
+        # Find all base names that have both .weight and .weight_quantizer.scale
+        weight_keys = [k for k in state.keys() if k.endswith('.weight')]
+        num_plotted = 0
+        for wkey in sorted(weight_keys):
+            base = wkey[:-len('.weight')]
+            scale_key = base + '.weight_quantizer.scale'
+            if scale_key not in state:
+                continue
+            w = state[wkey].detach().cpu()
+            scale = state[scale_key].detach().cpu().view(-1, 1)
+            # zero_point may exist even for symmetric; treat as 0 if not present
+            zp_key = base + '.weight_quantizer.zero_point'
+            if zp_key in state:
+                zp = state[zp_key].detach().cpu().view(-1, 1)
+            else:
+                zp = torch.zeros_like(scale)
+
+            try:
+                q_codes = torch.round(w / scale + zp)
+            except Exception:
+                # Fallback to symmetric if shapes mismatch
+                q_codes = torch.round(w / scale)
+            q_codes = torch.clamp(q_codes, qmin, qmax).to(torch.int32)
+
+            # Only plot Linear-like matrices (2D) with matching per-channel dim
+            if w.dim() != 2 or scale.numel() not in (w.shape[0], w.shape[1]):
+                continue
+
+            safe_name = base.replace('.', '_')
+            codes_flat = q_codes.view(-1)
+            bins = int(qmax - qmin + 1)
+            plt.figure(figsize=(6, 4))
+            plt.hist(codes_flat.numpy(), bins=bins, range=(qmin - 0.5, qmax + 0.5), color='#ff7f0e', edgecolor='black', linewidth=0.2)
+            plt.title(f"{base} (int codes)")
+            plt.xlabel('Integer code')
+            plt.ylabel('Count')
+            out_path = os.path.join(out_dir, f"{safe_name}_intcodes.png")
+            plt.tight_layout()
+            plt.savefig(out_path, dpi=150)
+            plt.close()
+
+            unique_codes = torch.unique(codes_flat, sorted=True)
+            fsum.write(f"{base}: numel={codes_flat.numel()} unique_levels={len(unique_codes)} range=[{int(unique_codes.min())},{int(unique_codes.max())}]\n")
+            logger.info(f"Saved integer-code histogram for {base} -> {out_path}")
+            num_plotted += 1
+
+    logger.info(f"Plotted integer-code histograms from state dict for {num_plotted} layers")
+
+
 def plot_histograms(weights: Dict[str, torch.Tensor], out_dir: str, bins: int = 100) -> None:
     os.makedirs(out_dir, exist_ok=True)
     summary_path = os.path.join(out_dir, 'summary.txt')
@@ -194,32 +249,25 @@ def main():
     if args.plot_int_codes:
         logger.info("Collecting QATLinear modules for integer-code histograms")
         qat_modules = collect_qat_linear_modules(model)
-        if not qat_modules:
-            # Auto-detect: if checkpoint contains quantizer keys, rebuild QAT model and reload
-            try:
-                state = load_state_dict_maybe_sharded(args.checkpoint_dir)
-                has_qat_keys = any('quantizer' in k for k in state.keys())
-            except Exception:
-                has_qat_keys = False
+        # First preference: compute directly from state dict (robust to shape-init issues)
+        try:
+            state = load_state_dict_maybe_sharded(args.checkpoint_dir)
+            has_qat_keys = any('weight_quantizer.scale' in k for k in state.keys())
+        except Exception as e:
+            has_qat_keys = False
+            state = None
 
-            if has_qat_keys:
-                logger.info("No QATLinear modules in loaded model; reconstructing QAT architecture and reloading weights...")
-                try:
-                    model = build_qat_model_from_checkpoint(
-                        args.checkpoint_dir,
-                        weight_bits=args.weight_bits,
-                        activation_bits=args.activation_bits,
-                    )
-                    qat_modules = collect_qat_linear_modules(model)
-                except Exception as e:
-                    logger.warning(f"Failed to reconstruct QAT model: {e}")
-
-        if not qat_modules:
-            logger.warning("No QATLinear modules found; cannot plot integer codes. Did you run a QAT model?")
+        if has_qat_keys and state is not None:
+            logger.info(f"Saving integer-code histograms (from state dict) to {args.out_dir}")
+            plot_int_codes_from_state_dict(state, args.out_dir, weight_bits=args.weight_bits)
         else:
-            logger.info(f"Found {len(qat_modules)} QATLinear modules")
-            logger.info(f"Saving integer-code histograms to {args.out_dir}")
-            plot_qat_int_code_histograms(qat_modules, args.out_dir)
+            # Fallback to live model path
+            if not qat_modules:
+                logger.warning("No QATLinear modules found; cannot plot integer codes.")
+            else:
+                logger.info(f"Found {len(qat_modules)} QATLinear modules")
+                logger.info(f"Saving integer-code histograms to {args.out_dir}")
+                plot_qat_int_code_histograms(qat_modules, args.out_dir)
     else:
         logger.info("Collecting weights from linear/QATLinear layers (float weights)")
         weights = collect_linear_weights(model)
