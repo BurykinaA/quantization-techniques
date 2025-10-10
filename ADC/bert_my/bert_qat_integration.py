@@ -345,7 +345,7 @@ def main():
     parser = argparse.ArgumentParser()
     # Where to load FP model checkpoint from (dir with checkpoint-* or the checkpoint dir itself)
     parser.add_argument("--fp_checkpoint_dir", type=str, required=True, help="Path to FP fine-tuning output dir or a specific checkpoint-* dir")
-    parser.add_argument("--output_dir", type=str, default="./outputs_qa_qat")
+    parser.add_argument("--output_dir", type=str, default="./outputs_qa_qat_w_reshape")
     parser.add_argument("--seed", type=int, default=42)
 
     # QAT settings
@@ -360,14 +360,14 @@ def main():
     parser.add_argument("--per_device_train_batch_size", type=int, default=32)
     parser.add_argument("--per_device_eval_batch_size", type=int, default=32)
     parser.add_argument("--learning_rate", type=float, default=3e-5)
-    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
     parser.add_argument("--max_length", type=int, default=384)
     parser.add_argument("--doc_stride", type=int, default=128)
-    parser.add_argument("--eval_steps", type=int, default=200)
-    parser.add_argument("--save_steps", type=int, default=500)
+    parser.add_argument("--eval_steps", type=int, default=1000)
+    parser.add_argument("--save_steps", type=int, default=1000)
     parser.add_argument("--fp16", action="store_true")
-    parser.add_argument("--kurtosis_lambda", type=float, default=0.0, help="Lambda for W-reshape kurtosis regularization (0 disables)")
+    parser.add_argument("--kurtosis_lambda", type=float, default=0.05, help="Lambda for W-reshape kurtosis regularization (0 disables)")
     args = parser.parse_args()
 
     set_seed(args.seed)
