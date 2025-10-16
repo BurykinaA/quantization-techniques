@@ -140,7 +140,7 @@ class ADCQuantizer(nn.Module):
         else:
             activation_level_magnitude = float(2 ** bx - 1)
         weight_level_max = float(2 ** (bw - 1) - 1) if bw > 1 else 1.0
-        denom = float(max((2 ** ba - 1) * k, 1))
+        denom = float((2 ** ba) * k)
         self.delta = (2.0 * float(M) * activation_level_magnitude * weight_level_max) / denom
 
         # ADC quantization range
