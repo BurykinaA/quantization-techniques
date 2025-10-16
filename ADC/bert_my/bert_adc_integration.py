@@ -760,6 +760,11 @@ def main():
         except Exception as e:
             logger.warning(f"Quantizer warm-start failed: {e}")
     
+    # Enable gradient checkpointing to reduce memory usage
+    if hasattr(model, 'gradient_checkpointing_enable'):
+        model.gradient_checkpointing_enable()
+        logger.info("Gradient checkpointing enabled to reduce memory usage")
+    
     # Add gradient monitoring
     add_gradient_hooks(model)
 
