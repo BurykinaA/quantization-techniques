@@ -227,6 +227,14 @@ class LearnableQuantizer(nn.Module):
         self.per_channel = per_channel
         self.channel_dim = channel_dim
         
+        # Quantization levels (MUST be defined BEFORE using in init_zp calculation)
+        if symmetric:
+            self.qmin = -(2 ** (num_bits - 1))
+            self.qmax = 2 ** (num_bits - 1) - 1
+        else:
+            self.qmin = 0
+            self.qmax = 2 ** num_bits - 1
+        
         # Initialize scale parameter with correct shape
         # Use smaller initial scale for better precision (will be updated during training)
         init_scale = 0.01 if symmetric else 0.02  # Smaller for symmetric, slightly larger for asymmetric
@@ -251,14 +259,6 @@ class LearnableQuantizer(nn.Module):
         else:
             self.register_buffer('zero_point', torch.zeros(1))
             self._zp_initialized = True
-        
-        # Quantization levels
-        if symmetric:
-            self.qmin = -(2 ** (num_bits - 1))
-            self.qmax = 2 ** (num_bits - 1) - 1
-        else:
-            self.qmin = 0
-            self.qmax = 2 ** num_bits - 1
     
     def _initialize_parameters(self, x: torch.Tensor):
         """Initialize parameters with correct shape on first forward pass"""
