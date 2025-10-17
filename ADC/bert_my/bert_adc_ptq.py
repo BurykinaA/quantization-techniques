@@ -346,6 +346,12 @@ def main():
         desc="Preparing calibration data",
     )
     
+    # Keep only the columns needed for model forward pass
+    calibration_dataset.set_format(
+        type="torch",
+        columns=["input_ids", "attention_mask", "token_type_ids"]
+    )
+    
     calibration_loader = DataLoader(
         calibration_dataset,
         batch_size=args.calibration_batch_size,
@@ -374,15 +380,22 @@ def main():
     logger.info("="*80)
     
     eval_examples = raw["validation"]
-    eval_dataset = eval_examples.map(
+    eval_dataset_full = eval_examples.map(
         lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
         batched=True,
         remove_columns=eval_examples.column_names,
         desc="Preparing validation data",
     )
     
+    # Create a copy for DataLoader with only model input columns
+    eval_dataset_for_loader = eval_dataset_full.remove_columns(
+        [col for col in eval_dataset_full.column_names 
+         if col not in ["input_ids", "attention_mask", "token_type_ids"]]
+    )
+    eval_dataset_for_loader.set_format(type="torch")
+    
     eval_loader = DataLoader(
-        eval_dataset,
+        eval_dataset_for_loader,
         batch_size=args.eval_batch_size,
         shuffle=False,
         collate_fn=default_data_collator,
@@ -408,10 +421,10 @@ def main():
     all_start_logits = np.concatenate(all_start_logits, axis=0)
     all_end_logits = np.concatenate(all_end_logits, axis=0)
     
-    # Post-process predictions
+    # Post-process predictions (use full dataset with all metadata)
     formatted_predictions = postprocess_qa_predictions(
         examples=eval_examples,
-        features=eval_dataset,
+        features=eval_dataset_full,
         predictions=(all_start_logits, all_end_logits),
     )
     
