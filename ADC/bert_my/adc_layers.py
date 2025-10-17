@@ -134,9 +134,11 @@ class ADCQuantizer(nn.Module):
 
         weight_range = 2**(bw-1) - 1  # symmetric weights
 
-        # Analytical delta calculation similar to MLP path
+        # Analytical delta calculation from paper Equation (3)
+        # Unsigned: ∆a = 2M(2^bx - 1)(2^(bw-1) - 1) / (2^ba × k)
+        # Signed:   ∆a = 2M(2^(bx-1) - 1)(2^(bw-1) - 1) / (2^ba × k)
         if signed_activations:
-            activation_level_magnitude = float(2 ** (bx - 1))
+            activation_level_magnitude = float(2 ** (bx - 1) - 1)  # Fixed: added -1
         else:
             activation_level_magnitude = float(2 ** bx - 1)
         weight_level_max = float(2 ** (bw - 1) - 1) if bw > 1 else 1.0
@@ -303,6 +305,11 @@ class LearnableQuantizer(nn.Module):
             # Check input for NaN/inf
             if torch.isnan(x).any() or torch.isinf(x).any():
                 print("Warning: NaN/inf in quantizer input, skipping parameter update")
+                return
+            
+            # Skip update if input is all zeros (dead activations)
+            if x.abs().max() < 1e-6:
+                # print("Warning: Input is all zeros, skipping quantizer update")
                 return
                 
             if self.per_channel:
