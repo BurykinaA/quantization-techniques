@@ -20,7 +20,6 @@ from transformers import (
     AutoTokenizer,
     AutoConfig,
     BertForQuestionAnswering,
-    default_data_collator,
     set_seed,
 )
 from torch.utils.data import DataLoader
@@ -346,17 +345,21 @@ def main():
         desc="Preparing calibration data",
     )
     
-    # Keep only the columns needed for model forward pass
-    calibration_dataset.set_format(
-        type="torch",
-        columns=["input_ids", "attention_mask", "token_type_ids"]
-    )
+    # Custom collator to only take model inputs
+    def calibration_collator(features):
+        batch = {
+            "input_ids": torch.tensor([f["input_ids"] for f in features]),
+            "attention_mask": torch.tensor([f["attention_mask"] for f in features]),
+        }
+        if "token_type_ids" in features[0]:
+            batch["token_type_ids"] = torch.tensor([f["token_type_ids"] for f in features])
+        return batch
     
     calibration_loader = DataLoader(
         calibration_dataset,
         batch_size=args.calibration_batch_size,
         shuffle=False,
-        collate_fn=default_data_collator,
+        collate_fn=calibration_collator,
     )
     
     # Run calibration
@@ -387,18 +390,21 @@ def main():
         desc="Preparing validation data",
     )
     
-    # Create a copy for DataLoader with only model input columns
-    eval_dataset_for_loader = eval_dataset_full.remove_columns(
-        [col for col in eval_dataset_full.column_names 
-         if col not in ["input_ids", "attention_mask", "token_type_ids"]]
-    )
-    eval_dataset_for_loader.set_format(type="torch")
+    # Custom collator for evaluation (only model inputs)
+    def eval_collator(features):
+        batch = {
+            "input_ids": torch.tensor([f["input_ids"] for f in features]),
+            "attention_mask": torch.tensor([f["attention_mask"] for f in features]),
+        }
+        if "token_type_ids" in features[0]:
+            batch["token_type_ids"] = torch.tensor([f["token_type_ids"] for f in features])
+        return batch
     
     eval_loader = DataLoader(
-        eval_dataset_for_loader,
+        eval_dataset_full,
         batch_size=args.eval_batch_size,
         shuffle=False,
-        collate_fn=default_data_collator,
+        collate_fn=eval_collator,
     )
     
     logger.info("Running evaluation...")
