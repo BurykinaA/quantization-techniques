@@ -226,21 +226,25 @@ class LearnableQuantizer(nn.Module):
         self.channel_dim = channel_dim
         
         # Initialize scale parameter with correct shape
+        # Use smaller initial scale for better precision (will be updated during training)
+        init_scale = 0.01 if symmetric else 0.02  # Smaller for symmetric, slightly larger for asymmetric
         if per_channel:
             # We'll set the correct size during the first forward pass
-            self.register_parameter('scale', nn.Parameter(torch.ones(1) * 0.1))  # Better initial value
+            self.register_parameter('scale', nn.Parameter(torch.ones(1) * init_scale))
             self._scale_initialized = False
         else:
-            self.register_parameter('scale', nn.Parameter(torch.ones(1) * 0.1))  # Better initial value
+            self.register_parameter('scale', nn.Parameter(torch.ones(1) * init_scale))
             self._scale_initialized = True
         
         if not symmetric:
             # Learnable zero point for asymmetric quantization
+            # Initialize to middle of range for better coverage of negative values
+            init_zp = (self.qmax + self.qmin) / 2.0
             if per_channel:
-                self.register_parameter('zero_point', nn.Parameter(torch.zeros(1)))
+                self.register_parameter('zero_point', nn.Parameter(torch.ones(1) * init_zp))
                 self._zp_initialized = False
             else:
-                self.register_parameter('zero_point', nn.Parameter(torch.zeros(1)))
+                self.register_parameter('zero_point', nn.Parameter(torch.ones(1) * init_zp))
                 self._zp_initialized = True
         else:
             self.register_buffer('zero_point', torch.zeros(1))
