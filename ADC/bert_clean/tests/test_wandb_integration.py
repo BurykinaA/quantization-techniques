@@ -38,7 +38,7 @@ print()
 
 # 4. Test model conversion
 print("Testing BERT model conversion...")
-from ADC.bert_clean.bert_qat_integration import BertQATConverter
+from ADC.bert_clean.runs.bert_qat_integration import BertQATConverter
 
 config = AutoConfig.from_pretrained("bert-base-uncased")
 config.num_hidden_layers = 2  # Small model for testing
