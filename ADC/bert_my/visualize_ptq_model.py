@@ -45,6 +45,7 @@ def main():
     # We must manually reconstruct the ADC architecture and load weights
     from transformers import BertForQuestionAnswering
     from bert_adc_integration import BertADCConverter
+    from adc_layers import QATLinearADC
     
     print("Loading config and reconstructing ADC model...")
     config = AutoConfig.from_pretrained(args.model_path)
@@ -66,6 +67,16 @@ def main():
         use_delta_anneal=False,
         delta_loss_weight=0.0
     )
+    
+    # Pre-size per-channel weight quantizer scales to out_features so checkpoint can load
+    for n, m in model.named_modules():
+        if isinstance(m, QATLinearADC) and hasattr(m, 'weight_quantizer'):
+            wq = m.weight_quantizer
+            if getattr(wq, 'per_channel', False):
+                expected = m.weight.shape[0]  # out_features
+                if wq.scale.numel() != expected:
+                    wq.scale.data = wq.scale.data.new_zeros(expected)
+                    wq._scale_initialized = True
     
     # Load PTQ-calibrated weights (includes calibrated scales!)
     # Prefer safetensors if present
