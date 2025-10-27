@@ -12,6 +12,34 @@ import collections
 
 logger = logging.getLogger(__name__)
 
+
+class F1LogCallback(TrainerCallback):
+    """
+    Callback to show F1 and EM in console during evaluation instead of boring runtime stats
+    """
+    
+    def on_evaluate(self, args, state: TrainerState, control: TrainerControl, metrics=None, **kwargs):
+        """Called after evaluation"""
+        if metrics is None:
+            return
+        
+        # Extract F1 and EM if available
+        f1 = metrics.get('eval_f1', None)
+        em = metrics.get('eval_exact_match', None)
+        loss = metrics.get('eval_loss', None)
+        epoch = metrics.get('epoch', state.epoch)
+        
+        if f1 is not None and em is not None:
+            # Print nice formatted metrics
+            print(f"\n{'='*80}")
+            print(f"📊 EVAL @ Epoch {epoch:.2f}")
+            print(f"{'='*80}")
+            print(f"  F1 Score:     {f1:.2f}")
+            print(f"  Exact Match:  {em:.2f}")
+            if loss is not None:
+                print(f"  Loss:         {loss:.4f}")
+            print(f"{'='*80}\n")
+
 try:
     import wandb
     WANDB_AVAILABLE = True

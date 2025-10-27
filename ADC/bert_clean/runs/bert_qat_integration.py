@@ -24,6 +24,7 @@ from transformers import (
 from ADC.bert_clean.core.qat_layers import QATLinear
 from ADC.bert_clean.core.wandb_integration import (
     WandbQATCallback,
+    F1LogCallback,
     init_wandb_run,
     log_model_architecture,
     log_training_summary,
@@ -688,6 +689,10 @@ def main():
 
     # Prepare callbacks
     callbacks = []
+    
+    # Always add F1 logging callback for nice console output
+    callbacks.append(F1LogCallback())
+    
     if wandb_run is not None:
         wandb_callback = WandbQATCallback(
             visualize_layers=args.visualize_layers,
