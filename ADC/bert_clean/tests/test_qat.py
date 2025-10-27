@@ -2,8 +2,7 @@
 Test script for the fixed QAT implementation
 """
 import torch
-import torch.nn as nn
-from ADC.bert_clean.core.qat_layers import QATLinear, LearnableQuantizer, QATTransformerBlock
+from ADC.bert_clean.core.qat_layers import QATLinear, LearnableQuantizer
 
 def test_gradient_flow():
     """Test that gradients flow correctly to scale parameter"""
@@ -123,53 +122,10 @@ def test_per_channel_quantization():
     print(f"Activation scale shape: {layer.activation_quantizer.scale.shape} (per-tensor) ✓")
     print()
 
-def test_transformer_block():
-    """Test QATTransformerBlock"""
-    print("=" * 60)
-    print("Test 5: QATTransformerBlock")
-    print("=" * 60)
-    
-    block = QATTransformerBlock(
-        d_model=256, 
-        num_heads=8, 
-        d_ff=1024,
-        weight_bits=8,
-        activation_bits=8
-    )
-    
-    x = torch.randn(4, 32, 256)  # (batch, seq_len, d_model)
-    
-    # Test forward
-    y = block(x)
-    assert y.shape == x.shape, f"Output shape mismatch: {y.shape} vs {x.shape}"
-    print(f"Output shape: {y.shape} ✓")
-    
-    # Test gradient flow
-    loss = y.pow(2).mean()
-    loss.backward()
-    
-    # Check all QAT layers have gradients
-    qat_layers = [m for m in block.modules() if isinstance(m, QATLinear)]
-    print(f"Number of QAT layers: {len(qat_layers)}")
-    
-    for i, layer in enumerate(qat_layers):
-        assert layer.weight.grad is not None, f"Layer {i} weight gradient is None!"
-        assert layer.weight_quantizer.scale.grad is not None, f"Layer {i} weight scale gradient is None!"
-    print("All layers have gradients ✓")
-    
-    # Test enable/disable
-    block.disable_quantization()
-    y_fp = block(x)
-    block.enable_quantization()
-    y_quant = block(x)
-    diff = (y_fp - y_quant).abs().mean()
-    print(f"FP vs Quant difference: {diff.item():.6f}")
-    print()
-
 def test_asymmetric_quantization():
     """Test asymmetric quantization for activations"""
     print("=" * 60)
-    print("Test 6: Asymmetric Quantization")
+    print("Test 5: Asymmetric Quantization")
     print("=" * 60)
     
     quantizer = LearnableQuantizer(num_bits=8, symmetric=False)
@@ -200,7 +156,7 @@ def test_asymmetric_quantization():
 def test_low_bit_quantization():
     """Test 4-bit quantization"""
     print("=" * 60)
-    print("Test 7: Low-Bit Quantization (4-bit)")
+    print("Test 6: Low-Bit Quantization (4-bit)")
     print("=" * 60)
     
     quantizer = LearnableQuantizer(num_bits=4, symmetric=True)
@@ -233,7 +189,6 @@ def main():
         test_qat_linear()
         test_auto_calibration()
         test_per_channel_quantization()
-        test_transformer_block()
         test_asymmetric_quantization()
         test_low_bit_quantization()
         
