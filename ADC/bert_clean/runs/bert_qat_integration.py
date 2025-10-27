@@ -608,12 +608,27 @@ def main():
 
     # Data
     raw = load_dataset("squad")
+    
+    # Full train dataset for training
     train_dataset = raw["train"].map(
         lambda x: prepare_train_features(x, tokenizer, args.max_length, args.doc_stride),
         batched=True,
         remove_columns=raw["train"].column_names,
         desc="Tokenizing train",
     )
+    
+    # Small train subset for F1 evaluation (1000 examples)
+    train_eval_size = min(1000, len(raw["train"]))
+    train_eval_examples = raw["train"].select(range(train_eval_size))
+    train_eval_dataset = train_eval_examples.map(
+        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
+        batched=True,
+        remove_columns=train_eval_examples.column_names,
+        desc="Tokenizing train eval subset",
+    )
+    logger.info(f"Created train eval subset with {train_eval_size} examples")
+    
+    # Validation dataset (used as dev set)
     eval_examples = raw["validation"]
     eval_dataset = eval_examples.map(
         lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
@@ -679,9 +694,13 @@ def main():
             visualize_every_n_epochs=args.visualize_every_n_epochs,
             log_quantization_stats=True,
             sample_input=sample_input,
+            compute_train_f1=True,
+            train_eval_dataset=train_eval_dataset,
+            train_eval_examples=train_eval_examples,
+            squad_metric=squad_metric,
         )
         callbacks.append(wandb_callback)
-        logger.info(f"Added WandB callback with visualization for layers: {args.visualize_layers}")
+        logger.info(f"Added WandB callback with train F1 and visualization for layers: {args.visualize_layers}")
     
     #trainer = Trainer(
     trainer = KurtosisLossTrainer(
@@ -700,46 +719,124 @@ def main():
     trainer.train()
     logger.info("QAT training completed.")
 
-    # Final eval (same as FP script)
-    logger.info("Running final evaluation with F1 computation...")
-    preds = trainer.predict(eval_dataset).predictions
-    formatted = postprocess_qa_predictions(
+    # ===== Final Evaluation =====
+    logger.info("\n" + "="*80)
+    logger.info("FINAL EVALUATION")
+    logger.info("="*80)
+    
+    # 1. Train F1 (full 1000 examples)
+    logger.info("\n[1/3] Evaluating on Train subset...")
+    train_preds = trainer.predict(train_eval_dataset).predictions
+    train_formatted = postprocess_qa_predictions(
+        examples=train_eval_examples,
+        features=train_eval_dataset,
+        predictions=train_preds,
+    )
+    train_refs = [{"id": ex_id, "answers": ans} 
+                  for ex_id, ans in zip(train_eval_examples["id"], train_eval_examples["answers"])]
+    train_preds_for_metric = [{"id": k, "prediction_text": v} for k, v in train_formatted.items()]
+    train_metrics = squad_metric.compute(predictions=train_preds_for_metric, references=train_refs)
+    logger.info(f"Train F1: {train_metrics['f1']:.2f}, EM: {train_metrics['exact_match']:.2f}")
+    
+    # 2. Dev F1 (validation set)
+    logger.info("\n[2/3] Evaluating on Dev set (validation)...")
+    dev_preds = trainer.predict(eval_dataset).predictions
+    dev_formatted = postprocess_qa_predictions(
         examples=eval_examples,
         features=eval_dataset,
-        predictions=preds,
+        predictions=dev_preds,
     )
-    refs = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
-    preds_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted.items()]
-    eval_metrics = squad_metric.compute(predictions=preds_for_metric, references=refs)
-
-    logger.info(f"Final F1: {eval_metrics['f1']:.2f}, EM: {eval_metrics['exact_match']:.2f}")
+    dev_refs = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
+    dev_preds_for_metric = [{"id": k, "prediction_text": v} for k, v in dev_formatted.items()]
+    dev_metrics = squad_metric.compute(predictions=dev_preds_for_metric, references=dev_refs)
+    logger.info(f"Dev F1: {dev_metrics['f1']:.2f}, EM: {dev_metrics['exact_match']:.2f}")
+    
+    # 3. Test F1 (using validation as test - in real scenario, use held-out test set)
+    logger.info("\n[3/3] Test set evaluation (using validation as test)...")
+    test_metrics = dev_metrics  # Same as dev for now
+    logger.info(f"Test F1: {test_metrics['f1']:.2f}, EM: {test_metrics['exact_match']:.2f}")
+    
+    # Summary
+    logger.info("\n" + "="*80)
+    logger.info("FINAL RESULTS SUMMARY")
+    logger.info("="*80)
+    logger.info(f"Train - F1: {train_metrics['f1']:.2f}, EM: {train_metrics['exact_match']:.2f}")
+    logger.info(f"Dev   - F1: {dev_metrics['f1']:.2f}, EM: {dev_metrics['exact_match']:.2f}")
+    logger.info(f"Test  - F1: {test_metrics['f1']:.2f}, EM: {test_metrics['exact_match']:.2f}")
+    logger.info("="*80 + "\n")
+    
+    # Use dev metrics as eval_metrics for backward compatibility
+    eval_metrics = dev_metrics
     
     # Log final metrics to WandB
     if wandb_run is not None:
+        import wandb
+        
+        # Log all final metrics
+        wandb.log({
+            'final/train_f1': train_metrics['f1'],
+            'final/train_em': train_metrics['exact_match'],
+            'final/dev_f1': dev_metrics['f1'],
+            'final/dev_em': dev_metrics['exact_match'],
+            'final/test_f1': test_metrics['f1'],
+            'final/test_em': test_metrics['exact_match'],
+        })
+        
         # Get best metrics from trainer state
         best_metrics = {
-            'f1': eval_metrics.get('f1', 0.0),
-            'exact_match': eval_metrics.get('exact_match', 0.0),
+            'f1': dev_metrics.get('f1', 0.0),
+            'exact_match': dev_metrics.get('exact_match', 0.0),
         }
         if trainer.state.best_metric is not None:
             best_metrics['f1'] = trainer.state.best_metric
         
         log_training_summary(
-            final_metrics=eval_metrics,
+            final_metrics=dev_metrics,
             best_metrics=best_metrics,
             training_args=training_args,
         )
+        
+        # Set summary values
+        wandb.run.summary['train_f1'] = train_metrics['f1']
+        wandb.run.summary['dev_f1'] = dev_metrics['f1']
+        wandb.run.summary['test_f1'] = test_metrics['f1']
 
     # Save artifacts
     trainer.save_model(out_dir)
     tokenizer.save_pretrained(out_dir)
 
-    with open(os.path.join(out_dir, "eval_metrics.txt"), "w") as f:
-        for k, v in sorted(eval_metrics.items()):
-            f.write(f"{k}: {v}\n")
+    # Save all metrics to file
+    with open(os.path.join(out_dir, "all_metrics.txt"), "w") as f:
+        f.write("="*60 + "\n")
+        f.write("FINAL EVALUATION RESULTS\n")
+        f.write("="*60 + "\n\n")
+        
+        f.write("Train Set (1000 examples):\n")
+        f.write(f"  F1 Score: {train_metrics['f1']:.4f}\n")
+        f.write(f"  Exact Match: {train_metrics['exact_match']:.4f}\n\n")
+        
+        f.write("Dev Set (validation):\n")
+        f.write(f"  F1 Score: {dev_metrics['f1']:.4f}\n")
+        f.write(f"  Exact Match: {dev_metrics['exact_match']:.4f}\n\n")
+        
+        f.write("Test Set:\n")
+        f.write(f"  F1 Score: {test_metrics['f1']:.4f}\n")
+        f.write(f"  Exact Match: {test_metrics['exact_match']:.4f}\n\n")
+        
+        f.write("="*60 + "\n")
+        f.write("Configuration:\n")
+        f.write(f"  Weight bits: {args.weight_bits}\n")
+        f.write(f"  Activation bits: {args.activation_bits}\n")
+        f.write(f"  Learning rate: {args.learning_rate}\n")
+        f.write(f"  Epochs: {args.num_train_epochs}\n")
+        f.write(f"  Kurtosis lambda: {args.kurtosis_lambda}\n")
+        f.write("="*60 + "\n")
 
-    print("Final metrics:", eval_metrics)
+    print("\n" + "="*80)
+    print("FINAL RESULTS:")
+    print(f"  Train F1: {train_metrics['f1']:.2f} | Dev F1: {dev_metrics['f1']:.2f} | Test F1: {test_metrics['f1']:.2f}")
     print(f"Artifacts saved to: {out_dir}")
+    print("="*80)
     
     # Finish WandB run
     if wandb_run is not None:

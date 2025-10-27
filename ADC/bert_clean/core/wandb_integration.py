@@ -8,6 +8,7 @@ import torch
 from typing import Dict, Any, Optional, List
 from transformers import TrainerCallback, TrainerState, TrainerControl
 import logging
+import collections
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,10 @@ class WandbQATCallback(TrainerCallback):
         visualize_every_n_epochs: int = 1,
         log_quantization_stats: bool = True,
         sample_input: Optional[Dict[str, torch.Tensor]] = None,
+        compute_train_f1: bool = True,
+        train_eval_dataset: Optional[Any] = None,
+        train_eval_examples: Optional[Any] = None,
+        squad_metric: Optional[Any] = None,
     ):
         """
         Args:
@@ -37,12 +42,20 @@ class WandbQATCallback(TrainerCallback):
             visualize_every_n_epochs: How often to create visualizations
             log_quantization_stats: Whether to log quantization statistics
             sample_input: Sample input for visualization (dict with 'input_ids' and 'attention_mask')
+            compute_train_f1: Whether to compute F1 on train subset
+            train_eval_dataset: Train dataset for F1 computation
+            train_eval_examples: Train examples for F1 computation
+            squad_metric: SQuAD metric evaluator
         """
         self.visualize_layers = visualize_layers or []
         self.visualize_every_n_epochs = visualize_every_n_epochs
         self.log_quantization_stats = log_quantization_stats
         self.sample_input = sample_input
         self.last_visualized_epoch = -1
+        self.compute_train_f1 = compute_train_f1
+        self.train_eval_dataset = train_eval_dataset
+        self.train_eval_examples = train_eval_examples
+        self.squad_metric = squad_metric
         
         if not WANDB_AVAILABLE:
             logger.warning("WandB not available - callback will not log anything")
@@ -53,6 +66,10 @@ class WandbQATCallback(TrainerCallback):
             return
         
         current_epoch = int(state.epoch) if state.epoch is not None else 0
+        
+        # Compute train F1
+        if self.compute_train_f1 and self.train_eval_dataset is not None:
+            self._compute_train_f1(model, current_epoch, kwargs.get('trainer'))
         
         # Check if we should visualize this epoch
         should_visualize = (
@@ -76,6 +93,88 @@ class WandbQATCallback(TrainerCallback):
         
         # WandB Trainer integration usually handles this, but we can add custom metrics here
         pass
+    
+    def _compute_train_f1(self, model, epoch: int, trainer=None):
+        """Compute F1 on train subset"""
+        if trainer is None or self.train_eval_dataset is None:
+            return
+        
+        try:
+            logger.info(f"Computing train F1 at epoch {epoch}...")
+            
+            # Make predictions on train eval subset
+            model.eval()
+            with torch.no_grad():
+                predictions = trainer.predict(self.train_eval_dataset).predictions
+            model.train()
+            
+            # Import postprocess function
+            import numpy as np
+            
+            # Postprocess predictions
+            all_start_logits, all_end_logits = predictions
+            example_id_to_index = {k: i for i, k in enumerate(self.train_eval_examples["id"])}
+            features_per_example = collections.defaultdict(list)
+            for i, feat_id in enumerate(self.train_eval_dataset["example_id"]):
+                features_per_example[feat_id].append(i)
+            
+            predictions_dict = {}
+            for example_id, feature_indices in features_per_example.items():
+                context = self.train_eval_examples["context"][example_id_to_index[example_id]]
+                prelim_predictions = []
+                
+                for feature_index in feature_indices:
+                    start_logits = all_start_logits[feature_index]
+                    end_logits = all_end_logits[feature_index]
+                    offset_mapping = self.train_eval_dataset["offset_mapping"][feature_index]
+                    
+                    start_indexes = np.argsort(start_logits)[-1 : -21 : -1].tolist()
+                    end_indexes = np.argsort(end_logits)[-1 : -21 : -1].tolist()
+                    
+                    for start_index in start_indexes:
+                        for end_index in end_indexes:
+                            if (
+                                start_index >= len(offset_mapping)
+                                or end_index >= len(offset_mapping)
+                                or offset_mapping[start_index] is None
+                                or offset_mapping[end_index] is None
+                            ):
+                                continue
+                            if end_index < start_index or end_index - start_index + 1 > 30:
+                                continue
+                            start_char = offset_mapping[start_index][0]
+                            end_char = offset_mapping[end_index][1]
+                            prelim_predictions.append({
+                                "score": start_logits[start_index] + end_logits[end_index],
+                                "start": start_char,
+                                "end": end_char,
+                            })
+                
+                if len(prelim_predictions) > 0:
+                    best_pred = max(prelim_predictions, key=lambda x: x["score"])
+                    predictions_dict[example_id] = context[best_pred["start"] : best_pred["end"]]
+                else:
+                    predictions_dict[example_id] = ""
+            
+            # Compute metrics
+            references = [{"id": ex_id, "answers": ans} 
+                         for ex_id, ans in zip(self.train_eval_examples["id"], 
+                                               self.train_eval_examples["answers"])]
+            preds_for_metric = [{"id": k, "prediction_text": v} for k, v in predictions_dict.items()]
+            
+            metrics = self.squad_metric.compute(predictions=preds_for_metric, references=references)
+            
+            # Log to WandB
+            wandb.log({
+                'train/f1': metrics['f1'],
+                'train/exact_match': metrics['exact_match'],
+                'epoch': epoch,
+            })
+            
+            logger.info(f"Train F1: {metrics['f1']:.2f}, EM: {metrics['exact_match']:.2f}")
+            
+        except Exception as e:
+            logger.error(f"Error computing train F1: {e}", exc_info=True)
     
     def _log_visualizations(self, model, epoch: int):
         """Generate and log visualizations to WandB"""
