@@ -18,21 +18,21 @@ class F1LogCallback(TrainerCallback):
     Callback to show F1 and EM in console during evaluation instead of boring runtime stats
     """
     
-    def on_evaluate(self, args, state: TrainerState, control: TrainerControl, metrics=None, **kwargs):
-        """Called after evaluation"""
-        if metrics is None:
+    def on_log(self, args, state: TrainerState, control: TrainerControl, logs=None, **kwargs):
+        """Called during logging - check for eval metrics"""
+        if logs is None:
             return
         
-        # Extract F1 and EM if available
-        f1 = metrics.get('eval_f1', None)
-        em = metrics.get('eval_exact_match', None)
-        loss = metrics.get('eval_loss', None)
-        epoch = metrics.get('epoch', state.epoch)
-        
-        if f1 is not None and em is not None:
+        # Check if this is an eval log (has eval_f1)
+        if 'eval_f1' in logs and 'eval_exact_match' in logs:
+            f1 = logs['eval_f1']
+            em = logs['eval_exact_match']
+            loss = logs.get('eval_loss', None)
+            epoch = logs.get('epoch', state.epoch if state.epoch else 0)
+            
             # Print nice formatted metrics
             print(f"\n{'='*80}")
-            print(f"📊 EVAL @ Epoch {epoch:.2f}")
+            print(f"📊 EVAL @ Epoch {epoch:.2f} (Step {state.global_step})")
             print(f"{'='*80}")
             print(f"  F1 Score:     {f1:.2f}")
             print(f"  Exact Match:  {em:.2f}")
@@ -119,8 +119,18 @@ class WandbQATCallback(TrainerCallback):
         if not WANDB_AVAILABLE or wandb.run is None or logs is None:
             return
         
-        # WandB Trainer integration usually handles this, but we can add custom metrics here
-        pass
+        # Explicitly log eval F1 and EM to WandB
+        if 'eval_f1' in logs and 'eval_exact_match' in logs:
+            wandb.log({
+                'eval/f1': logs['eval_f1'],
+                'eval/exact_match': logs['eval_exact_match'],
+            }, step=state.global_step)
+            
+        # Also log training loss if available
+        if 'loss' in logs:
+            wandb.log({
+                'train/loss': logs['loss'],
+            }, step=state.global_step)
     
     def _compute_train_f1(self, model, epoch: int, trainer=None):
         """Compute F1 on train subset"""
@@ -382,7 +392,12 @@ def log_model_architecture(model, config: Dict[str, Any]):
             'model/qat_percentage': 100.0 * qat_layers / max(total_layers, 1),
         }
         
-        wandb.log(architecture_info)
+        # Log at step 0 so it appears on graphs
+        # wandb.log(architecture_info, step=0)
+        
+        # # Also set as summary values (permanent, not tied to steps)
+        # for key, value in architecture_info.items():
+        #     wandb.run.summary[key] = value
         
         # Log model config
         wandb.config.update(config, allow_val_change=True)

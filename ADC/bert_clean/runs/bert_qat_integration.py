@@ -669,7 +669,11 @@ def main():
             eval_strategy="steps",
             eval_steps=args.eval_steps,
             fp16=args.fp16,
-            report_to="wandb" if wandb_run is not None else "none",
+            # Use custom callback for WandB logging instead of built-in
+            report_to="none",
+            load_best_model_at_end=False,
+            metric_for_best_model="f1",
+            greater_is_better=True,
         )
     except TypeError:
         training_args = TrainingArguments(
@@ -685,6 +689,7 @@ def main():
             eval_strategy="steps",
             eval_steps=args.eval_steps,
             fp16=args.fp16,
+            report_to="none",
         )
 
     # Prepare callbacks
