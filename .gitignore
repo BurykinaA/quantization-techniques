@@ -4,3 +4,4 @@ datasets
 statistics
 wandb
 *pth
+!ADC/bert_clean/runs
