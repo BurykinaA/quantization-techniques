@@ -220,6 +220,7 @@ class ADCCalibrator:
         updated_w = 0
         
         for name, module in self.model.named_modules():
+            # Handle both QATLinearADC and TiledLinearADC tiles
             if isinstance(module, QATLinearADC) and name in optimal_params:
                 params = optimal_params[name]
                 
@@ -238,20 +239,38 @@ class ADCCalibrator:
                     # Update weight quantizer scale (per-channel)
                     if hasattr(module, 'weight_quantizer'):
                         w_q = module.weight_quantizer
-                        old_scale_mean = w_q.scale.mean().item()
+                        old_scale_mean = w_q.scale.mean().item() if w_q.scale.numel() > 0 else 0.01
                         
-                        # For per-channel, broadcast the scalar optimal scale
-                        if w_q.per_channel and w_q.scale.numel() > 1:
-                            # Keep per-channel structure but use calibrated base scale
-                            # Scale each channel proportionally
-                            scale_ratio = params['w_scale'] / old_scale_mean
-                            w_q.scale.data.mul_(scale_ratio)
+                        # For per-channel, compute scales from actual weights
+                        if w_q.per_channel:
+                            # Compute per-channel scales directly from weights
+                            weight = module.weight.detach()  # [out_features, in_features]
+                            
+                            if w_q.channel_dim == 0:
+                                # For each output channel, find absmax across input features
+                                per_channel_absmax = weight.abs().max(dim=1)[0]  # [out_features]
+                            else:
+                                # For other channel dims
+                                weight_transposed = weight.transpose(w_q.channel_dim, 0)
+                                per_channel_absmax = weight_transposed.contiguous().view(weight_transposed.shape[0], -1).abs().max(dim=1)[0]
+                            
+                            # Avoid division by zero
+                            per_channel_absmax = torch.clamp(per_channel_absmax, min=1e-6)
+                            
+                            # Compute per-channel scales for symmetric quantization
+                            # scale = absmax / (2^(n-1) - 1) = absmax / 127
+                            new_scales = per_channel_absmax / 127.0
+                            
+                            # Update scales
+                            w_q.scale.data.copy_(new_scales)
+                            w_q._scale_initialized = True
                         else:
+                            # Per-tensor: use scalar scale
                             w_q.scale.copy_(
                                 torch.tensor(params['w_scale'], dtype=torch.float32)
                             )
+                            w_q._scale_initialized = True
                         
-                        w_q._scale_initialized = True
                         new_scale_mean = w_q.scale.mean().item()
                         
                         logger.info(f"{name} [W]: scale {old_scale_mean:.6f} -> {new_scale_mean:.6f}")
