@@ -24,6 +24,12 @@ def main():
     parser.add_argument("--text", type=str, 
                        default="What is the capital of France? Paris is the capital of France.",
                        help="Text to use for forward pass")
+    parser.add_argument("--bx", type=int, default=8, help="Activation bits")
+    parser.add_argument("--bw", type=int, default=8, help="Weight bits")
+    parser.add_argument("--ba", type=int, default=8, help="ADC bits")
+    parser.add_argument("--k", type=int, default=4, help="Hardware design parameter")
+    parser.add_argument("--ashift", action="store_true", help="Use A-shift")
+    parser.add_argument("--signed_activations", action="store_true", help="Use signed activations")
     args = parser.parse_args()
     
     print("="*80)
@@ -34,41 +40,43 @@ def main():
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     
-    # Load PTQ-calibrated model directly
-    # The model is already converted with proper ADC layers and calibrated scales
+    # Load PTQ-calibrated model
+    # IMPORTANT: from_pretrained() doesn't work for custom ADC layers!
+    # We must manually reconstruct the ADC architecture and load weights
     from transformers import BertForQuestionAnswering
+    from bert_adc_integration import BertADCConverter
     
-    try:
-        # Try loading with from_pretrained (if config.json exists)
-        model = BertForQuestionAnswering.from_pretrained(args.model_path)
-        print("✓ Loaded PTQ model with from_pretrained")
-    except Exception as e:
-        print(f"Warning: Could not load with from_pretrained: {e}")
-        print("Trying alternative loading method...")
-        
-        # Alternative: Load config and weights separately
-        config = AutoConfig.from_pretrained(args.model_path)
-        from bert_adc_integration import BertADCConverter
-        
-        base_model = BertForQuestionAnswering(config)
-        
-        # Convert to ADC (structure only, weights will be loaded)
-        model = BertADCConverter.replace_linear_with_adc_qat(
-            base_model,
-            bx=8, bw=8, ba=8, k=4,
-            ashift=False,
-            signed_activations=False,
-            exclude_patterns=["embeddings", "pooler", "qa_outputs"],
-            mvm_limit=256,
-            use_dynamic_delta=False,
-            use_delta_anneal=False,
-            delta_loss_weight=0.0
-        )
-        
-        # Load PTQ weights
-        state_dict = torch.load(f"{args.model_path}/pytorch_model.bin", map_location='cpu')
-        model.load_state_dict(state_dict, strict=False)
-        print("✓ Loaded PTQ model weights")
+    print("Loading config and reconstructing ADC model...")
+    config = AutoConfig.from_pretrained(args.model_path)
+    base_model = BertForQuestionAnswering(config)
+    
+    # Convert to ADC (structure must match PTQ model)
+    print(f"Config: bx={args.bx}, bw={args.bw}, ba={args.ba}, k={args.k}, ashift={args.ashift}, signed={args.signed_activations}")
+    model = BertADCConverter.replace_linear_with_adc_qat(
+        base_model,
+        bx=args.bx, 
+        bw=args.bw, 
+        ba=args.ba, 
+        k=args.k,
+        ashift=args.ashift,
+        signed_activations=args.signed_activations,
+        exclude_patterns=["embeddings", "pooler", "qa_outputs"],
+        mvm_limit=256,
+        use_dynamic_delta=False,
+        use_delta_anneal=False,
+        delta_loss_weight=0.0
+    )
+    
+    # Load PTQ-calibrated weights (includes calibrated scales!)
+    state_dict = torch.load(f"{args.model_path}/pytorch_model.bin", map_location='cpu')
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    
+    if missing:
+        print(f"⚠️  Missing keys: {len(missing)} (this is OK if they're optimizer states)")
+    if unexpected:
+        print(f"⚠️  Unexpected keys: {len(unexpected)}")
+    
+    print("✓ Loaded PTQ model with calibrated scales")
     
     # Prepare input
     print(f"\nInput text: {args.text[:100]}...")
