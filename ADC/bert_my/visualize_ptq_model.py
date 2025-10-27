@@ -68,7 +68,22 @@ def main():
     )
     
     # Load PTQ-calibrated weights (includes calibrated scales!)
-    state_dict = torch.load(f"{args.model_path}/pytorch_model.bin", map_location='cpu')
+    # Prefer safetensors if present
+    import os
+    state_dict = None
+    pt_path = os.path.join(args.model_path, "pytorch_model.bin")
+    st_path = os.path.join(args.model_path, "model.safetensors")
+    if os.path.exists(pt_path):
+        state_dict = torch.load(pt_path, map_location='cpu')
+    elif os.path.exists(st_path):
+        try:
+            from safetensors.torch import load_file as safe_load
+            state_dict = safe_load(st_path)
+        except Exception as e:
+            raise RuntimeError(f"Found safetensors but failed to load: {e}")
+    else:
+        raise FileNotFoundError(f"No weights found in {args.model_path} (expected pytorch_model.bin or model.safetensors)")
+
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     
     if missing:
