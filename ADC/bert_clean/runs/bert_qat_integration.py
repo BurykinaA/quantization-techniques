@@ -714,6 +714,11 @@ def main():
         callbacks.append(wandb_callback)
         logger.info(f"Added WandB callback with train F1 and visualization for layers: {args.visualize_layers}")
     
+    # Preprocess logits for metrics (needed for QA tasks)
+    def preprocess_logits_for_metrics(logits, labels):
+        """Extract start and end logits for QA metrics computation"""
+        return logits[0], logits[1]  # (start_logits, end_logits)
+    
     #trainer = Trainer(
     trainer = KurtosisLossTrainer(
         model=model,
@@ -723,6 +728,7 @@ def main():
         tokenizer=tokenizer,
         data_collator=default_data_collator,
         compute_metrics=metrics_computer.compute_metrics,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         kurtosis_lambda=args.kurtosis_lambda,
         callbacks=callbacks,
     )
