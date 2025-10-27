@@ -87,13 +87,14 @@ class LearnableQuantizer(nn.Module):
             self.qmax = 2 ** num_bits - 1
         
         # Scale is learnable (will be initialized during calibration)
-        self.scale = nn.Parameter(torch.ones(1) * 0.1)
+        # Always keep in FP32 for mixed precision training
+        self.scale = nn.Parameter(torch.ones(1, dtype=torch.float32) * 0.1)
         
         # Zero-point is a buffer (computed from stats, not learned)
         if not symmetric:
-            self.register_buffer('zero_point', torch.zeros(1))
+            self.register_buffer('zero_point', torch.zeros(1, dtype=torch.float32))
         else:
-            self.register_buffer('zero_point', torch.zeros(1))
+            self.register_buffer('zero_point', torch.zeros(1, dtype=torch.float32))
     
     def calibrate(self, x: torch.Tensor):
         """
@@ -101,6 +102,9 @@ class LearnableQuantizer(nn.Module):
         Call this during warmup phase before enabling fake quantization.
         """
         with torch.no_grad():
+            # Work in FP32 for calibration
+            x = x.float()
+            
             if self.per_channel:
                 # Per-channel statistics
                 if self.channel_dim == 0:
@@ -150,9 +154,14 @@ class LearnableQuantizer(nn.Module):
         if not self.calibrated:
             self.calibrate(x)
         
+        # Ensure scale stays in FP32 for mixed precision training
+        # Convert input to FP32 for quantization, then back to original dtype
+        input_dtype = x.dtype
+        x_fp32 = x.float()
+        
         # Broadcast for per-channel quantization
         if self.per_channel and x.ndim > 1:
-            shape = [1] * x.ndim
+            shape = [1] * x_fp32.ndim
             shape[self.channel_dim] = -1
             scale = self.scale.view(shape)
             zero_point = self.zero_point.view(shape)
@@ -160,11 +169,14 @@ class LearnableQuantizer(nn.Module):
             scale = self.scale
             zero_point = self.zero_point
         
-        # Apply quantization
-        return StraightThroughQuantize.apply(
-            x, scale, zero_point, self.qmin, self.qmax, self.symmetric,
+        # Apply quantization in FP32
+        output = StraightThroughQuantize.apply(
+            x_fp32, scale, zero_point, self.qmin, self.qmax, self.symmetric,
             self.per_channel, self.channel_dim
         )
+        
+        # Convert back to original dtype
+        return output.to(input_dtype)
 
 class QATLinear(nn.Linear):
     """
@@ -200,8 +212,8 @@ class QATLinear(nn.Linear):
     def calibrate(self, x: torch.Tensor):
         """Calibrate quantizers with a batch of data"""
         with torch.no_grad():
-            self.activation_quantizer.calibrate(x)
-            self.weight_quantizer.calibrate(self.weight)
+            self.activation_quantizer.calibrate(x.float())
+            self.weight_quantizer.calibrate(self.weight.float())
     
     def enable_quantization(self):
         self.quantization_enabled = True
@@ -213,7 +225,18 @@ class QATLinear(nn.Linear):
         if not self.quantization_enabled:
             return F.linear(x, self.weight, self.bias)
         
-        # Quantize and compute
+        # Store original dtype
+        input_dtype = x.dtype
+        
+        # Quantize activation (handles FP32 conversion internally)
         x_quant = self.activation_quantizer(x)
-        weight_quant = self.weight_quantizer(self.weight)
+        
+        # Quantize weights (convert to FP32, quantize, convert back)
+        weight_fp32 = self.weight.float()
+        weight_quant = self.weight_quantizer(weight_fp32)
+        weight_quant = weight_quant.to(input_dtype)
+        
+        # Ensure x_quant is in the correct dtype
+        x_quant = x_quant.to(input_dtype)
+        
         return F.linear(x_quant, weight_quant, self.bias) 
