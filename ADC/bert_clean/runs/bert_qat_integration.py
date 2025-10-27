@@ -633,9 +633,10 @@ def main():
     logger.info(f"Created train eval subset with {train_eval_size} examples")
     
     # Validation dataset (used as dev set)
+    # IMPORTANT: Use prepare_train_features to get start_positions/end_positions for metrics computation
     eval_examples = raw["validation"]
     eval_dataset = eval_examples.map(
-        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
+        lambda x: prepare_train_features(x, tokenizer, args.max_length, args.doc_stride),
         batched=True,
         remove_columns=eval_examples.column_names,
         desc="Tokenizing validation",
