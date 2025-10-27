@@ -261,7 +261,10 @@ class ADCCalibrator:
                             # scale = absmax / (2^(n-1) - 1) = absmax / 127
                             new_scales = per_channel_absmax / 127.0
                             
-                            # Update scales
+                            # Update scales - resize if necessary
+                            if w_q.scale.numel() != new_scales.numel():
+                                # Resize the scale parameter to match per-channel size
+                                w_q.scale.data = w_q.scale.data.new_zeros(new_scales.shape)
                             w_q.scale.data.copy_(new_scales)
                             w_q._scale_initialized = True
                         else:
