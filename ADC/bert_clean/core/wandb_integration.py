@@ -119,12 +119,20 @@ class WandbQATCallback(TrainerCallback):
         if not WANDB_AVAILABLE or wandb.run is None or logs is None:
             return
         
+        # Debug: show what's in logs
+        logger.debug(f"on_log called with keys: {list(logs.keys())}")
+        
         # Explicitly log eval F1 and EM to WandB
         if 'eval_f1' in logs and 'eval_exact_match' in logs:
             wandb.log({
                 'eval/f1': logs['eval_f1'],
                 'eval/exact_match': logs['eval_exact_match'],
             }, step=state.global_step)
+            logger.info(f"Logged to WandB: eval/f1={logs['eval_f1']:.2f}, eval/exact_match={logs['eval_exact_match']:.2f}")
+        
+        # Check if we have eval metrics but without f1/em (need to compute manually)
+        if 'eval_loss' in logs and 'eval_f1' not in logs:
+            logger.warning("Eval metrics present but F1/EM missing - compute_metrics may not be running")
             
         # Also log training loss if available
         if 'loss' in logs:

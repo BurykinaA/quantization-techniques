@@ -416,6 +416,7 @@ class MetricsComputer:
 
     def compute_metrics(self, eval_pred):
         try:
+            logger.info("compute_metrics called - computing F1 and EM...")
             predictions, _ = eval_pred
             formatted_predictions = postprocess_qa_predictions(
                 examples=self.eval_examples,
@@ -425,9 +426,11 @@ class MetricsComputer:
             references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(self.eval_examples["id"], self.eval_examples["answers"])]
             predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
             result = self.squad_metric.compute(predictions=predictions_for_metric, references=references)
+            logger.info(f"Computed F1: {result['f1']:.2f}, EM: {result['exact_match']:.2f}")
             return {"f1": result["f1"], "exact_match": result["exact_match"]}
-        except Exception:
+        except Exception as e:
             import traceback
+            logger.error(f"Error in compute_metrics: {e}")
             traceback.print_exc()
             return {"f1": 0.0, "exact_match": 0.0}
 
@@ -672,8 +675,7 @@ def main():
             # Use custom callback for WandB logging instead of built-in
             report_to="none",
             load_best_model_at_end=False,
-            metric_for_best_model="f1",
-            greater_is_better=True,
+            # Don't track best model - compute_metrics may not run on every eval
         )
     except TypeError:
         training_args = TrainingArguments(
