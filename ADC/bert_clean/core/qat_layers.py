@@ -9,11 +9,13 @@ class StraightThroughQuantize(torch.autograd.Function):
     Note: For asymmetric quantization, zero_point gradient is ~0 (it cancels out mathematically).
     """
     @staticmethod
-    def forward(ctx, input, scale, zero_point, qmin, qmax, symmetric):
+    def forward(ctx, input, scale, zero_point, qmin, qmax, symmetric, per_channel, channel_dim):
         ctx.save_for_backward(input, scale)
         ctx.qmin = qmin
         ctx.qmax = qmax
         ctx.symmetric = symmetric
+        ctx.per_channel = per_channel
+        ctx.channel_dim = channel_dim
         
         # Quantize
         if symmetric:
@@ -35,15 +37,27 @@ class StraightThroughQuantize(torch.autograd.Function):
         grad_input = grad_output
         
         # Compute gradient for scale parameter
-        # d(output)/d(scale) = quantized_levels - input/scale for symmetric
+        # d(output)/d(scale) = quantized_levels - input/scale
         quantized_levels = torch.clamp(torch.round(input / scale), ctx.qmin, ctx.qmax)
         scale_grad_per_element = grad_output * (quantized_levels - input / scale)
-        grad_scale = scale_grad_per_element.sum()
+        
+        # Sum gradients appropriately for per-channel vs per-tensor
+        if ctx.per_channel and input.ndim > 1:
+            # For per-channel, sum over all dims except channel_dim
+            dims_to_sum = list(range(input.ndim))
+            dims_to_sum.remove(ctx.channel_dim)
+            grad_scale = scale_grad_per_element.sum(dim=dims_to_sum, keepdim=False)
+            # Ensure shape matches scale.shape
+            if grad_scale.shape != scale.shape:
+                grad_scale = grad_scale.view_as(scale)
+        else:
+            # For per-tensor, sum everything
+            grad_scale = scale_grad_per_element.sum().view_as(scale)
         
         # zero_point gradient is mathematically ~0 (cancels out in forward pass)
         # We don't learn it via gradients
         
-        return grad_input, grad_scale, None, None, None, None
+        return grad_input, grad_scale, None, None, None, None, None, None
 
 class LearnableQuantizer(nn.Module):
     """
@@ -148,7 +162,8 @@ class LearnableQuantizer(nn.Module):
         
         # Apply quantization
         return StraightThroughQuantize.apply(
-            x, scale, zero_point, self.qmin, self.qmax, self.symmetric
+            x, scale, zero_point, self.qmin, self.qmax, self.symmetric,
+            self.per_channel, self.channel_dim
         )
 
 class QATLinear(nn.Linear):
