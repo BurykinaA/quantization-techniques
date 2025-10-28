@@ -530,23 +530,7 @@ def main():
             "calibration/y_int_target_histogram": wandb.Histogram(y_int_targets),
         })
         
-        # Create detailed calibration table
-        calibration_table_data = []
-        for name, params in sorted(optimal_params.items())[:20]:  # Show top 20 layers
-            calibration_table_data.append([
-                name,
-                f"{params['act_scale']:.6f}",
-                f"{params['w_scale']:.6f}",
-                f"{params['y_int_target']:.2f}",
-            ])
-        
-        if calibration_table_data:
-            calibration_table = wandb.Table(
-                columns=["Layer", "Activation Scale", "Weight Scale", "Y_int Target"],
-                data=calibration_table_data
-            )
-            wandb.log({"calibration/layer_details": calibration_table})
-            logger.info(f"✅ Logged calibration details for {len(calibration_table_data)} layers to WandB")
+        logger.info(f"✅ Logged calibration histograms for {len(optimal_params)} layers to WandB")
         
         # Log before/after visualizations
         if viz_before:
@@ -633,32 +617,71 @@ def main():
     logger.info(f"F1 Score:      {eval_metrics['f1']:.2f}")
     logger.info(f"Exact Match:   {eval_metrics['exact_match']:.2f}")
     
-    # Log final metrics to wandb
+    # Compute train F1/EM on a subset for comparison
+    logger.info("Computing train F1/EM on subset (1000 examples)...")
+    train_eval_size = min(1000, len(raw["train"]))
+    train_eval_examples = raw["train"].select(range(train_eval_size))
+    train_eval_dataset = train_eval_examples.map(
+        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
+        batched=True,
+        remove_columns=train_eval_examples.column_names,
+        desc="Preparing train eval subset",
+    )
+    
+    train_loader = DataLoader(
+        train_eval_dataset,
+        batch_size=args.eval_batch_size,
+        shuffle=False,
+        collate_fn=eval_collator,
+    )
+    
+    train_start_logits = []
+    train_end_logits = []
+    
+    with torch.no_grad():
+        for batch in tqdm(train_loader, desc="Evaluating train"):
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                    for k, v in batch.items()}
+            outputs = model(**batch)
+            train_start_logits.append(outputs.start_logits.cpu().numpy())
+            train_end_logits.append(outputs.end_logits.cpu().numpy())
+    
+    train_start_logits = np.concatenate(train_start_logits, axis=0)
+    train_end_logits = np.concatenate(train_end_logits, axis=0)
+    
+    train_predictions = postprocess_qa_predictions(
+        examples=train_eval_examples,
+        features=train_eval_dataset,
+        predictions=(train_start_logits, train_end_logits),
+    )
+    
+    train_references = [{"id": ex_id, "answers": ans} 
+                       for ex_id, ans in zip(train_eval_examples["id"], train_eval_examples["answers"])]
+    train_preds_for_metric = [{"id": k, "prediction_text": v} 
+                              for k, v in train_predictions.items()]
+    
+    train_metrics = squad_metric.compute(
+        predictions=train_preds_for_metric,
+        references=train_references
+    )
+    
+    logger.info(f"Train F1: {train_metrics['f1']:.2f}, EM: {train_metrics['exact_match']:.2f}")
+    
+    # Log all metrics to wandb (use eval/* namespace for consistency)
     if use_wandb:
-        # Log main metrics
         wandb.log({
-            "eval/f1": eval_metrics['f1'],
-            "eval/exact_match": eval_metrics['exact_match'],
+            "eval/dev_f1": eval_metrics['f1'],
+            "eval/dev_exact_match": eval_metrics['exact_match'],
+            "eval/train_f1": train_metrics['f1'],
+            "eval/train_exact_match": train_metrics['exact_match'],
         })
         
-        # Create summary statistics
-        wandb.run.summary["final_f1"] = eval_metrics['f1']
-        wandb.run.summary["final_exact_match"] = eval_metrics['exact_match']
+        # Summary statistics (no tables, just simple metrics)
+        wandb.run.summary["dev_f1"] = eval_metrics['f1']
+        wandb.run.summary["dev_exact_match"] = eval_metrics['exact_match']
+        wandb.run.summary["train_f1"] = train_metrics['f1']
+        wandb.run.summary["train_exact_match"] = train_metrics['exact_match']
         wandb.run.summary["num_calibrated_layers"] = len(optimal_params)
-        
-        # Create results table (all values must be strings for WandB)
-        results_table = wandb.Table(
-            columns=["Metric", "Value"],
-            data=[
-                ["F1 Score", f"{eval_metrics['f1']:.2f}"],
-                ["Exact Match", f"{eval_metrics['exact_match']:.2f}"],
-                ["Calibrated Layers", str(len(optimal_params))],
-                ["Calibration Method", args.calibration_method],
-                ["Calibration Batches", str(args.num_calibration_batches)],
-                ["ADC Config", f"bx={args.bx}, bw={args.bw}, ba={args.ba}, k={args.k}"],
-            ]
-        )
-        wandb.log({"results/summary_table": results_table})
     
     # Save calibrated model
     logger.info(f"Saving calibrated model to: {args.output_dir}")
@@ -714,48 +737,16 @@ def main():
     
     # Final WandB logging
     if use_wandb:
-        # Log completion status
-        wandb.log({
-            "status/ptq_complete": True,
-            "status/f1_score": eval_metrics['f1'],
-            "status/exact_match": eval_metrics['exact_match'],
-        })
-        
-        # Log paths and artifacts info
+        # Log paths info to summary (not as separate metrics)
         wandb.run.summary["output_dir"] = args.output_dir
         wandb.run.summary["model_path"] = os.path.join(args.output_dir, "pytorch_model.bin")
-        wandb.run.summary["has_visualizations"] = bool(viz_before or viz_after)
         
         if viz_before:
-            wandb.run.summary["viz_before_path"] = os.path.join(args.output_dir, "viz_before")
             wandb.run.summary["viz_before_count"] = len(viz_before)
         if viz_after:
-            wandb.run.summary["viz_after_path"] = os.path.join(args.output_dir, "viz_after")
             wandb.run.summary["viz_after_count"] = len(viz_after)
         
-        # Create final summary table with all key information
-        summary_data = [
-            ["✅ PTQ Status", "COMPLETE"],
-            ["📊 F1 Score", f"{eval_metrics['f1']:.2f}"],
-            ["📊 Exact Match", f"{eval_metrics['exact_match']:.2f}"],
-            ["🔧 Calibrated Layers", str(len(optimal_params))],
-            ["⚙️ Calibration Method", args.calibration_method],
-            ["📦 Calibration Batches", str(args.num_calibration_batches)],
-            ["💾 Model Path", args.output_dir],
-        ]
-        
-        if viz_before:
-            summary_data.append(["📸 Before Viz", f"{len(viz_before)} plots"])
-        if viz_after:
-            summary_data.append(["📸 After Viz", f"{len(viz_after)} plots"])
-        
-        final_summary_table = wandb.Table(
-            columns=["Key", "Value"],
-            data=summary_data
-        )
-        wandb.log({"final/summary": final_summary_table})
-        
-        logger.info("✅ Logged completion status and paths to WandB")
+        logger.info("✅ Logged all metrics to WandB")
         
         # Finish wandb run
         wandb.finish()
