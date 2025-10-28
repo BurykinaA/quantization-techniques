@@ -12,8 +12,10 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import evaluate
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 from datasets import load_dataset
 from transformers import (
@@ -23,6 +25,11 @@ from transformers import (
     set_seed,
 )
 from torch.utils.data import DataLoader
+
+import sys
+from pathlib import Path
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 
 from adc_layers import TiledLinearADC, QATLinearADC, ADCQuantizer
 from bert_adc_integration import (
@@ -42,13 +49,7 @@ except ImportError:
     WANDB_AVAILABLE = False
     print("Warning: wandb not available, logging will be disabled")
 
-# ADC monitoring import
-try:
-    from adc_monitoring_integration import create_adc_training_monitor, add_adc_monitoring_to_model
-    ADC_MONITORING_AVAILABLE = True
-except ImportError:
-    ADC_MONITORING_AVAILABLE = False
-    print("Warning: ADC monitoring not available")
+# No complex monitoring needed for PTQ - we'll use simple visualization
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -369,11 +370,12 @@ def main():
     parser.add_argument("--disable_wandb", action="store_true",
                        help="Disable WandB logging")
     
-    # Monitoring settings
-    parser.add_argument("--disable_adc_monitoring", action="store_true",
-                       help="Disable ADC distribution monitoring and plots")
-    parser.add_argument("--monitored_layers", type=int, default=3,
-                       help="Number of layers to monitor for visualization")
+    # Visualization settings
+    parser.add_argument("--disable_visualizations", action="store_true",
+                       help="Disable ADC visualizations")
+    parser.add_argument("--visualize_layers", type=str, nargs="+",
+                       default=["layer.0.attention.output.dense", "layer.5.intermediate.dense", "layer.11.output.dense"],
+                       help="Layer patterns to visualize")
     
     args = parser.parse_args()
     set_seed(args.seed)
@@ -436,35 +438,10 @@ def main():
     stats = BertADCConverter.count_adc_qat_layers(model)
     logger.info(f"Model: {stats['adc_qat_linear']} ADC layers, {stats['total_params']:,} params")
     
-    # Setup ADC distribution monitoring BEFORE calibration to capture initial state
-    adc_plotter = None
-    if ADC_MONITORING_AVAILABLE and not args.disable_adc_monitoring:
-        try:
-            logger.info("Setting up ADC distribution monitoring...")
-            from adc_distribution_plotter import ADCDistributionPlotter
-            
-            adc_plotter = ADCDistributionPlotter(
-                output_dir=os.path.join(args.output_dir, "adc_visualizations"),
-                save_every_n_batches=args.num_calibration_batches  # Save after calibration
-            )
-            
-            # Add monitoring to key layers - enable full pipeline monitoring
-            monitored_layers = add_adc_monitoring_to_model(
-                model, adc_plotter,
-                layer_patterns=["attention.output.dense", "intermediate.dense", "output.dense"],
-                max_layers=args.monitored_layers,
-                monitor_full_pipeline=True  # Capture full pipeline: x_raw, x_quant, w_raw, w_quant, before_adc, after_adc
-            )
-            
-            if monitored_layers > 0:
-                logger.info(f"ADC monitoring enabled for {monitored_layers} layers")
-                logger.info(f"Will save visualizations to: {os.path.join(args.output_dir, 'adc_visualizations')}")
-            else:
-                logger.warning("No ADC layers found for monitoring")
-                adc_plotter = None
-        except Exception as e:
-            logger.warning(f"Failed to setup ADC monitoring: {e}")
-            adc_plotter = None
+    # Prepare sample input for visualization (if enabled)
+    sample_input = None
+    if not args.disable_visualizations:
+        logger.info("Preparing sample input for visualizations...")
     
     # Load calibration data
     logger.info("Loading SQuAD dataset for calibration...")
@@ -478,6 +455,16 @@ def main():
         remove_columns=calibration_dataset.column_names,
         desc="Preparing calibration data",
     )
+    
+    # Get sample for visualization
+    if not args.disable_visualizations and len(calibration_dataset) > 0:
+        sample_input = {
+            'input_ids': torch.tensor([calibration_dataset[0]['input_ids']]).to(device),
+            'attention_mask': torch.tensor([calibration_dataset[0]['attention_mask']]).to(device),
+        }
+        if 'token_type_ids' in calibration_dataset[0]:
+            sample_input['token_type_ids'] = torch.tensor([calibration_dataset[0]['token_type_ids']]).to(device)
+        logger.info(f"Sample input prepared for visualization (shape: {sample_input['input_ids'].shape})")
     
     # Custom collator to only take model inputs
     def calibration_collator(features):
@@ -501,10 +488,14 @@ def main():
     logger.info("STEP 1: CALIBRATION")
     logger.info("="*80)
     
-    # Capture BEFORE calibration state
-    if adc_plotter is not None:
-        logger.info("Capturing ADC state BEFORE calibration...")
-        adc_plotter.step()  # Increment step counter
+    # Visualize BEFORE calibration
+    viz_before = None
+    if sample_input is not None and not args.disable_visualizations:
+        viz_before = _generate_adc_visualizations(
+            model, sample_input, args.visualize_layers,
+            title_prefix="BEFORE Calibration",
+            output_subdir=os.path.join(args.output_dir, "viz_before")
+        )
     
     calibrator = ADCCalibrator(model, method=args.calibration_method)
     calibrator.calibrate(calibration_loader, num_batches=args.num_calibration_batches)
@@ -515,6 +506,15 @@ def main():
     
     # Apply calibration
     calibrator.apply_calibration(optimal_params)
+    
+    # Visualize AFTER calibration
+    viz_after = None
+    if sample_input is not None and not args.disable_visualizations:
+        viz_after = _generate_adc_visualizations(
+            model, sample_input, args.visualize_layers,
+            title_prefix="AFTER Calibration",
+            output_subdir=os.path.join(args.output_dir, "viz_after")
+        )
     
     # Log per-layer calibration stats to wandb
     if use_wandb and len(optimal_params) > 0:
@@ -529,22 +529,14 @@ def main():
             "calibration/w_scale_histogram": wandb.Histogram(w_scales),
             "calibration/y_int_target_histogram": wandb.Histogram(y_int_targets),
         })
-    
-    # Capture AFTER calibration state
-    if adc_plotter is not None:
-        logger.info("Capturing ADC state AFTER calibration...")
-        logger.info("Running a few batches to capture post-calibration distributions...")
         
-        # Run a few batches to capture the new state
-        with torch.no_grad():
-            for i, batch in enumerate(calibration_loader):
-                if i >= 5:  # Just 5 batches to capture state
-                    break
-                batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
-                        for k, v in batch.items()}
-                _ = model(**batch)
-        
-        adc_plotter.step()  # Increment step counter
+        # Log before/after visualizations
+        if viz_before:
+            for name, img_path in viz_before.items():
+                wandb.log({f"viz_before/{name}": wandb.Image(img_path)})
+        if viz_after:
+            for name, img_path in viz_after.items():
+                wandb.log({f"viz_after/{name}": wandb.Image(img_path)})
     
     # Evaluate
     logger.info("="*80)
@@ -672,54 +664,240 @@ def main():
         for k, v in sorted(eval_metrics.items()):
             f.write(f"{k}: {v}\n")
     
-    # Generate ADC distribution visualizations
-    if adc_plotter is not None:
-        try:
-            logger.info("="*80)
-            logger.info("GENERATING ADC VISUALIZATIONS")
-            logger.info("="*80)
-            
-            # Generate plots for each monitored layer
-            for layer_name in adc_plotter.batch_data.keys():
-                logger.info(f"Creating plots for layer: {layer_name}")
-                
-                # Plot evolution over calibration (before vs after)
-                adc_plotter.plot_evolution_over_batches(layer_name, max_batches=10)
-                
-                # Plot final distributions
-                adc_plotter.plot_adc_distribution(layer_name)
-                adc_plotter.plot_full_pipeline(layer_name)
-            
-            viz_dir = os.path.join(args.output_dir, "adc_visualizations")
-            logger.info(f"✓ ADC visualizations saved to: {viz_dir}")
-            
-            # Log visualizations to WandB
-            if use_wandb:
-                import glob
-                logger.info("Uploading visualizations to WandB...")
-                for img_path in glob.glob(os.path.join(viz_dir, "*.png")):
-                    img_name = os.path.basename(img_path)
-                    wandb.log({f"visualizations/{img_name}": wandb.Image(img_path)})
-                logger.info("✓ Visualizations uploaded to WandB")
-                
-        except Exception as e:
-            logger.error(f"Failed to generate ADC visualizations: {e}")
-            import traceback
-            traceback.print_exc()
-    
     logger.info("="*80)
     logger.info("PTQ COMPLETE!")
     logger.info("="*80)
     logger.info(f"Calibrated model saved to: {args.output_dir}")
     logger.info(f"F1: {eval_metrics['f1']:.2f}, EM: {eval_metrics['exact_match']:.2f}")
     
-    if adc_plotter is not None:
-        logger.info(f"📊 ADC visualizations: {os.path.join(args.output_dir, 'adc_visualizations')}")
+    if viz_before or viz_after:
+        logger.info(f"📊 Visualizations:")
+        if viz_before:
+            logger.info(f"  Before calibration: {os.path.join(args.output_dir, 'viz_before')}")
+        if viz_after:
+            logger.info(f"  After calibration:  {os.path.join(args.output_dir, 'viz_after')}")
     
     # Finish wandb run
     if use_wandb:
         wandb.finish()
         logger.info("WandB run finished")
+
+
+def _generate_adc_visualizations(model, sample_input, layer_patterns, title_prefix="", output_subdir="./viz"):
+    """
+    Generate visualizations for ADC layers showing before/after ADC quantization
+    
+    Returns:
+        Dict[str, str]: Mapping of layer_name -> image_path
+    """
+    import matplotlib.pyplot as plt
+    
+    os.makedirs(output_subdir, exist_ok=True)
+    logger.info(f"Generating ADC visualizations: {title_prefix}")
+    
+    # Find ADC layers to visualize
+    layers_to_viz = []
+    for name, module in model.named_modules():
+        if isinstance(module, QATLinearADC):
+            # Check against patterns
+            if any(pattern in name for pattern in layer_patterns):
+                layers_to_viz.append((name, module))
+        elif isinstance(module, TiledLinearADC) and len(module.tiles) > 0:
+            if any(pattern in name for pattern in layer_patterns):
+                # Visualize first tile as representative
+                layers_to_viz.append((name + ".tiles.0", module.tiles[0]))
+    
+    if not layers_to_viz:
+        logger.warning(f"No ADC layers found matching patterns: {layer_patterns}")
+        return {}
+    
+    logger.info(f"Found {len(layers_to_viz)} layers to visualize")
+    
+    # Capture data for each layer
+    captured_data = {}
+    
+    def make_hook(layer_name):
+        def hook(module, input, output):
+            with torch.no_grad():
+                x = input[0]
+                
+                # Get quantizers
+                act_q = module.activation_quantizer
+                w_q = module.weight_quantizer
+                
+                # Build codes
+                s_x = act_q.scale
+                if act_q.symmetric:
+                    code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
+                else:
+                    zp_x = act_q.zero_point
+                    code_x = torch.clamp(torch.round(x / s_x + zp_x), act_q.qmin, act_q.qmax)
+                
+                # Weight codes
+                s_w_vec = w_q.scale
+                s_w_b = s_w_vec.view(-1, 1)
+                code_w = torch.clamp(torch.round(module.weight / s_w_b), w_q.qmin, w_q.qmax)
+                
+                # Integer MM (before ADC)
+                y_int = F.linear(code_x, code_w, bias=None)
+                
+                # ADC quantization
+                delta = module.adc_quantizer._delta
+                na = module.adc_quantizer.na
+                pa = module.adc_quantizer.pa
+                y_adc_codes = torch.clamp(torch.round(y_int / delta), na, pa)
+                y_after_adc = y_adc_codes * delta
+                
+                captured_data[layer_name] = {
+                    'x_raw': x.detach().cpu().numpy(),
+                    'code_x': code_x.detach().cpu().numpy(),
+                    'w_raw': module.weight.detach().cpu().numpy(),
+                    'code_w': code_w.detach().cpu().numpy(),
+                    'y_int_before_adc': y_int.detach().cpu().numpy(),
+                    'y_after_adc': y_after_adc.detach().cpu().numpy(),
+                    'y_adc_codes': y_adc_codes.detach().cpu().numpy(),
+                    's_x': s_x.detach().cpu().item(),
+                    's_w': s_w_vec.detach().cpu().numpy(),
+                    'delta': delta.detach().cpu().item(),
+                    'na': na,
+                    'pa': pa,
+                }
+        return hook
+    
+    # Attach hooks
+    hooks = []
+    for name, module in layers_to_viz:
+        hook = module.register_forward_hook(make_hook(name))
+        hooks.append(hook)
+    
+    # Run forward pass
+    model.eval()
+    with torch.no_grad():
+        _ = model(**sample_input)
+    
+    # Remove hooks
+    for hook in hooks:
+        hook.remove()
+    
+    # Generate plots
+    result_paths = {}
+    for name, _ in layers_to_viz:
+        if name not in captured_data:
+            continue
+        
+        try:
+            clean_name = name.replace(".", "_").replace("/", "_")
+            filename = f"{clean_name}_{title_prefix.replace(' ', '_')}.png"
+            filepath = os.path.join(output_subdir, filename)
+            
+            _plot_adc_pipeline(captured_data[name], name, title_prefix, filepath)
+            
+            result_paths[clean_name] = filepath
+            logger.info(f"  ✓ {name}")
+        except Exception as e:
+            logger.error(f"  ✗ {name}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    logger.info(f"Generated {len(result_paths)} visualizations in {output_subdir}")
+    return result_paths
+
+
+def _plot_adc_pipeline(data: Dict, layer_name: str, title_prefix: str, filepath: str):
+    """Plot ADC pipeline showing before/after ADC quantization"""
+    import matplotlib.pyplot as plt
+    
+    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+    fig.suptitle(f"{title_prefix}: {layer_name}", fontsize=14, fontweight='bold')
+    
+    # Take first sample for visualization
+    x_raw = data['x_raw'][0].flatten()[:1000]  # First 1000 elements
+    code_x = data['code_x'][0].flatten()[:1000]
+    w_raw = data['w_raw'].flatten()[:1000]
+    code_w = data['code_w'].flatten()[:1000]
+    y_before = data['y_int_before_adc'][0].flatten()[:1000]
+    y_after = data['y_after_adc'][0].flatten()[:1000]
+    y_codes = data['y_adc_codes'][0].flatten()[:1000]
+    
+    # Row 1: Activations and Weights
+    axes[0, 0].hist(x_raw, bins=50, alpha=0.7, color='blue', edgecolor='black')
+    axes[0, 0].set_title(f'X_raw\nrange: [{x_raw.min():.3f}, {x_raw.max():.3f}]')
+    axes[0, 0].set_xlabel('Value')
+    axes[0, 0].set_ylabel('Count')
+    axes[0, 0].grid(True, alpha=0.3)
+    
+    axes[0, 1].hist(code_x, bins=50, alpha=0.7, color='cyan', edgecolor='black')
+    axes[0, 1].set_title(f'X_codes\nscale: {data["s_x"]:.6f}')
+    axes[0, 1].set_xlabel('Code')
+    axes[0, 1].set_ylabel('Count')
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    axes[0, 2].hist(w_raw, bins=50, alpha=0.7, color='green', edgecolor='black')
+    axes[0, 2].set_title(f'W_raw\nrange: [{w_raw.min():.3f}, {w_raw.max():.3f}]')
+    axes[0, 2].set_xlabel('Value')
+    axes[0, 2].set_ylabel('Count')
+    axes[0, 2].grid(True, alpha=0.3)
+    
+    axes[0, 3].hist(code_w, bins=50, alpha=0.7, color='lightgreen', edgecolor='black')
+    axes[0, 3].set_title(f'W_codes\nscale: [{data["s_w"].min():.6f}, {data["s_w"].max():.6f}]')
+    axes[0, 3].set_xlabel('Code')
+    axes[0, 3].set_ylabel('Count')
+    axes[0, 3].grid(True, alpha=0.3)
+    
+    # Row 2: ADC Input/Output
+    na, pa = data['na'], data['pa']
+    delta = data['delta']
+    
+    axes[1, 0].hist(y_before, bins=50, alpha=0.7, color='orange', edgecolor='black')
+    axes[1, 0].axvline(na * delta, color='red', linestyle='--', linewidth=2, label=f'ADC min={na*delta:.1f}')
+    axes[1, 0].axvline(pa * delta, color='red', linestyle='--', linewidth=2, label=f'ADC max={pa*delta:.1f}')
+    axes[1, 0].set_title(f'BEFORE ADC (Y_int)\nrange: [{y_before.min():.1f}, {y_before.max():.1f}]')
+    axes[1, 0].set_xlabel('Value')
+    axes[1, 0].set_ylabel('Count')
+    axes[1, 0].legend()
+    axes[1, 0].grid(True, alpha=0.3)
+    
+    axes[1, 1].hist(y_codes, bins=min(50, pa - na + 1), alpha=0.7, color='red', edgecolor='black')
+    axes[1, 1].axvline(na, color='darkred', linestyle='--', linewidth=2, label=f'na={na}')
+    axes[1, 1].axvline(pa, color='darkred', linestyle='--', linewidth=2, label=f'pa={pa}')
+    axes[1, 1].set_title(f'ADC codes\nΔ={delta:.3f}')
+    axes[1, 1].set_xlabel('ADC Code')
+    axes[1, 1].set_ylabel('Count')
+    axes[1, 1].legend()
+    axes[1, 1].grid(True, alpha=0.3)
+    
+    axes[1, 2].hist(y_after, bins=50, alpha=0.7, color='purple', edgecolor='black')
+    axes[1, 2].set_title(f'AFTER ADC\nrange: [{y_after.min():.1f}, {y_after.max():.1f}]')
+    axes[1, 2].set_xlabel('Value')
+    axes[1, 2].set_ylabel('Count')
+    axes[1, 2].grid(True, alpha=0.3)
+    
+    # Comparison: before vs after ADC
+    axes[1, 3].hist(y_before, bins=50, alpha=0.5, color='orange', label='Before ADC', edgecolor='black')
+    axes[1, 3].hist(y_after, bins=50, alpha=0.5, color='purple', label='After ADC', edgecolor='black')
+    axes[1, 3].axvline(na * delta, color='red', linestyle='--', linewidth=1, alpha=0.7)
+    axes[1, 3].axvline(pa * delta, color='red', linestyle='--', linewidth=1, alpha=0.7)
+    axes[1, 3].set_title('Before vs After ADC')
+    axes[1, 3].set_xlabel('Value')
+    axes[1, 3].set_ylabel('Count')
+    axes[1, 3].legend()
+    axes[1, 3].grid(True, alpha=0.3)
+    
+    # Calculate clipping statistics
+    clipped_low = (y_codes == na).sum()
+    clipped_high = (y_codes == pa).sum()
+    total = y_codes.size
+    clip_pct = 100.0 * (clipped_low + clipped_high) / total
+    
+    # Add text with statistics
+    stats_text = f"Clipping: {clip_pct:.2f}% ({clipped_low} low, {clipped_high} high)"
+    fig.text(0.5, 0.02, stats_text, ha='center', fontsize=12, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    plt.tight_layout(rect=[0, 0.03, 1, 0.98])
+    fig.savefig(filepath, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    
+    return filepath
 
 
 if __name__ == "__main__":

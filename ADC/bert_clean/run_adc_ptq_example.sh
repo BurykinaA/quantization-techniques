@@ -28,9 +28,14 @@ DOC_STRIDE=128
 WANDB_PROJECT="bert-adc-ptq"
 WANDB_RUN_NAME="ptq_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
 
-# Monitoring Settings
-DISABLE_MONITORING=false  # Set to true to disable ADC visualizations
-MONITORED_LAYERS=3        # Number of layers to monitor (affects visualization count)
+# Visualization Settings
+DISABLE_VISUALIZATIONS=false  # Set to true to disable ADC visualizations
+# Layers to visualize (patterns to match layer names)
+VISUALIZE_LAYERS=(
+    "layer.0.attention.output.dense"
+    "layer.5.intermediate.dense"
+    "layer.11.output.dense"
+)
 
 # Seed for reproducibility
 SEED=42
@@ -55,9 +60,9 @@ echo "  Method:          $CALIBRATION_METHOD"
 echo "  Batches:         $NUM_CALIBRATION_BATCHES"
 echo "  Batch size:      $CALIBRATION_BATCH_SIZE"
 echo ""
-echo "Monitoring:"
-echo "  Visualizations:  $([ "$DISABLE_MONITORING" = true ] && echo "Disabled" || echo "Enabled")"
-echo "  Monitored layers: $MONITORED_LAYERS"
+echo "Visualizations:"
+echo "  Status:          $([ "$DISABLE_VISUALIZATIONS" = true ] && echo "Disabled" || echo "Enabled")"
+echo "  Layers:          ${VISUALIZE_LAYERS[*]}"
 echo "========================================"
 echo ""
 
@@ -79,7 +84,7 @@ CMD="python ADC/bert_clean/runs/bert_adc_ptq.py \
     --seed $SEED \
     --wandb_project \"$WANDB_PROJECT\" \
     --wandb_run_name \"$WANDB_RUN_NAME\" \
-    --monitored_layers $MONITORED_LAYERS"
+    --visualize_layers ${VISUALIZE_LAYERS[@]}"
 
 # Add optional flags
 if [ "$ASHIFT" = true ]; then
@@ -90,8 +95,8 @@ if [ "$SIGNED_ACT" = true ]; then
     CMD="$CMD --signed_activations"
 fi
 
-if [ "$DISABLE_MONITORING" = true ]; then
-    CMD="$CMD --disable_adc_monitoring"
+if [ "$DISABLE_VISUALIZATIONS" = true ]; then
+    CMD="$CMD --disable_visualizations"
 fi
 
 # Run the command
@@ -115,13 +120,17 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo "  - calibration_info.txt    (Calibration details)"
     echo "  - eval_metrics.txt        (F1, EM scores)"
     
-    if [ "$DISABLE_MONITORING" != true ]; then
-        echo "  - adc_visualizations/     (📊 ADC pipeline plots)"
+    if [ "$DISABLE_VISUALIZATIONS" != true ]; then
+        echo "  - viz_before/             (📊 Before calibration)"
+        echo "  - viz_after/              (📊 After calibration)"
         echo ""
-        echo "📊 Visualizations include:"
-        echo "  - Full pipeline plots (before/after ADC)"
-        echo "  - Distribution histograms"
-        echo "  - Evolution over calibration"
+        echo "📊 Each visualization shows:"
+        echo "  - Activation distributions (raw and quantized)"
+        echo "  - Weight distributions (raw and quantized)"
+        echo "  - BEFORE ADC: Integer MM output"
+        echo "  - ADC codes (quantization levels)"
+        echo "  - AFTER ADC: Quantized output"
+        echo "  - Before vs After comparison"
     fi
     
     echo ""
