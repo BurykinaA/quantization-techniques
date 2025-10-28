@@ -58,9 +58,12 @@ logger = logging.getLogger(__name__)
 class ADCCalibrator:
     """Calibrates ADC quantizers using activation statistics"""
     
-    def __init__(self, model: nn.Module, method: str = "minmax"):
+    def __init__(self, model: nn.Module, method: str = "minmax", bx: int = 8, bw: int = 8, signed_activations: bool = False):
         self.model = model
         self.method = method
+        self.bx = bx
+        self.bw = bw
+        self.signed_activations = signed_activations
         self.stats = {}
         
     def register_hooks(self):
@@ -202,8 +205,16 @@ class ADCCalibrator:
             
             # Compute optimal scales
             # For symmetric quantization: scale = absmax / (2^(n-1) - 1)
-            optimal_act_scale = act_absmax / 127.0  # 127 = 2^7 - 1 for 8-bit signed
-            optimal_w_scale = w_absmax / 127.0
+            # For asymmetric: scale = absmax / (2^n - 1)
+            if self.signed_activations:
+                act_levels = 2 ** (self.bx - 1) - 1  # e.g., 127 for 8-bit signed
+            else:
+                act_levels = 2 ** self.bx - 1  # e.g., 255 for 8-bit unsigned
+            
+            w_levels = 2 ** (self.bw - 1) - 1  # Weights always symmetric, e.g., 127 for 8-bit
+            
+            optimal_act_scale = act_absmax / float(act_levels)
+            optimal_w_scale = w_absmax / float(w_levels)
             
             optimal_params[name] = {
                 'act_scale': optimal_act_scale,
@@ -497,7 +508,13 @@ def main():
             output_subdir=os.path.join(args.output_dir, "viz_before")
         )
     
-    calibrator = ADCCalibrator(model, method=args.calibration_method)
+    calibrator = ADCCalibrator(
+        model, 
+        method=args.calibration_method,
+        bx=args.bx,
+        bw=args.bw,
+        signed_activations=args.signed_activations
+    )
     calibrator.calibrate(calibration_loader, num_batches=args.num_calibration_batches)
     
     # Compute optimal parameters
