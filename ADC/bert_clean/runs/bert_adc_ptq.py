@@ -646,15 +646,15 @@ def main():
         wandb.run.summary["final_exact_match"] = eval_metrics['exact_match']
         wandb.run.summary["num_calibrated_layers"] = len(optimal_params)
         
-        # Create results table
+        # Create results table (all values must be strings for WandB)
         results_table = wandb.Table(
             columns=["Metric", "Value"],
             data=[
                 ["F1 Score", f"{eval_metrics['f1']:.2f}"],
                 ["Exact Match", f"{eval_metrics['exact_match']:.2f}"],
-                ["Calibrated Layers", len(optimal_params)],
+                ["Calibrated Layers", str(len(optimal_params))],
                 ["Calibration Method", args.calibration_method],
-                ["Calibration Batches", args.num_calibration_batches],
+                ["Calibration Batches", str(args.num_calibration_batches)],
                 ["ADC Config", f"bx={args.bx}, bw={args.bw}, ba={args.ba}, k={args.k}"],
             ]
         )
