@@ -487,86 +487,6 @@ class QATLinearADC(nn.Linear):
     def disable_quantization(self):
         self.quantization_enabled = False
     
-    # def dequantize(self, yq_adc: torch.Tensor, wq: torch.Tensor) -> torch.Tensor:
-    #     """
-    #     Dequantize ADC output back to full precision
-    #     """
-    #     # Get quantization parameters
-    #     x_scale = self.activation_quantizer.scale
-    #     w_scale = self.weight_quantizer.scale
-        
-    #     # Ensure scales are not too small or too large
-    #     # x_scale = torch.clamp(x_scale, min=1e-6, max=1e3)
-    #     # w_scale = torch.clamp(w_scale, min=1e-6, max=1e3)
-        
-    #     if not self.signed_activations:
-    #         x_zp = self.activation_quantizer.zero_point
-    #     else:
-    #         x_zp = torch.zeros_like(x_scale)
-        
-    #     # Check inputs
-    #     if torch.isnan(yq_adc).any():
-    #         print("Warning: NaN in yq_adc input to dequantize")
-    #         yq_adc = torch.nan_to_num(yq_adc, nan=0.0)
-        
-    #     # Dequantize: y = yq_adc * delta
-    #     y = yq_adc * self.adc_quantizer._delta
-        
-    #     # Check for overflow after multiplication
-    #     if torch.isnan(y).any() or torch.isinf(y).any():
-    #         print(f"Warning: Overflow after delta multiplication. Delta={self.adc_quantizer._delta}, yq_adc range=[{yq_adc.min():.3f}, {yq_adc.max():.3f}]")
-    #         y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
-        
-    #     # Add ashift correction if enabled
-    #     if self.ashift:
-    #         ashift_correction = self.C * wq.sum(axis=-1)
-    #         if torch.isnan(ashift_correction).any():
-    #             print("Warning: NaN in ashift correction")
-    #             ashift_correction = torch.nan_to_num(ashift_correction, nan=0.0)
-    #         y = y + ashift_correction
-        
-    #     # Subtract zero-point correction
-    #     if not self.signed_activations:
-    #         # For zero-point correction: y = y - (x_zp / w_scale) * weight_sum
-    #         weight_sum = self.weight.sum(axis=-1)  # Sum over input features, shape: (out_features,)
-            
-    #         # Check weight_sum for issues
-    #         if torch.isnan(weight_sum).any():
-    #             print("Warning: NaN in weight_sum")
-    #             weight_sum = torch.nan_to_num(weight_sum, nan=0.0)
-            
-    #         correction = (x_zp / w_scale) * weight_sum  # Both should broadcast to (out_features,)
-            
-    #         # Check correction for issues
-    #         if torch.isnan(correction).any():
-    #             print("Warning: NaN in zero-point correction")
-    #             correction = torch.nan_to_num(correction, nan=0.0)
-            
-    #         y = y - correction
-        
-    #     # Scale back to full precision with careful handling
-    #     # y: (batch_size, out_features)
-    #     # x_scale: scalar or (1,)
-    #     # w_scale: (out_features,)
-        
-    #     # Check intermediate values
-    #     if torch.isnan(y).any():
-    #         print("Warning: NaN before final scaling")
-    #         y = torch.nan_to_num(y, nan=0.0)
-        
-    #     # Apply scaling in stages to prevent overflow
-    #     y = y * x_scale
-    #     if torch.isnan(y).any() or torch.isinf(y).any():
-    #         print("Warning: Overflow after x_scale multiplication")
-    #         y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
-        
-    #     y = y * w_scale
-    #     if torch.isnan(y).any() or torch.isinf(y).any():
-    #         print("Warning: Overflow after w_scale multiplication")
-    #         y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
-        
-    #     return y
-    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.quantization_enabled:
             return F.linear(x, self.weight, self.bias)
@@ -723,13 +643,12 @@ class TiledLinearADC(nn.Module):
                  k:  int = 4,
                  ashift: bool = False,
                  signed_activations: bool = False,
-                 mvm_limit: int = 512,   # ← твой лимит на M (=число входов на колонку IMC)
+                 mvm_limit: int = 512,
                  use_dynamic_delta: bool = True,
                  use_delta_anneal: bool = True,
                  delta_loss_weight: float = 0.01,
                  delta_anneal_epochs: float = 1.0,
-                 logger=None,
-                 use_jit: bool = False):
+                 logger=None):
         super().__init__()
         self.logger = logger
         self.in_features_total = in_features
@@ -747,7 +666,6 @@ class TiledLinearADC(nn.Module):
 
         self.n_tiles = n_tiles
         self.in_features_tile = tile_in
-        self.use_jit = use_jit
 
         # создаём плитки; bias кладём в первую (как в TiledConv2dADC)
         self.tiles = nn.ModuleList()
@@ -760,17 +678,13 @@ class TiledLinearADC(nn.Module):
                     bias=use_bias,
                     bx=bx, bw=bw, ba=ba, k=k,
                     ashift=ashift,
-                        signed_activations=signed_activations,
-                        use_dynamic_delta=use_dynamic_delta,
-                        use_delta_anneal=use_delta_anneal,
-                        delta_loss_weight=delta_loss_weight,
-                        delta_anneal_epochs=delta_anneal_epochs,
+                    signed_activations=signed_activations,
+                    use_dynamic_delta=use_dynamic_delta,
+                    use_delta_anneal=use_delta_anneal,
+                    delta_loss_weight=delta_loss_weight,
+                    delta_anneal_epochs=delta_anneal_epochs,
                 )
             )
-
-        # JIT compile the helper method if requested for better performance
-        if self.use_jit:
-            self._forward_jit = torch.jit.script(self._forward_jit)
 
     def set_epoch(self, epoch: float):
         """Set the current training epoch for delta annealing"""
@@ -840,345 +754,21 @@ class TiledLinearADC(nn.Module):
         x2d = x.reshape(-1, self.in_features_total)   # [B*, F]
         batch_size_2d = x2d.shape[0]
 
-        # Use JIT-compiled version for better performance if enabled
-        if self.use_jit:
-            y2d = self._forward_jit(x2d, batch_size_2d, self.in_features_tile)
-        else:
-            # Pre-allocate output tensor for better memory efficiency
-            y2d = torch.zeros(batch_size_2d, self.out_features, dtype=x2d.dtype, device=x2d.device)
+        # Pre-allocate output tensor for better memory efficiency
+        y2d = torch.zeros(batch_size_2d, self.out_features, dtype=x2d.dtype, device=x2d.device)
 
-            # Process tiles with optimized memory access and minimal slicing
-            tile_in = self.in_features_tile
-            for i, t in enumerate(self.tiles):
-                # Use narrow() for zero-copy slicing when possible, fallback to slice
-                if x2d.is_contiguous():
-                    xi = x2d.narrow(1, i * tile_in, tile_in)  # Zero-copy slice
-                else:
-                    xi = x2d[:, i * tile_in:(i + 1) * tile_in]  # Regular slice
+        # Process tiles with optimized memory access and minimal slicing
+        tile_in = self.in_features_tile
+        for i, t in enumerate(self.tiles):
+            # Use narrow() for zero-copy slicing when possible, fallback to slice
+            if x2d.is_contiguous():
+                xi = x2d.narrow(1, i * tile_in, tile_in)  # Zero-copy slice
+            else:
+                xi = x2d[:, i * tile_in:(i + 1) * tile_in]  # Regular slice
 
-                yi = t(xi)                         # [B*, out_features]
-                y2d.add_(yi)  # In-place addition for better performance
+            yi = t(xi)                         # [B*, out_features]
+            y2d.add_(yi)  # In-place addition for better performance
 
         y = y2d.reshape(*orig_shape[:-1], self.out_features)  # (..., out_features)
         return y
-
-    def _forward_jit(self, x2d: torch.Tensor, batch_size_2d: int, tile_in: int) -> torch.Tensor:
-        """JIT-compiled forward pass for better performance"""
-        y2d = torch.zeros(batch_size_2d, self.out_features, dtype=x2d.dtype, device=x2d.device)
-
-        # Process tiles with optimized operations
-        for i in range(self.n_tiles):
-            # Use narrow for zero-copy slicing
-            xi = x2d.narrow(1, i * tile_in, tile_in)
-            yi = self.tiles[i](xi)
-            y2d.add_(yi)
-
-        return y2d
-
-
-
-class QATMultiHeadAttentionADC(nn.Module):
-    """
-    ADC-based Quantization-Aware Training Multi-Head Attention
-    """
-    def __init__(self, 
-                 d_model: int, 
-                 num_heads: int,
-                 dropout: float = 0.1,
-                 bx: int = 8,
-                 bw: int = 8,
-                 ba: int = 8,
-                 k: int = 4):
-        super().__init__()
-        assert d_model % num_heads == 0
-        
-        self.d_model = d_model
-        self.num_heads = num_heads
-        self.d_k = d_model // num_heads
-        
-        # ADC-based QAT linear layers for Q, K, V projections
-        self.w_q = TiledLinearADC(d_model, d_model, bias=False, 
-                               bx=bx, bw=bw, ba=ba, k=k)
-        self.w_k = TiledLinearADC(d_model, d_model, bias=False,
-                               bx=bx, bw=bw, ba=ba, k=k)
-        self.w_v = TiledLinearADC(d_model, d_model, bias=False,
-                               bx=bx, bw=bw, ba=ba, k=k)
-        self.w_o = TiledLinearADC(d_model, d_model, bias=False,
-                               bx=bx, bw=bw, ba=ba, k=k)
-        
-        # Attention score quantizer
-        self.attention_quantizer = LearnableQuantizer(
-            num_bits=ba,
-            symmetric=False
-        )
-        
-        self.dropout = nn.Dropout(dropout)
-        self.scale = 1.0 / (self.d_k ** 0.5)
-    
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        batch_size, seq_len, _ = x.size()
-
-        # Generate Q, K, V
-        Q = self.w_q(x)
-        Q = Q.view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        K = self.w_k(x)
-        K = K.view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        V = self.w_v(x)
-        V = V.view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-
-        # Compute attention scores
-        scores = torch.matmul(Q, K.transpose(-2, -1)) * self.scale
-
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
-
-        # Quantize attention scores
-        attention_weights = F.softmax(scores, dim=-1)
-        attention_weights = self.attention_quantizer(attention_weights)
-        attention_weights = self.dropout(attention_weights)
-
-        # Apply attention
-        context = torch.matmul(attention_weights, V)
-        context = context.transpose(1, 2).contiguous().view(
-            batch_size, seq_len, self.d_model
-        )
-
-        # Output projection
-        output = self.w_o(context)
-
-        return output
-    
-    def enable_quantization(self):
-        self.w_q.enable_quantization()
-        self.w_k.enable_quantization()
-        self.w_v.enable_quantization()
-        self.w_o.enable_quantization()
-    
-    def disable_quantization(self):
-        self.w_q.disable_quantization()
-        self.w_k.disable_quantization()
-        self.w_v.disable_quantization()
-        self.w_o.disable_quantization()
-
-class QATTransformerBlockADC(nn.Module):
-    """
-    ADC-based Quantization-Aware Training Transformer Block
-    """
-    def __init__(self, 
-                 d_model: int, 
-                 num_heads: int,
-                 d_ff: int,
-                 dropout: float = 0.1,
-                 bx: int = 8,
-                 bw: int = 8,
-                 ba: int = 8,
-                 k: int = 4):
-        super().__init__()
-        
-        self.attention = QATMultiHeadAttentionADC(
-            d_model, num_heads, dropout, bx, bw, ba, k
-        )
-        
-        self.feed_forward = nn.Sequential(
-            TiledLinearADC(d_model, d_ff, bx=bx, bw=bw, ba=ba, k=k),
-            nn.GELU(),
-            TiledLinearADC(d_ff, d_model, bx=bx, bw=bw, ba=ba, k=k),
-            nn.Dropout(dropout)
-        )
-        
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
-        self.dropout = nn.Dropout(dropout)
-    
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-        # Self-attention with residual connection
-        attn_output = self.attention(x, mask)
-        x = self.norm1(x + self.dropout(attn_output))
-
-        # Feed-forward with residual connection
-        ff_output = self._feed_forward_no_loss(x)
-        x = self.norm2(x + ff_output)
-
-        return x, torch.tensor(0.0, device=x.device, dtype=x.dtype)
-
-    def _feed_forward_no_loss(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply feed-forward ignoring internal ADC delta loss (handled elsewhere)"""
-        for module in self.feed_forward:
-            x = module(x)
-        return x
-    
-    def enable_quantization(self):
-        self.attention.enable_quantization()
-        for module in self.feed_forward:
-            if hasattr(module, 'enable_quantization'):
-                module.enable_quantization()
-    
-    def disable_quantization(self):
-        self.attention.disable_quantization()
-        for module in self.feed_forward:
-            if hasattr(module, 'disable_quantization'):
-                module.disable_quantization() 
-
-if __name__ == "__main__":
-    import torch
-    import torch.nn.functional as F
-    
-    print("="*50)
-    print("Testing ADC Layers")
-    print("="*50)
-    
-    # Set up for gradient tracking
-    torch.manual_seed(42)
-    
-    def check_tensor(tensor, name):
-        """Helper function to check tensor for issues"""
-        if tensor is None:
-            print(f"{name}: None")
-            return
-        
-        has_nan = torch.isnan(tensor).any()
-        has_inf = torch.isinf(tensor).any()
-        print(f"{name}: shape={tensor.shape}, mean={tensor.mean().item():.6f}, std={tensor.std().item():.6f}, min={tensor.min().item():.6f}, max={tensor.max().item():.6f}, nan={has_nan}, inf={has_inf}")
-        
-        if has_nan or has_inf:
-            print(f"  WARNING: {name} contains NaN or inf!")
-            return False
-        return True
-    
-    # Test 1: LearnableQuantizer
-    print("\n1. Testing LearnableQuantizer")
-    print("-" * 30)
-    
-    # Test per-tensor symmetric quantizer (like weight quantizer)
-    weight_quantizer = LearnableQuantizer(num_bits=8, symmetric=True, per_channel=False)
-    dummy_weight = torch.randn(10, 5, requires_grad=True) * 0.1  # Small weights
-    check_tensor(dummy_weight, "Input weights")
-    
-    print("Weight quantizer forward pass...")
-    quantized_weight = weight_quantizer(dummy_weight)
-    check_tensor(quantized_weight, "Quantized weights")
-    check_tensor(weight_quantizer.scale, "Weight scale")
-    
-    # Test per-channel symmetric quantizer  
-    weight_quantizer_pc = LearnableQuantizer(num_bits=8, symmetric=True, per_channel=True, channel_dim=0)
-    print("Per-channel weight quantizer forward pass...")
-    quantized_weight_pc = weight_quantizer_pc(dummy_weight)
-    check_tensor(quantized_weight_pc, "PC Quantized weights")
-    check_tensor(weight_quantizer_pc.scale, "PC Weight scale")
-    
-    # Test per-tensor asymmetric quantizer (like activation quantizer)
-    act_quantizer = LearnableQuantizer(num_bits=8, symmetric=False, per_channel=False)
-    dummy_activation = torch.randn(3, 10, requires_grad=True) * 0.5 + 0.5  # Positive activations
-    check_tensor(dummy_activation, "Input activations")
-    
-    print("Activation quantizer forward pass...")
-    quantized_activation = act_quantizer(dummy_activation)
-    check_tensor(quantized_activation, "Quantized activations")
-    check_tensor(act_quantizer.scale, "Activation scale")
-    check_tensor(act_quantizer.zero_point, "Activation zero_point")
-    
-    # Test 2: ADCQuantizer
-    print("\n2. Testing ADCQuantizer")
-    print("-" * 30)
-    
-    adc_quantizer = ADCQuantizer(M=5, bx=8, bw=8, ba=8, k=4)
-    
-    # Simulate matrix multiplication output
-    dummy_mm_output = torch.randn(3, 10, requires_grad=True) * 10  # Matrix mult output
-    check_tensor(dummy_mm_output, "Matrix mult output")
-    
-    print("ADC quantizer forward pass...")
-    adc_output = adc_quantizer(dummy_mm_output)
-    check_tensor(adc_output, "ADC output")
-    print(f"ADC delta: {adc_quantizer._delta.item():.6f}")
-    
-    # Test 3: QATLinearADC
-    print("\n3. Testing QATLinearADC")
-    print("-" * 30)
-    
-    linear_adc = QATLinearADC(in_features=5, out_features=10, bias=True, 
-                              bx=8, bw=8, ba=8, k=4, ashift=False)
-    
-    dummy_input = torch.randn(3, 5, requires_grad=True) * 0.5  # Small input
-    check_tensor(dummy_input, "Linear input")
-    check_tensor(linear_adc.weight, "Linear weight")
-    check_tensor(linear_adc.bias, "Linear bias")
-    
-    print("QATLinearADC forward pass...")
-    
-    # Step by step forward pass with logging
-    print("  Step 1: Quantize activations")
-    xq = linear_adc.activation_quantizer(dummy_input)
-    check_tensor(xq, "  Quantized activations")
-    check_tensor(linear_adc.activation_quantizer.scale, "  Act scale")
-    
-    print("  Step 2: Quantize weights")
-    wq = linear_adc.weight_quantizer(linear_adc.weight)
-    check_tensor(wq, "  Quantized weights")
-    check_tensor(linear_adc.weight_quantizer.scale, "  Weight scale")
-    
-    print("  Step 3: Matrix multiplication")
-    y_for_adc = F.linear(xq, wq, bias=None)
-    check_tensor(y_for_adc, "  MM output")
-    
-    print("  Step 4: ADC quantization")
-    yq_adc = linear_adc.adc_quantizer(y_for_adc)
-    check_tensor(yq_adc, "  ADC quantized")
-    
-    print("  Step 5: Dequantization")
-    try:
-        dequant_output = linear_adc.dequantize(yq_adc, wq)
-        check_tensor(dequant_output, "  Dequantized")
-    except Exception as e:
-        print(f"  ERROR in dequantization: {e}")
-    
-    print("  Step 6: Full forward")
-    try:
-        final_output = linear_adc(dummy_input)
-        check_tensor(final_output, "  Final output")
-    except Exception as e:
-        print(f"  ERROR in forward: {e}")
-    
-    # Test 4: Gradient flow
-    print("\n4. Testing Gradient Flow")
-    print("-" * 30)
-    
-    try:
-        # Create fresh layer for gradient test
-        test_layer = QATLinearADC(in_features=5, out_features=2, bias=True,
-                                  bx=8, bw=8, ba=8, k=4, ashift=False)
-        test_input = torch.randn(2, 5, requires_grad=True) * 0.1
-        
-        print("Forward pass...")
-        output = test_layer(test_input)
-        check_tensor(output, "Test output")
-        
-        print("Backward pass...")
-        loss = output.sum()
-        print(f"Loss: {loss.item():.6f}")
-        
-        loss.backward()
-        
-        print("Checking gradients...")
-        check_tensor(test_input.grad, "Input grad")
-        check_tensor(test_layer.weight.grad, "Weight grad")
-        check_tensor(test_layer.bias.grad, "Bias grad")
-        check_tensor(test_layer.activation_quantizer.scale.grad, "Act scale grad")
-        check_tensor(test_layer.weight_quantizer.scale.grad, "Weight scale grad")
-        
-        # Check for exploding gradients
-        if test_layer.weight.grad is not None:
-            grad_norm = test_layer.weight.grad.norm().item()
-            print(f"Weight gradient norm: {grad_norm:.6f}")
-            if grad_norm > 100:
-                print("WARNING: Gradient norm is very large!")
-        
-    except Exception as e:
-        print(f"ERROR in gradient test: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    print("\n" + "="*50)
-    print("Testing complete")
-    print("="*50)
  

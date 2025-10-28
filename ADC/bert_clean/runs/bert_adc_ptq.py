@@ -42,6 +42,14 @@ except ImportError:
     WANDB_AVAILABLE = False
     print("Warning: wandb not available, logging will be disabled")
 
+# ADC monitoring import
+try:
+    from adc_monitoring_integration import create_adc_training_monitor, add_adc_monitoring_to_model
+    ADC_MONITORING_AVAILABLE = True
+except ImportError:
+    ADC_MONITORING_AVAILABLE = False
+    print("Warning: ADC monitoring not available")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -147,7 +155,7 @@ class ADCCalibrator:
         
         logger.info(f"Collected stats for {len(self.stats)} layers")
     
-    def compute_optimal_params(self) -> Dict[str, Dict]:
+    def compute_optimal_params(self, log_to_wandb: bool = False) -> Dict[str, Dict]:
         """
         Compute optimal quantization SCALES (not delta!) from collected statistics.
         
@@ -158,6 +166,11 @@ class ADCCalibrator:
         given fixed delta and ADC range [-na, pa].
         """
         optimal_params = {}
+        
+        # Aggregate statistics for wandb logging
+        all_act_scales = []
+        all_w_scales = []
+        all_y_int_targets = []
         
         for name, stats in self.stats.items():
             if not stats['y_int_absmax']:  # No data collected
@@ -196,6 +209,27 @@ class ADCCalibrator:
                 'w_scale': optimal_w_scale,
                 'y_int_target': y_int_target,  # For monitoring
             }
+            
+            all_act_scales.append(optimal_act_scale)
+            all_w_scales.append(optimal_w_scale)
+            all_y_int_targets.append(y_int_target)
+        
+        # Log calibration statistics to wandb
+        if log_to_wandb and WANDB_AVAILABLE and wandb.run is not None:
+            wandb.log({
+                "calibration/num_layers": len(optimal_params),
+                "calibration/act_scale_mean": np.mean(all_act_scales),
+                "calibration/act_scale_std": np.std(all_act_scales),
+                "calibration/act_scale_min": np.min(all_act_scales),
+                "calibration/act_scale_max": np.max(all_act_scales),
+                "calibration/w_scale_mean": np.mean(all_w_scales),
+                "calibration/w_scale_std": np.std(all_w_scales),
+                "calibration/w_scale_min": np.min(all_w_scales),
+                "calibration/w_scale_max": np.max(all_w_scales),
+                "calibration/y_int_target_mean": np.mean(all_y_int_targets),
+                "calibration/y_int_target_std": np.std(all_y_int_targets),
+                "calibration/y_int_target_max": np.max(all_y_int_targets),
+            })
         
         return optimal_params
     
@@ -327,8 +361,48 @@ def main():
     parser.add_argument("--max_length", type=int, default=384)
     parser.add_argument("--doc_stride", type=int, default=128)
     
+    # WandB settings
+    parser.add_argument("--wandb_project", type=str, default="bert-adc-ptq",
+                       help="WandB project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                       help="WandB run name (auto-generated if not provided)")
+    parser.add_argument("--disable_wandb", action="store_true",
+                       help="Disable WandB logging")
+    
+    # Monitoring settings
+    parser.add_argument("--disable_adc_monitoring", action="store_true",
+                       help="Disable ADC distribution monitoring and plots")
+    parser.add_argument("--monitored_layers", type=int, default=3,
+                       help="Number of layers to monitor for visualization")
+    
     args = parser.parse_args()
     set_seed(args.seed)
+    
+    # Initialize WandB
+    use_wandb = WANDB_AVAILABLE and not args.disable_wandb
+    if use_wandb:
+        run_name = args.wandb_run_name or f"ptq_bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}_{args.calibration_method}"
+        wandb.init(
+            project=args.wandb_project,
+            name=run_name,
+            config={
+                "bx": args.bx,
+                "bw": args.bw,
+                "ba": args.ba,
+                "k": args.k,
+                "ashift": args.ashift,
+                "signed_activations": args.signed_activations,
+                "mvm_limit": args.mvm_limit,
+                "calibration_method": args.calibration_method,
+                "num_calibration_batches": args.num_calibration_batches,
+                "calibration_batch_size": args.calibration_batch_size,
+                "eval_batch_size": args.eval_batch_size,
+                "seed": args.seed,
+            }
+        )
+        logger.info(f"WandB initialized: project={args.wandb_project}, run={run_name}")
+    else:
+        logger.info("WandB logging disabled")
     
     # Load checkpoint
     logger.info(f"Loading QAT checkpoint from: {args.qat_checkpoint_dir}")
@@ -361,6 +435,36 @@ def main():
     
     stats = BertADCConverter.count_adc_qat_layers(model)
     logger.info(f"Model: {stats['adc_qat_linear']} ADC layers, {stats['total_params']:,} params")
+    
+    # Setup ADC distribution monitoring BEFORE calibration to capture initial state
+    adc_plotter = None
+    if ADC_MONITORING_AVAILABLE and not args.disable_adc_monitoring:
+        try:
+            logger.info("Setting up ADC distribution monitoring...")
+            from adc_distribution_plotter import ADCDistributionPlotter
+            
+            adc_plotter = ADCDistributionPlotter(
+                output_dir=os.path.join(args.output_dir, "adc_visualizations"),
+                save_every_n_batches=args.num_calibration_batches  # Save after calibration
+            )
+            
+            # Add monitoring to key layers - enable full pipeline monitoring
+            monitored_layers = add_adc_monitoring_to_model(
+                model, adc_plotter,
+                layer_patterns=["attention.output.dense", "intermediate.dense", "output.dense"],
+                max_layers=args.monitored_layers,
+                monitor_full_pipeline=True  # Capture full pipeline: x_raw, x_quant, w_raw, w_quant, before_adc, after_adc
+            )
+            
+            if monitored_layers > 0:
+                logger.info(f"ADC monitoring enabled for {monitored_layers} layers")
+                logger.info(f"Will save visualizations to: {os.path.join(args.output_dir, 'adc_visualizations')}")
+            else:
+                logger.warning("No ADC layers found for monitoring")
+                adc_plotter = None
+        except Exception as e:
+            logger.warning(f"Failed to setup ADC monitoring: {e}")
+            adc_plotter = None
     
     # Load calibration data
     logger.info("Loading SQuAD dataset for calibration...")
@@ -397,15 +501,50 @@ def main():
     logger.info("STEP 1: CALIBRATION")
     logger.info("="*80)
     
+    # Capture BEFORE calibration state
+    if adc_plotter is not None:
+        logger.info("Capturing ADC state BEFORE calibration...")
+        adc_plotter.step()  # Increment step counter
+    
     calibrator = ADCCalibrator(model, method=args.calibration_method)
     calibrator.calibrate(calibration_loader, num_batches=args.num_calibration_batches)
     
     # Compute optimal parameters
     logger.info("Computing optimal quantization scales...")
-    optimal_params = calibrator.compute_optimal_params()
+    optimal_params = calibrator.compute_optimal_params(log_to_wandb=use_wandb)
     
     # Apply calibration
     calibrator.apply_calibration(optimal_params)
+    
+    # Log per-layer calibration stats to wandb
+    if use_wandb and len(optimal_params) > 0:
+        # Create histograms of calibrated parameters
+        layer_names = list(optimal_params.keys())
+        act_scales = [p['act_scale'] for p in optimal_params.values()]
+        w_scales = [p['w_scale'] for p in optimal_params.values()]
+        y_int_targets = [p['y_int_target'] for p in optimal_params.values()]
+        
+        wandb.log({
+            "calibration/act_scale_histogram": wandb.Histogram(act_scales),
+            "calibration/w_scale_histogram": wandb.Histogram(w_scales),
+            "calibration/y_int_target_histogram": wandb.Histogram(y_int_targets),
+        })
+    
+    # Capture AFTER calibration state
+    if adc_plotter is not None:
+        logger.info("Capturing ADC state AFTER calibration...")
+        logger.info("Running a few batches to capture post-calibration distributions...")
+        
+        # Run a few batches to capture the new state
+        with torch.no_grad():
+            for i, batch in enumerate(calibration_loader):
+                if i >= 5:  # Just 5 batches to capture state
+                    break
+                batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
+                        for k, v in batch.items()}
+                _ = model(**batch)
+        
+        adc_plotter.step()  # Increment step counter
     
     # Evaluate
     logger.info("="*80)
@@ -482,6 +621,18 @@ def main():
     logger.info(f"F1 Score:      {eval_metrics['f1']:.2f}")
     logger.info(f"Exact Match:   {eval_metrics['exact_match']:.2f}")
     
+    # Log final metrics to wandb
+    if use_wandb:
+        wandb.log({
+            "eval/f1": eval_metrics['f1'],
+            "eval/exact_match": eval_metrics['exact_match'],
+        })
+        
+        # Create summary statistics
+        wandb.run.summary["final_f1"] = eval_metrics['f1']
+        wandb.run.summary["final_exact_match"] = eval_metrics['exact_match']
+        wandb.run.summary["num_calibrated_layers"] = len(optimal_params)
+    
     # Save calibrated model
     logger.info(f"Saving calibrated model to: {args.output_dir}")
     os.makedirs(args.output_dir, exist_ok=True)
@@ -521,11 +672,54 @@ def main():
         for k, v in sorted(eval_metrics.items()):
             f.write(f"{k}: {v}\n")
     
+    # Generate ADC distribution visualizations
+    if adc_plotter is not None:
+        try:
+            logger.info("="*80)
+            logger.info("GENERATING ADC VISUALIZATIONS")
+            logger.info("="*80)
+            
+            # Generate plots for each monitored layer
+            for layer_name in adc_plotter.batch_data.keys():
+                logger.info(f"Creating plots for layer: {layer_name}")
+                
+                # Plot evolution over calibration (before vs after)
+                adc_plotter.plot_evolution_over_batches(layer_name, max_batches=10)
+                
+                # Plot final distributions
+                adc_plotter.plot_adc_distribution(layer_name)
+                adc_plotter.plot_full_pipeline(layer_name)
+            
+            viz_dir = os.path.join(args.output_dir, "adc_visualizations")
+            logger.info(f"✓ ADC visualizations saved to: {viz_dir}")
+            
+            # Log visualizations to WandB
+            if use_wandb:
+                import glob
+                logger.info("Uploading visualizations to WandB...")
+                for img_path in glob.glob(os.path.join(viz_dir, "*.png")):
+                    img_name = os.path.basename(img_path)
+                    wandb.log({f"visualizations/{img_name}": wandb.Image(img_path)})
+                logger.info("✓ Visualizations uploaded to WandB")
+                
+        except Exception as e:
+            logger.error(f"Failed to generate ADC visualizations: {e}")
+            import traceback
+            traceback.print_exc()
+    
     logger.info("="*80)
     logger.info("PTQ COMPLETE!")
     logger.info("="*80)
     logger.info(f"Calibrated model saved to: {args.output_dir}")
     logger.info(f"F1: {eval_metrics['f1']:.2f}, EM: {eval_metrics['exact_match']:.2f}")
+    
+    if adc_plotter is not None:
+        logger.info(f"📊 ADC visualizations: {os.path.join(args.output_dir, 'adc_visualizations')}")
+    
+    # Finish wandb run
+    if use_wandb:
+        wandb.finish()
+        logger.info("WandB run finished")
 
 
 if __name__ == "__main__":
