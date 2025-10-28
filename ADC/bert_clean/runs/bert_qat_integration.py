@@ -318,6 +318,7 @@ def prepare_train_features(examples, tokenizer, max_length=384, doc_stride=128):
 
 
 def prepare_validation_features(examples, tokenizer, max_length=384, doc_stride=128):
+    """Prepare validation features WITH labels for metric computation"""
     tokenized = tokenizer(
         examples["question"],
         examples["context"],
@@ -330,19 +331,65 @@ def prepare_validation_features(examples, tokenizer, max_length=384, doc_stride=
     )
 
     sample_mapping = tokenized.pop("overflow_to_sample_mapping")
+    offset_mapping = tokenized["offset_mapping"]
+    
     tokenized["example_id"] = []
+    tokenized["start_positions"] = []
+    tokenized["end_positions"] = []
 
     for i in range(len(tokenized["input_ids"])):
+        input_ids = tokenized["input_ids"][i]
+        cls_index = input_ids.index(tokenizer.cls_token_id)
         sequence_ids = tokenized.sequence_ids(i)
         context_index = 1
-
+        sample_index = sample_mapping[i]
+        
+        # Store example_id
+        tokenized["example_id"].append(examples["id"][sample_index])
+        
+        # Set offset_mapping for postprocessing
         tokenized["offset_mapping"][i] = [
             (o if sequence_ids[k] == context_index else None)
-            for k, o in enumerate(tokenized["offset_mapping"][i])
+            for k, o in enumerate(offset_mapping[i])
         ]
-
-        sample_index = sample_mapping[i]
-        tokenized["example_id"].append(examples["id"][sample_index])
+        
+        # Add labels (start/end positions) for loss computation
+        answers = examples["answers"][sample_index]
+        if len(answers["answer_start"]) == 0:
+            tokenized["start_positions"].append(cls_index)
+            tokenized["end_positions"].append(cls_index)
+        else:
+            start_char = answers["answer_start"][0]
+            end_char = start_char + len(answers["text"][0])
+            
+            # Find token positions
+            token_start_index = 0
+            while sequence_ids[token_start_index] != context_index:
+                token_start_index += 1
+            token_end_index = len(input_ids) - 1
+            while sequence_ids[token_end_index] != context_index:
+                token_end_index -= 1
+            
+            # Check if answer is in this chunk
+            if not (offset_mapping[i][token_start_index][0] <= start_char and 
+                    offset_mapping[i][token_end_index][1] >= end_char):
+                tokenized["start_positions"].append(cls_index)
+                tokenized["end_positions"].append(cls_index)
+            else:
+                # Find exact token positions
+                while token_start_index < len(offset_mapping[i]) and \
+                      offset_mapping[i][token_start_index][0] <= start_char and \
+                      sequence_ids[token_start_index] == context_index:
+                    token_start_index += 1
+                start_position = token_start_index - 1
+                
+                while offset_mapping[i][token_end_index][1] >= end_char and \
+                      sequence_ids[token_end_index] == context_index:
+                    token_end_index -= 1
+                end_position = token_end_index + 1
+                
+                tokenized["start_positions"].append(start_position)
+                tokenized["end_positions"].append(end_position)
 
     return tokenized
 
@@ -622,6 +669,7 @@ def main():
     )
     
     # Small train subset for F1 evaluation (1000 examples)
+    # Use prepare_validation_features to get both labels and example_id for metrics
     train_eval_size = min(1000, len(raw["train"]))
     train_eval_examples = raw["train"].select(range(train_eval_size))
     train_eval_dataset = train_eval_examples.map(
@@ -633,10 +681,10 @@ def main():
     logger.info(f"Created train eval subset with {train_eval_size} examples")
     
     # Validation dataset (used as dev set)
-    # IMPORTANT: Use prepare_train_features to get start_positions/end_positions for metrics computation
+    # Use updated prepare_validation_features that includes both labels AND example_id
     eval_examples = raw["validation"]
     eval_dataset = eval_examples.map(
-        lambda x: prepare_train_features(x, tokenizer, args.max_length, args.doc_stride),
+        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
         batched=True,
         remove_columns=eval_examples.column_names,
         desc="Tokenizing validation",
