@@ -530,13 +530,33 @@ def main():
             "calibration/y_int_target_histogram": wandb.Histogram(y_int_targets),
         })
         
+        # Create detailed calibration table
+        calibration_table_data = []
+        for name, params in sorted(optimal_params.items())[:20]:  # Show top 20 layers
+            calibration_table_data.append([
+                name,
+                f"{params['act_scale']:.6f}",
+                f"{params['w_scale']:.6f}",
+                f"{params['y_int_target']:.2f}",
+            ])
+        
+        if calibration_table_data:
+            calibration_table = wandb.Table(
+                columns=["Layer", "Activation Scale", "Weight Scale", "Y_int Target"],
+                data=calibration_table_data
+            )
+            wandb.log({"calibration/layer_details": calibration_table})
+            logger.info(f"✅ Logged calibration details for {len(calibration_table_data)} layers to WandB")
+        
         # Log before/after visualizations
         if viz_before:
             for name, img_path in viz_before.items():
                 wandb.log({f"viz_before/{name}": wandb.Image(img_path)})
+            logger.info(f"✅ Uploaded {len(viz_before)} BEFORE visualizations to WandB")
         if viz_after:
             for name, img_path in viz_after.items():
                 wandb.log({f"viz_after/{name}": wandb.Image(img_path)})
+            logger.info(f"✅ Uploaded {len(viz_after)} AFTER visualizations to WandB")
     
     # Evaluate
     logger.info("="*80)
@@ -615,6 +635,7 @@ def main():
     
     # Log final metrics to wandb
     if use_wandb:
+        # Log main metrics
         wandb.log({
             "eval/f1": eval_metrics['f1'],
             "eval/exact_match": eval_metrics['exact_match'],
@@ -624,6 +645,20 @@ def main():
         wandb.run.summary["final_f1"] = eval_metrics['f1']
         wandb.run.summary["final_exact_match"] = eval_metrics['exact_match']
         wandb.run.summary["num_calibrated_layers"] = len(optimal_params)
+        
+        # Create results table
+        results_table = wandb.Table(
+            columns=["Metric", "Value"],
+            data=[
+                ["F1 Score", f"{eval_metrics['f1']:.2f}"],
+                ["Exact Match", f"{eval_metrics['exact_match']:.2f}"],
+                ["Calibrated Layers", len(optimal_params)],
+                ["Calibration Method", args.calibration_method],
+                ["Calibration Batches", args.num_calibration_batches],
+                ["ADC Config", f"bx={args.bx}, bw={args.bw}, ba={args.ba}, k={args.k}"],
+            ]
+        )
+        wandb.log({"results/summary_table": results_table})
     
     # Save calibrated model
     logger.info(f"Saving calibrated model to: {args.output_dir}")
@@ -677,8 +712,52 @@ def main():
         if viz_after:
             logger.info(f"  After calibration:  {os.path.join(args.output_dir, 'viz_after')}")
     
-    # Finish wandb run
+    # Final WandB logging
     if use_wandb:
+        # Log completion status
+        wandb.log({
+            "status/ptq_complete": True,
+            "status/f1_score": eval_metrics['f1'],
+            "status/exact_match": eval_metrics['exact_match'],
+        })
+        
+        # Log paths and artifacts info
+        wandb.run.summary["output_dir"] = args.output_dir
+        wandb.run.summary["model_path"] = os.path.join(args.output_dir, "pytorch_model.bin")
+        wandb.run.summary["has_visualizations"] = bool(viz_before or viz_after)
+        
+        if viz_before:
+            wandb.run.summary["viz_before_path"] = os.path.join(args.output_dir, "viz_before")
+            wandb.run.summary["viz_before_count"] = len(viz_before)
+        if viz_after:
+            wandb.run.summary["viz_after_path"] = os.path.join(args.output_dir, "viz_after")
+            wandb.run.summary["viz_after_count"] = len(viz_after)
+        
+        # Create final summary table with all key information
+        summary_data = [
+            ["✅ PTQ Status", "COMPLETE"],
+            ["📊 F1 Score", f"{eval_metrics['f1']:.2f}"],
+            ["📊 Exact Match", f"{eval_metrics['exact_match']:.2f}"],
+            ["🔧 Calibrated Layers", str(len(optimal_params))],
+            ["⚙️ Calibration Method", args.calibration_method],
+            ["📦 Calibration Batches", str(args.num_calibration_batches)],
+            ["💾 Model Path", args.output_dir],
+        ]
+        
+        if viz_before:
+            summary_data.append(["📸 Before Viz", f"{len(viz_before)} plots"])
+        if viz_after:
+            summary_data.append(["📸 After Viz", f"{len(viz_after)} plots"])
+        
+        final_summary_table = wandb.Table(
+            columns=["Key", "Value"],
+            data=summary_data
+        )
+        wandb.log({"final/summary": final_summary_table})
+        
+        logger.info("✅ Logged completion status and paths to WandB")
+        
+        # Finish wandb run
         wandb.finish()
         logger.info("WandB run finished")
 
