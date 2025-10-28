@@ -318,7 +318,11 @@ def prepare_train_features(examples, tokenizer, max_length=384, doc_stride=128):
 
 
 def prepare_validation_features(examples, tokenizer, max_length=384, doc_stride=128):
-    """Prepare validation features with example_id and offset_mapping for postprocessing"""
+    """
+    Prepare validation features with example_id, offset_mapping, and dummy labels.
+    Labels (start/end = 0) are required for Trainer to call compute_metrics.
+    Actual F1/EM computed from logits via postprocessing, not from these labels.
+    """
     tokenized = tokenizer(
         examples["question"],
         examples["context"],
@@ -332,6 +336,8 @@ def prepare_validation_features(examples, tokenizer, max_length=384, doc_stride=
 
     sample_mapping = tokenized.pop("overflow_to_sample_mapping")
     tokenized["example_id"] = []
+    tokenized["start_positions"] = []
+    tokenized["end_positions"] = []
 
     for i in range(len(tokenized["input_ids"])):
         sequence_ids = tokenized.sequence_ids(i)
@@ -344,6 +350,11 @@ def prepare_validation_features(examples, tokenizer, max_length=384, doc_stride=
 
         sample_index = sample_mapping[i]
         tokenized["example_id"].append(examples["id"][sample_index])
+        
+        # Dummy labels (0=CLS) required for Trainer to trigger compute_metrics
+        # F1/EM computed from logits in postprocessing, these labels not used
+        tokenized["start_positions"].append(0)
+        tokenized["end_positions"].append(0)
 
     return tokenized
 
