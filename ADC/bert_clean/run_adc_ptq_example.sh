@@ -11,7 +11,7 @@ BW=8              # Weight bits
 BA=8              # ADC bits
 K=4               # Hardware design parameter
 ASHIFT=false      # Enable A-shift (set to true if needed)
-SIGNED_ACT=true   # Use signed activation quantization (RECOMMENDED)
+SIGNED_ACT=false  # false = asymmetric/unsigned (like QAT), true = symmetric/signed
 MVM_LIMIT=256     # Memory vector multiplication limit for tiling
 
 # Calibration Settings
