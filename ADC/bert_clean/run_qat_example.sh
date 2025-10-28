@@ -2,8 +2,8 @@
 # Example script to run QAT training with WandB logging
 
 # Configuration
-FP_CHECKPOINT="./outputs_qa/squad_qa_20250814_100925"  # Change this to your FP checkpoint
-OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_qat"
+FP_CHECKPOINT="./ADC/bert_clean/checkpoints/outputs_qat/squad_qat_20251028_001954"  # Change this to your FP checkpoint
+OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_ad_ptq"
 WEIGHT_BITS=8
 ACTIVATION_BITS=8
 NUM_EPOCHS=2
