@@ -55,6 +55,56 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def show_model_with_adc_hooks(model, visualize_patterns):
+    """
+    Print the full module tree and highlight:
+      • every QATLinearADC that ADCCalibrator will hook   →  📊
+      • every layer that will also be visualised          →  ⭐
+    
+    Returns:
+        str: The formatted model structure text
+    """
+    def will_visualise(name):
+        return any(pat in name for pat in visualize_patterns)
+
+    def format_line(level, name, module):
+        bullet = "└─ " if level > 0 else ""
+        indent = "   " * max(level - 1, 0) + bullet
+        module_type = module.__class__.__name__
+        tag = ""
+        if isinstance(module, QATLinearADC):
+            tag = " 📊"  # hooked by calibrator
+            if will_visualise(name):
+                tag += "⭐"  # also plotted
+        
+        # Only show leaves or modules with tags
+        if tag or not list(module.children()):
+            return f"{indent}{name or 'model'} ({module_type}){tag}"
+        return None
+
+    # Build the output as a list of lines
+    output_lines = []
+    output_lines.append("="*80)
+    output_lines.append("MODEL STRUCTURE WITH ADC HOOKS")
+    output_lines.append("="*80)
+    output_lines.append("Legend: 📊 = calibration hook,  ⭐ = visualization")
+    output_lines.append("-"*80)
+    
+    for name, module in model.named_modules():
+        level = len(name.split(".")) if name else 0
+        line = format_line(level, name, module)
+        if line:
+            output_lines.append(line)
+    
+    output_lines.append("="*80)
+    
+    # Join and log
+    output_text = "\n".join(output_lines)
+    logger.info("\n" + output_text)
+    
+    return output_text
+
+
 class ADCCalibrator:
     """Calibrates ADC quantizers using activation statistics"""
     
@@ -448,6 +498,14 @@ def main():
     
     stats = BertADCConverter.count_adc_qat_layers(model)
     logger.info(f"Model: {stats['adc_qat_linear']} ADC layers, {stats['total_params']:,} params")
+    
+    # Show model structure with ADC hooks
+    model_structure_text = show_model_with_adc_hooks(model, args.visualize_layers)
+    
+    # Log model structure to wandb
+    if use_wandb:
+        wandb.run.summary["model_structure"] = model_structure_text
+        logger.info("Logged model structure to WandB")
     
     # Prepare sample input for visualization (if enabled)
     sample_input = None
