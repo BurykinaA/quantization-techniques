@@ -25,6 +25,7 @@ from transformers import (
     set_seed,
 )
 from torch.utils.data import DataLoader
+from datetime import datetime
 
 import sys
 from pathlib import Path
@@ -53,6 +54,14 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def append_current_date_to_checkpoint(checkpoint_base: str) -> str:
+    current_date = datetime.now().strftime("%Y%m%d")
+    checkpoint_with_date = f"{checkpoint_base}_{current_date}"
+    
+    logger.info(f"Using checkpoint with current date: {checkpoint_with_date}")
+    return checkpoint_with_date
 
 
 def show_model_with_adc_hooks(model, visualize_patterns):
@@ -467,9 +476,10 @@ def main():
     else:
         logger.info("WandB logging disabled")
     
-    # Load checkpoint
-    logger.info(f"Loading QAT checkpoint from: {args.qat_checkpoint_dir}")
-    checkpoint_dir = find_last_checkpoint_dir(args.qat_checkpoint_dir)
+
+    resolved_checkpoint = append_current_date_to_checkpoint(args.qat_checkpoint_dir)
+    logger.info(f"Loading QAT checkpoint from: {resolved_checkpoint}")
+    checkpoint_dir = find_last_checkpoint_dir(resolved_checkpoint)
     
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir, use_fast=True)
     tokenizer.padding_side = "right"

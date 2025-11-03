@@ -2,7 +2,8 @@
 # Example script to run ADC Post-Training Quantization (PTQ) with WandB logging and visualizations
 
 # Configuration
-QAT_CHECKPOINT="./ADC/bert_clean/checkpoints/outputs_qat/squad_qat_20251028_001954"  # Change this to your QAT checkpoint
+# Specify base path WITHOUT date - script automatically appends current date (YYYYMMDD)
+QAT_CHECKPOINT="./ADC/bert_clean/checkpoints/outputs_qat/squad_qat"
 OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_ad_ptq"
 
 # ADC Hardware Configuration
