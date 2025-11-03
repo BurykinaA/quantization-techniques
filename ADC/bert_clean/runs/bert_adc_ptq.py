@@ -164,8 +164,10 @@ class ADCCalibrator:
                     if act_q.symmetric:
                         code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
                     else:
+                        # Asymmetric: build codes then center them
                         zp_x = act_q.zero_point
-                        code_x = torch.clamp(torch.round(x / s_x + zp_x), act_q.qmin, act_q.qmax)
+                        code_x_raw = torch.clamp(torch.round(x / s_x + zp_x), act_q.qmin, act_q.qmax)
+                        code_x = code_x_raw - zp_x  # Center before matrix-multiply
                     
                     w_q = module.weight_quantizer
                     s_w_vec = w_q.scale
@@ -887,8 +889,10 @@ def _generate_adc_visualizations(model, sample_input, layer_patterns, title_pref
                 if act_q.symmetric:
                     code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
                 else:
+                    # Asymmetric: build codes then center them
                     zp_x = act_q.zero_point
-                    code_x = torch.clamp(torch.round(x / s_x + zp_x), act_q.qmin, act_q.qmax)
+                    code_x_raw = torch.clamp(torch.round(x / s_x + zp_x), act_q.qmin, act_q.qmax)
+                    code_x = code_x_raw - zp_x  # Center before matrix-multiply
                 
                 # Weight codes
                 s_w_vec = w_q.scale

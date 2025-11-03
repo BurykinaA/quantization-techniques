@@ -504,10 +504,13 @@ class QATLinearADC(nn.Linear):
             qmin_x, qmax_x = act_q.qmin, act_q.qmax
             code_x = torch.clamp(code_x, qmin_x, qmax_x)
         else:
+            # Asymmetric: build codes then CENTER them before matrix-multiply
             zp_x = act_q.zero_point
-            code_x = torch.round(x / s_x + zp_x)
+            code_x_raw = torch.round(x / s_x + zp_x)
             qmin_x, qmax_x = act_q.qmin, act_q.qmax
-            code_x = torch.clamp(code_x, qmin_x, qmax_x)
+            code_x_raw = torch.clamp(code_x_raw, qmin_x, qmax_x)
+            # Remove offset to get centered codes for matrix-multiply
+            code_x = code_x_raw - zp_x
 
         # Apply ashift in code domain if enabled
         if self.ashift:
@@ -515,8 +518,6 @@ class QATLinearADC(nn.Linear):
 
         # Store quantized activations (dequantized for comparison)
         x_quantized = code_x * s_x
-        if not act_q.symmetric:
-            x_quantized = (code_x - zp_x) * s_x
 
         # 2) Build weight codes (per-channel symmetric, channel_dim=0)
         w_q = self.weight_quantizer
@@ -562,11 +563,8 @@ class QATLinearADC(nn.Linear):
             # scale factor s_x * s_w per out channel, broadcasts over batch
             y_real = y_real + (self.C * s_x) * (s_w_vec * wq_sum)
 
-        # Zero-point correction for asymmetric activations
-        if not act_q.symmetric:
-            # Subtract x_zp * s_x * sum(W_fp) per out channel
-            weight_sum_fp = self.weight.sum(dim=1)  # (out_features,)
-            y_real = y_real - (act_q.zero_point * s_x) * weight_sum_fp
+        # NOTE: Zero-point correction is NO LONGER NEEDED because we centered
+        # the codes BEFORE the matrix multiply (line 513)
 
         # 6) Add bias if present
         if self.bias is not None:
