@@ -129,13 +129,13 @@ def show_model_with_adc_hooks(model, visualize_patterns):
 class ADCCalibrator:
     """Calibrates ADC quantizers using activation statistics"""
     
-    def __init__(self, model: nn.Module, method: str = "minmax", bx: int = 8, bw: int = 8, signed_activations: bool = False):
+    def __init__(self, model: nn.Module, method: str = "minmax", bx: int = 8, bw: int = 8):
         self.model = model
         self.method = method
         self.bx = bx
         self.bw = bw
-        self.signed_activations = signed_activations
         self.stats = {}
+        # Note: signed_activations is now detected per-layer from each quantizer
         
     def register_hooks(self):
         """Register forward hooks to collect activation statistics"""
@@ -154,6 +154,7 @@ class ADCCalibrator:
                         'y_int_min': [],
                         'y_int_max': [],
                         'y_int_absmax': [],
+                        'module': module,  # Store module reference to check quantizer settings
                     }
                 
                 # Collect activation stats
@@ -283,9 +284,18 @@ class ADCCalibrator:
                 y_int_target = y_int_absmax_arr.max()
             
             # Compute optimal scales
+            # Check if this layer uses symmetric (signed) or asymmetric (unsigned) quantization
+            # by inspecting the actual quantizer settings
+            module = stats.get('module')
+            if module and hasattr(module, 'activation_quantizer'):
+                is_symmetric = module.activation_quantizer.symmetric
+            else:
+                # Fallback: assume symmetric if can't determine
+                is_symmetric = True
+            
             # For symmetric quantization: scale = absmax / (2^(n-1) - 1)
             # For asymmetric: scale = absmax / (2^n - 1)
-            if self.signed_activations:
+            if is_symmetric:
                 act_levels = 2 ** (self.bx - 1) - 1  # e.g., 127 for 8-bit signed
             else:
                 act_levels = 2 ** self.bx - 1  # e.g., 255 for 8-bit unsigned
@@ -493,7 +503,8 @@ def main():
                 "ba": args.ba,
                 "k": args.k,
                 "ashift": args.ashift,
-                "signed_activations": args.signed_activations,
+                "ashift_mode": "per_layer_gelu" if args.ashift else "none",
+                "quantization_note": "A-shift on layer.X.output.dense only" if args.ashift else "Symmetric for all",
                 "mvm_limit": args.mvm_limit,
                 "calibration_method": args.calibration_method,
                 "num_calibration_batches": args.num_calibration_batches,
@@ -529,7 +540,6 @@ def main():
         ba=args.ba,
         k=args.k,
         ashift=args.ashift,
-        signed_activations=args.signed_activations,
         exclude_patterns=["embeddings", "pooler", "qa_outputs"],
         mvm_limit=args.mvm_limit,
         use_dynamic_delta=False,  # PTQ: use fixed delta after calibration
@@ -612,8 +622,7 @@ def main():
         model, 
         method=args.calibration_method,
         bx=args.bx,
-        bw=args.bw,
-        signed_activations=args.signed_activations
+        bw=args.bw
     )
     calibrator.calibrate(calibration_loader, num_batches=args.num_calibration_batches)
     
@@ -815,8 +824,13 @@ def main():
         f.write(f"Calibration method: {args.calibration_method}\n")
         f.write(f"Calibration batches: {args.num_calibration_batches}\n")
         f.write(f"ADC hardware config: bx={args.bx}, bw={args.bw}, ba={args.ba}, k={args.k}\n")
-        f.write(f"Signed activations: {args.signed_activations}\n")
         f.write(f"A-shift: {args.ashift}\n")
+        if args.ashift:
+            f.write(f"Quantization strategy: Per-layer (A-shift for GeLU outputs only)\n")
+            f.write(f"  - Layers after GeLU (layer.X.output.dense): Asymmetric + A-shift\n")
+            f.write(f"  - All other layers: Symmetric (signed)\n")
+        else:
+            f.write(f"Quantization strategy: Symmetric (signed) for all activations\n")
         f.write(f"\n")
         f.write("NOTE: ADC delta is a HARDWARE CONSTANT and cannot be changed!\n")
         f.write("      We calibrate activation/weight SCALES to optimally use the fixed ADC range.\n")

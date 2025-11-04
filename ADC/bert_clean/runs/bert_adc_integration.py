@@ -146,7 +146,6 @@ class BertADCConverter:
         ba: int = 8,  # ADC bits
         k: int = 4,   # Hardware design parameter
         ashift: bool = False,
-        signed_activations: bool = False,
         exclude_patterns: Optional[List[str]] = None,
         mvm_limit: int = 256,  # Default to 256 to match CLI default
         use_dynamic_delta: bool = True,
@@ -163,10 +162,15 @@ class BertADCConverter:
             bw: Bits for weight quantization.
             ba: Bits for ADC quantization.
             k: Hardware design parameter for ADC.
-            ashift: Enable ashift functionality.
-            signed_activations: Use signed activation quantization.
+            ashift: Enable A-shift for layers after GeLU. When True, layer.X.output.dense
+                    uses asymmetric quantization + A-shift, all others use symmetric.
             exclude_patterns: List of substrings of module names to exclude.
             mvm_limit: Memory vector multiplication limit for tiling.
+            
+        Note:
+            signed_activations is now determined per-layer automatically:
+            - Layers after GeLU (when ashift=True): asymmetric/unsigned
+            - All other layers: symmetric/signed
         """
         if exclude_patterns is None:
             # Default: don't quantize embeddings/pooler and QA output head unless requested
@@ -709,7 +713,6 @@ def main():
             base_model,
             bx=8, bw=8, ba=8, k=4,  # Use default ADC parameters
             ashift=False,
-            signed_activations=False,
             exclude_patterns=["embeddings", "pooler", "qa_outputs"],
             mvm_limit=256,
             use_dynamic_delta=(not args.fixed_delta),
@@ -770,7 +773,6 @@ def main():
             ba=args.ba,
             k=args.k,
             ashift=args.ashift,
-            signed_activations=args.signed_activations,
             exclude_patterns=exclude_patterns,
             # When eval_only, force analytical delta (disable dynamics)
             mvm_limit=args.mvm_limit,
