@@ -174,12 +174,25 @@ class BertADCConverter:
 
         def should_exclude(name: str) -> bool:
             return any(pat in name for pat in exclude_patterns)
-
+        
+        def is_after_gelu(name: str) -> bool:
+            """
+            Check if this layer comes after GeLU activation.
+            In BERT: intermediate.dense has GeLU, so output.dense receives post-GeLU activations.
+            """
+            # Pattern: layer.X.output.dense comes after layer.X.intermediate.dense (which has GeLU)
+            return "output.dense" in name and "layer." in name
+        
         def replace_recursive(module: nn.Module, name: str = ""):
             for child_name, child_module in module.named_children():
                 full_name = f"{name}.{child_name}" if name else child_name
 
                 if isinstance(child_module, nn.Linear) and not should_exclude(full_name):
+                    # Apply A-shift ONLY to layers that receive GeLU outputs
+                    layer_ashift = ashift and is_after_gelu(full_name)
+                    # A-shift requires asymmetric quantization, others use symmetric
+                    layer_signed_activations = not layer_ashift
+                    
                     adc_qat_layer = TiledLinearADC(
                         in_features=child_module.in_features,
                         out_features=child_module.out_features,
@@ -188,8 +201,8 @@ class BertADCConverter:
                         bw=bw,
                         ba=ba,
                         k=k,
-                        ashift=ashift,
-                        signed_activations=signed_activations,
+                        ashift=layer_ashift,
+                        signed_activations=layer_signed_activations,
                         mvm_limit=mvm_limit,
                         use_dynamic_delta=use_dynamic_delta,
                         use_delta_anneal=use_delta_anneal,
@@ -199,7 +212,9 @@ class BertADCConverter:
                     # Use the load_weights method instead of manual copying
                     adc_qat_layer.load_weights(child_module)
                     setattr(module, child_name, adc_qat_layer)
-                    logger.info(f"Replaced {full_name} with TiledLinearADC (bx={bx}, bw={bw}, ba={ba}, k={k}, mvm_limit={mvm_limit})")
+                    
+                    quant_type = "A-shift (asymmetric)" if layer_ashift else "symmetric"
+                    logger.info(f"Replaced {full_name} with TiledLinearADC ({quant_type}, bx={bx}, bw={bw}, ba={ba}, k={k})")
                 else:
                     replace_recursive(child_module, full_name)
 
@@ -636,8 +651,10 @@ def main():
     parser.add_argument("--bw", type=int, default=8, help="Weight bits")
     parser.add_argument("--ba", type=int, default=8, help="ADC bits")
     parser.add_argument("--k", type=int, default=4, help="Hardware design parameter for ADC")
-    parser.add_argument("--ashift", action="store_true", help="Enable ashift functionality")
-    parser.add_argument("--signed_activations", action="store_true", help="Use signed activation quantization")
+    parser.add_argument("--ashift", action="store_true",
+                       help="Enable A-shift quantization strategy: "
+                            "asymmetric (unsigned) quantization + A-shift for GeLU outputs. "
+                            "If False, uses symmetric (signed) quantization for all activations.")
     parser.add_argument("--exclude_head", action="store_true", help="Exclude qa_outputs from quantization")
     parser.add_argument("--exclude_pooler", action="store_true", help="Exclude pooler from quantization")
     parser.add_argument("--exclude_embeddings", action="store_true", help="Exclude embeddings from quantization")
@@ -665,6 +682,15 @@ def main():
     args = parser.parse_args()
 
     set_seed(args.seed)
+    
+    # Note: signed_activations is now set PER-LAYER in BertADCConverter
+    # based on whether the layer comes after GeLU
+    logger.info(f"Quantization strategy: ashift={args.ashift}")
+    if args.ashift:
+        logger.info("  → Asymmetric (unsigned) + A-shift for layers AFTER GeLU (e.g., layer.X.output.dense)")
+        logger.info("  → Symmetric (signed) for all OTHER activations")
+    else:
+        logger.info("  → Symmetric (signed) quantization for ALL activations")
 
     last_ckpt = None
     resume_ckpt = None

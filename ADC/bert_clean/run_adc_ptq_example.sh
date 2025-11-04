@@ -10,8 +10,9 @@ BX=8              # Activation bits
 BW=8              # Weight bits
 BA=8              # ADC bits
 K=4               # Hardware design parameter
-ASHIFT=True      # Enable A-shift (set to true if needed)
-SIGNED_ACT=false  # false = asymmetric/unsigned (like QAT), true = symmetric/signed
+ASHIFT=true       # A-shift quantization strategy:
+                  #   false = symmetric/signed quantization (standard)
+                  #   true  = asymmetric/unsigned + A-shift (optimal for GeLU outputs)
 MVM_LIMIT=256     # Memory vector multiplication limit for tiling
 
 # Calibration Settings
@@ -51,9 +52,15 @@ echo "  Activation bits: $BX"
 echo "  Weight bits:     $BW"
 echo "  ADC bits:        $BA"
 echo "  Hardware param:  $K"
-echo "  A-shift:         $ASHIFT"
-echo "  Signed acts:     $SIGNED_ACT"
 echo "  MVM limit:       $MVM_LIMIT"
+echo ""
+echo "Quantization Strategy:"
+echo "  A-shift:         $ASHIFT"
+if [ "$ASHIFT" = true ]; then
+    echo "  → Asymmetric (unsigned) + A-shift for GeLU outputs"
+else
+    echo "  → Symmetric (signed) for all activations"
+fi
 echo ""
 echo "Calibration:"
 echo "  Method:          $CALIBRATION_METHOD"
@@ -89,10 +96,8 @@ CMD="python ADC/bert_clean/runs/bert_adc_ptq.py \
 # Add optional flags
 if [ "$ASHIFT" = true ]; then
     CMD="$CMD --ashift"
-fi
-
-if [ "$SIGNED_ACT" = true ]; then
-    CMD="$CMD --signed_activations"
+    # Note: ashift=True automatically enables asymmetric quantization
+    # No need for --signed_activations flag (it will be False when ashift=True)
 fi
 
 if [ "$DISABLE_VISUALIZATIONS" = true ]; then

@@ -434,9 +434,10 @@ def main():
     parser.add_argument("--bw", type=int, default=8, help="Weight bits")
     parser.add_argument("--ba", type=int, default=8, help="ADC bits")
     parser.add_argument("--k", type=int, default=4, help="Hardware parameter")
-    parser.add_argument("--ashift", action="store_true")
-    parser.add_argument("--signed_activations", action="store_true",
-                       help="Use signed activation quantization (RECOMMENDED)")
+    parser.add_argument("--ashift", action="store_true",
+                       help="Enable A-shift quantization strategy: "
+                            "asymmetric (unsigned) quantization + A-shift for GeLU outputs. "
+                            "If False, uses symmetric (signed) quantization for all activations.")
     parser.add_argument("--mvm_limit", type=int, default=256)
     
     # Calibration settings
@@ -469,6 +470,15 @@ def main():
     
     args = parser.parse_args()
     set_seed(args.seed)
+    
+    # Note: signed_activations is now set PER-LAYER in BertADCConverter
+    # based on whether the layer comes after GeLU
+    logger.info(f"Quantization strategy: ashift={args.ashift}")
+    if args.ashift:
+        logger.info("  → Asymmetric (unsigned) + A-shift for layers AFTER GeLU (e.g., layer.X.output.dense)")
+        logger.info("  → Symmetric (signed) for all OTHER activations")
+    else:
+        logger.info("  → Symmetric (signed) quantization for ALL activations")
     
     # Initialize WandB
     use_wandb = WANDB_AVAILABLE and not args.disable_wandb
