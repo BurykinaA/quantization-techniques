@@ -460,13 +460,15 @@ class QATLinearADC(nn.Linear):
         )
         
         # ADC quantizer
+        # HACK: For A-shift, force signed delta formula (codes are signed after shift)
+        adc_signed_activations = True if ashift else signed_activations
         self.adc_quantizer = ADCQuantizer(
             M=in_features,
             bx=bx,
             bw=bw,
             ba=ba,
             k=k,
-            signed_activations=signed_activations,
+            signed_activations=adc_signed_activations,  #signed_activations
             use_dynamic_delta=use_dynamic_delta,
             use_delta_anneal=use_delta_anneal,
             delta_anneal_epochs=delta_anneal_epochs,
