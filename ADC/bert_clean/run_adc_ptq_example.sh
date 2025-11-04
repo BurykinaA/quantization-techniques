@@ -3,14 +3,14 @@
 
 # Configuration
 QAT_CHECKPOINT="./ADC/bert_clean/checkpoints/outputs_qat/squad_qat_20251028_001954"  # Full path to QAT checkpoint
-OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_ptq"
+OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_ptq_asymmetric"
 
 # ADC Hardware Configuration
 BX=8              # Activation bits
 BW=8              # Weight bits
 BA=8              # ADC bits
 K=4               # Hardware design parameter
-ASHIFT=false      # Enable A-shift (set to true if needed)
+ASHIFT=True      # Enable A-shift (set to true if needed)
 SIGNED_ACT=false  # false = asymmetric/unsigned (like QAT), true = symmetric/signed
 MVM_LIMIT=256     # Memory vector multiplication limit for tiling
 
@@ -26,7 +26,7 @@ DOC_STRIDE=128
 
 # WandB Settings
 WANDB_PROJECT="bert-adc-ptq"
-WANDB_RUN_NAME="ptq_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
+WANDB_RUN_NAME="ptq_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_ASHIFT${ASHIFT}"
 
 # Visualization Settings
 DISABLE_VISUALIZATIONS=false  # Set to true to disable ADC visualizations

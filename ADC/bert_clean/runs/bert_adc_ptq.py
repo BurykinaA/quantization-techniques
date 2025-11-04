@@ -67,22 +67,34 @@ def append_current_date_to_path(path_base: str) -> str:
 def show_model_with_adc_hooks(model, visualize_patterns):
     """
     Print the full module tree and highlight:
-      • every QATLinearADC that ADCCalibrator will hook   →  📊
-      • every layer that will also be visualised          →  ⭐
+      • every TiledLinearADC (parent layer) that will be calibrated  →  📊
+      • layers that will also be visualised                          →  ⭐
+    
+    Note: Individual tiles are NOT shown, only parent TiledLinearADC layers
     
     Returns:
         str: The formatted model structure text
     """
     def will_visualise(name):
         return any(pat in name for pat in visualize_patterns)
+    
+    def is_tile_child(name):
+        """Check if this is an individual tile (e.g., 'dense.tiles.0')"""
+        return '.tiles.' in name
 
     def format_line(level, name, module):
+        # Skip individual tiles - we only show parent TiledLinearADC
+        if is_tile_child(name):
+            return None
+            
         bullet = "└─ " if level > 0 else ""
         indent = "   " * max(level - 1, 0) + bullet
         module_type = module.__class__.__name__
         tag = ""
-        if isinstance(module, QATLinearADC):
-            tag = " 📊"  # hooked by calibrator
+        
+        # Mark TiledLinearADC (parent layer with tiles)
+        if isinstance(module, TiledLinearADC):
+            tag = " 📊"  # hooked by calibrator (each tile will be hooked)
             if will_visualise(name):
                 tag += "⭐"  # also plotted
         
