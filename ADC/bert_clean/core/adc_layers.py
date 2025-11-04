@@ -505,16 +505,18 @@ class QATLinearADC(nn.Linear):
             qmin_x, qmax_x = act_q.qmin, act_q.qmax
             code_x = torch.clamp(code_x, qmin_x, qmax_x)
         else:
-            # Unsigned path: build codes in [0, 2^bx - 1]
-            code_x_temp = torch.round(x / s_x)
+            # Unsigned path: quantize to [0, 2^bx - 1] using zero_point offset
+            zp_x = act_q.zero_point
+            # Quantization: map input range to [0, 2^bx-1] using learned offset
+            code_x_temp = torch.round(x / s_x + zp_x)
             code_x_temp = torch.clamp(code_x_temp, 0, act_q.qmax)
             
             if self.ashift:
-                # A-shift: subtract C to get codes in [-2^(bx-1), 2^(bx-1)-1]
+                # A-shift: subtract fixed C instead of learned zp_x
+                # This centers around a fixed point to maximize 2nd moment
                 code_x = code_x_temp - self.C
             else:
-                # Standard asymmetric: center using learnable zero_point
-                zp_x = act_q.zero_point
+                # Standard asymmetric: subtract learned zero_point to center
                 code_x = code_x_temp - zp_x
 
         # Store quantized activations (dequantized for comparison)
@@ -557,15 +559,22 @@ class QATLinearADC(nn.Linear):
         y_real = adc_output * s_x
         y_real = y_real * s_w_vec  # broadcast over out_features
 
-        # A-shift add-back correction (mirror MLP math) using weight codes
-        if self.ashift:
-            # sum over input features for each out channel
+        # Corrections for asymmetric quantization
+        if not act_q.symmetric:
+            # For asymmetric, we quantized with +zp_x but subtracted different offsets
+            # This leaves a residual offset: (zp_x - offset) that must be corrected
             wq_sum = code_w.sum(dim=1)  # shape: (out_features,)
-            # scale factor s_x * s_w per out channel, broadcasts over batch
-            y_real = y_real + (self.C * s_x) * (s_w_vec * wq_sum)
-
-        # NOTE: Zero-point correction is NO LONGER NEEDED because we centered
-        # the codes BEFORE the matrix multiply (line 513)
+            
+            if self.ashift:
+                # A-shift: we subtracted C, so residual is (zp_x - C)
+                # Correction: subtract zp_x contribution, add back C contribution
+                zp_x = act_q.zero_point
+                y_real = y_real - (zp_x * s_x) * (s_w_vec * wq_sum)  # remove zp offset
+                y_real = y_real + (self.C * s_x) * (s_w_vec * wq_sum)  # add back C offset
+            else:
+                # Standard asymmetric: we subtracted zp_x, so residual is (zp_x - zp_x) = 0
+                # No correction needed - the offsets cancel perfectly
+                pass
 
         # 6) Add bias if present
         if self.bias is not None:
