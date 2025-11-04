@@ -176,10 +176,16 @@ class ADCCalibrator:
                     if act_q.symmetric:
                         code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
                     else:
-                        # Asymmetric: build codes then center them
-                        zp_x = act_q.zero_point
-                        code_x_raw = torch.clamp(torch.round(x / s_x + zp_x), act_q.qmin, act_q.qmax)
-                        code_x = code_x_raw - zp_x  # Center before matrix-multiply
+                        # Unsigned path: build codes in [0, 2^bx - 1]
+                        code_x_temp = torch.clamp(torch.round(x / s_x), 0, act_q.qmax)
+                        
+                        if hasattr(module, 'ashift') and module.ashift:
+                            # A-shift: subtract C to get codes in [-2^(bx-1), 2^(bx-1)-1]
+                            code_x = code_x_temp - module.C
+                        else:
+                            # Standard asymmetric: center using learnable zero_point
+                            zp_x = act_q.zero_point
+                            code_x = code_x_temp - zp_x
                     
                     w_q = module.weight_quantizer
                     s_w_vec = w_q.scale
@@ -901,10 +907,16 @@ def _generate_adc_visualizations(model, sample_input, layer_patterns, title_pref
                 if act_q.symmetric:
                     code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
                 else:
-                    # Asymmetric: build codes then center them
-                    zp_x = act_q.zero_point
-                    code_x_raw = torch.clamp(torch.round(x / s_x + zp_x), act_q.qmin, act_q.qmax)
-                    code_x = code_x_raw - zp_x  # Center before matrix-multiply
+                    # Unsigned path: build codes in [0, 2^bx - 1]
+                    code_x_temp = torch.clamp(torch.round(x / s_x), 0, act_q.qmax)
+                    
+                    if hasattr(module, 'ashift') and module.ashift:
+                        # A-shift: subtract C to get codes in [-2^(bx-1), 2^(bx-1)-1]
+                        code_x = code_x_temp - module.C
+                    else:
+                        # Standard asymmetric: center using learnable zero_point
+                        zp_x = act_q.zero_point
+                        code_x = code_x_temp - zp_x
                 
                 # Weight codes
                 s_w_vec = w_q.scale

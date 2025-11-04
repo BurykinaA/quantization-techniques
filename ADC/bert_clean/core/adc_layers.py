@@ -500,21 +500,22 @@ class QATLinearADC(nn.Linear):
         act_q = self.activation_quantizer
         s_x = act_q.scale  # shape: ()
         if act_q.symmetric:
+            # Signed path (no A-shift): symmetric quantization
             code_x = torch.round(x / s_x)
             qmin_x, qmax_x = act_q.qmin, act_q.qmax
             code_x = torch.clamp(code_x, qmin_x, qmax_x)
         else:
-            # Asymmetric: build codes then CENTER them before matrix-multiply
-            zp_x = act_q.zero_point
-            code_x_raw = torch.round(x / s_x + zp_x)
-            qmin_x, qmax_x = act_q.qmin, act_q.qmax
-            code_x_raw = torch.clamp(code_x_raw, qmin_x, qmax_x)
-            # Remove offset to get centered codes for matrix-multiply
-            code_x = code_x_raw - zp_x
-
-        # Apply ashift in code domain if enabled
-        if self.ashift:
-            code_x = code_x - self.C
+            # Unsigned path: build codes in [0, 2^bx - 1]
+            code_x_temp = torch.round(x / s_x)
+            code_x_temp = torch.clamp(code_x_temp, 0, act_q.qmax)
+            
+            if self.ashift:
+                # A-shift: subtract C to get codes in [-2^(bx-1), 2^(bx-1)-1]
+                code_x = code_x_temp - self.C
+            else:
+                # Standard asymmetric: center using learnable zero_point
+                zp_x = act_q.zero_point
+                code_x = code_x_temp - zp_x
 
         # Store quantized activations (dequantized for comparison)
         x_quantized = code_x * s_x
