@@ -22,7 +22,11 @@ class LayerwiseStatsLogger:
         for i in range(len(tensors)):
             if (names[i] not in self.stats[layer.name]):
                 self.stats[layer.name][names[i]] = []
-            self.stats[layer.name][names[i]].append(tensors[i].cpu())
+            if isinstance(tensors[i], list):
+                for j in range(len(tensors[i])):
+                    self.stats[layer.name][names[i]].append(tensors[i][j].cpu())
+            else:
+                self.stats[layer.name][names[i]].append(tensors[i].cpu())
         
 
 

@@ -1,6 +1,6 @@
 import torch
 from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from ADC.models import resnet18_cifar, resnet18_cifar_adc
 
@@ -63,6 +63,29 @@ def setup_dataloaders(batch_size_train, batch_size_test):
     test_loader = DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False)
     
     return train_loader, test_loader
+
+def get_small_dataloaders(batch_size, n_elem=1024):
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+    ])
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+    ])
+
+    train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+    test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
+    small_train_dataset = Subset(train_dataset, range(n_elem))
+    small_test_dataset = Subset(test_dataset, range(n_elem))
+
+    small_train_loader = DataLoader(small_train_dataset, batch_size=batch_size, shuffle=True)
+    small_test_loader = DataLoader(small_test_dataset, batch_size=batch_size, shuffle=False)
+    return small_train_loader, small_test_loader
+
+
 
 def sanitize_filename(name):
     """Sanitizes a string to be used as a filename."""

@@ -1,7 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
-from ADC.quantized_layers import LinearADC, LinearQuant, LinearADCAshift, Conv2dADC, TiledConv2dADC
+from ADC.quantized_layers import LinearADC, LinearQuant, LinearADCAshift, Conv2dADC, TiledConv2dADC, BlockedConv2dADC
 import random
 
 class MLP(nn.Module):
@@ -262,11 +262,13 @@ class ResNetCIFAR_ADC(nn.Module):
     def enable_adc(self):
         print("enable adc")
         for name, m in self.named_modules():
+            # or isinstance(m, BlockedConv2dADC)
             if (isinstance(m, Conv2dADC) or isinstance(m, LinearADC)) and (name not in ["conv1", "fc"]):
                 m.enable_adc()
     
     def disable_adc(self):
         for m in self.modules():
+            # or isinstance(m, BlockedConv2dADC)
             if isinstance(m, Conv2dADC) or isinstance(m, LinearADC):
                 m.disable_adc()
                 

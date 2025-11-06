@@ -161,13 +161,25 @@
 
 import torch
 from torch import nn
-from torch.ao.quantization.observer import MinMaxObserver
+from torch.ao.quantization.observer import MinMaxObserver, HistogramObserver, MovingAverageMinMaxObserver
 from ADC.ste import ste_round, ste_floor
 
+observer_types = {"minmax" : MinMaxObserver, "avgminmax" : MovingAverageMinMaxObserver, "histogram" : HistogramObserver}
+
 class AffineQuantizerPerTensor(nn.Module):
-    def __init__(self, bx=8):
+    def __init__(self, bx=8, observer="minmax"):
         super().__init__()
-        self.observer = MinMaxObserver(dtype=torch.quint8, qscheme=torch.per_tensor_affine, quant_min=0, quant_max=2**bx - 1)
+        
+        self.observer = observer_types[observer](dtype=torch.quint8, qscheme=torch.per_tensor_affine, quant_min=0, quant_max=2**bx - 1)
+        # if (observer == "avgminmax"):
+        #     self.observer = MovingAverageMinMaxObserver(dtype=torch.quint8, qscheme=torch.per_tensor_affine, quant_min=0, quant_max=2**bx - 1)
+        # elif observer == "histogram":
+        #     self.observer = HistogramObserver(dtype=torch.quint8, qscheme=torch.per_tensor_affine, quant_min=0, quant_max=2**bx - 1)
+        # else:
+        #     raise ValueError(f"Unknown observer type {observer}")
+
+        #self.observer = MinMaxObserver(dtype=torch.quint8, qscheme=torch.per_tensor_affine, quant_min=0, quant_max=2**bx - 1)
+        
         
         # Register scale and zero_point as buffers with initial placeholder values.
         # Their types will be preserved when updated.
@@ -246,7 +258,7 @@ class AffineQuantizerPerTensor(nn.Module):
 
 
 class SymmetricQuantizerPerTensor(nn.Module):
-    def __init__(self, bw=8):
+    def __init__(self, bw=8, observer="minmax"):
         super().__init__()
         q_min_val = -(2**(bw-1)) if bw > 1 else -1 
         q_max_val = (2**(bw-1))-1 if bw > 1 else (0 if bw == 1 else 0) 
@@ -255,9 +267,20 @@ class SymmetricQuantizerPerTensor(nn.Module):
             q_min_val = -1 # Example for binary: levels could be -1, +1 after dequant. Observer sees magnitudes.
             q_max_val = 1  # Allow observer to see range around zero. Scale will make it symmetric.
                            # If you intend strictly {-1,0} levels, then q_max_val=0.
-
-        self.observer = MinMaxObserver(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric, 
+        self.observer = observer_types[observer](dtype=torch.qint8, qscheme=torch.per_tensor_symmetric, 
                                        quant_min=q_min_val, quant_max=q_max_val)
+        # if (observer == "avgminmax"):
+        #     self.observer = MovingAverageMinMaxObserver(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric, 
+        #                                quant_min=q_min_val, quant_max=q_max_val)
+        # elif observer == "histogram":
+        #     self.observer = HistogramObserver(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric, 
+        #                                quant_min=q_min_val, quant_max=q_max_val)
+        # else:
+        #     raise ValueError(f"Unknown observer type {observer}")
+
+        #self.observer = MinMaxObserver(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric, 
+        #                               quant_min=q_min_val, quant_max=q_max_val)
+        
         
         self.register_buffer('scale', torch.tensor([1.0], dtype=torch.float32))
         # For per_tensor_symmetric, zero_point from observer should be 0.
@@ -316,8 +339,92 @@ class SymmetricQuantizerPerTensor(nn.Module):
         x_dequant = xq * scale_x
         return x_dequant
 
+
+from torch.ao.quantization.observer import MinMaxObserver, HistogramObserver, MovingAverageMinMaxObserver
+observer_types = {"minmax" : MinMaxObserver, "avgminmax" : MovingAverageMinMaxObserver, "histogram" : HistogramObserver}
+
+class LearnableQuantizerPerTensor(nn.Module):
+    def __init__(self, bx=8, observer_type="minmax", symmetric=False):
+        super().__init__()
+        
+        self.symmetric = symmetric
+        self.observer_type = observer_type
+        if (self.symmetric):
+            self.qscheme = torch.per_tensor_symmetric
+        else:
+            self.qscheme = torch.per_tensor_affine
+        if (self.symmetric):
+            self.qmin = -(2 ** (bx - 1) - 1)
+            self.qmax = (2 ** (bx - 1)) - 1
+        else:
+            self.qmin = 0
+            self.qmax = (2 ** bx) - 1
+
+        self.observer = observer_types[self.observer_type](dtype=torch.quint8, qscheme=self.qscheme, quant_min=self.qmin, quant_max=self.qmax)
+        
+        # Register scale and zero_point as buffers with initial placeholder values.
+        # Their types will be preserved when updated.
+        self.zero_point = torch.nn.Parameter(torch.Tensor([0.]))
+        self.scale = torch.nn.Parameter(torch.Tensor([1.]))
+        
+        self.params_calculated = False
+        self.bx = bx
+        self.state = 0 
+        # 0 - initialize (using observers)
+        # 1 - learn (through gradients)
+        # 2 - fix
+
+    def update_state(self, state):
+        if (state == 0):
+            self.observer = observer_types[self.observer_type](dtype=torch.quint8, qscheme=self.qscheme, quant_min=self.qmin, quant_max=self.qmax)
+            self.zero_point = torch.nn.Parameter(torch.Tensor([0.]))
+            self.scale = torch.nn.Parameter(torch.Tensor([1.]))
+            self.scale.requires_grad = False
+            self.zero_point.requires_grad = False
+        elif (state == 1):
+            self.scale.requires_grad = True
+            self.zero_point.requires_grad = True
+        elif (state == 2):
+            self.scale.requires_grad = False
+            self.zero_point.requires_grad = False
+        else:
+            raise ValueError(f"Unknown state {state}, expected state to be in set: [0, 1, 2]")
+        self.state = state
+
+
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Determine if scale/zp need to be (re)calculated by the observer
+        # Condition 1: During training, if observer is enabled
+        # Condition 2: Not during training, but observer is enabled AND params haven't been calculated yet
+        self.observer.to(x.device)
+        if (self.state == 0):
+            self.observer(x.detach()) 
+            _s, _zp = self.observer.calculate_qparams()
+            if (not self.symmetric):
+                self.zero_point = torch.nn.Parameter(_zp.float())
+                self.zero_point.requires_grad = False
+            self.scale = torch.nn.Parameter(_s)
+            self.scale.requires_grad = False
+
+        xq = x / self.scale
+        if (not self.symmetric):
+            xq = xq + self.zero_point
+        xq = ste_round(xq)
+        xq = torch.clamp(xq, self.qmin, self.qmax)
+        
+        return xq
+
+    def fake_quantize(self, x: torch.Tensor) -> torch.Tensor:
+        self.observer.to(x.device)
+        xq = self.forward(x)
+        if (not self.symmetric):
+            xq = xq - self.zero_point
+        xdq = xq * self.scale
+        return xdq
+
 class ADCQuantizer(nn.Module):
-    def __init__(self, M, bx, bw, ba = 8, k = 4, info="", logger=None):
+    def __init__(self, M, bx, bw, ba = 8, k = 4, info="", logger=None, ste_func=ste_floor):
         super().__init__()
         # delta calculation seems to assume symmetric quantization for weights (2**(bw-1)-1)
         # and affine for activations (2**bx - 1)
@@ -329,6 +436,7 @@ class ADCQuantizer(nn.Module):
         self.k = k
         self.info = info
         self.logger = logger
+        self.ste_func = ste_func
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         xq = x / self.delta
@@ -338,7 +446,7 @@ class ADCQuantizer(nn.Module):
             cl1 = (xq < mnval).sum().float().item()
             cl2 = (xq > mxval).sum().float().item()
             self.logger.log_string(self.info, "Clipped%: ", 100. * (cl1 + cl2) / xq.numel())
-        xq = ste_floor(torch.clamp(xq, mnval, mxval))
+        xq = self.ste_func(torch.clamp(xq, mnval, mxval))
         return xq
     
 
