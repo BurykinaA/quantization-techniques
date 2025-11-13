@@ -109,13 +109,6 @@ class ADCLossTrainer(Trainer):
 
         # Combine all loss components
         total_loss = loss + delta_reg + (self.kurtosis_lambda * kurtosis_reg)
-        
-        # Debug: Print actual loss values every 50 steps to see if they're just being rounded
-        if model.training and hasattr(self, 'state') and self.state.global_step % 50 == 0:
-            print(f"[DEBUG step {self.state.global_step}] raw_loss={loss.item():.6f} "
-                  f"delta_reg={delta_reg.item():.6e} "
-                  f"kurtosis={kurtosis_reg.item():.6e} "
-                  f"total={total_loss.item():.6f}")
 
         # Call ADC monitoring after each batch
         if self.adc_step_monitor:
@@ -933,6 +926,16 @@ def main():
                             tile.weight_quantizer._zp_initialized = True
         
         logger.info("Marked all quantizers as initialized")
+        
+        # Set quantizers to 'qat' mode for gradient learning during training
+        logger.info("Setting quantizers to 'qat' mode for gradient learning...")
+        qat_layer_count = 0
+        for name, module in model.named_modules():
+            if isinstance(module, (QATLinearADC, TiledLinearADC)):
+                if hasattr(module, 'set_quantizer_mode'):
+                    module.set_quantizer_mode('qat')
+                    qat_layer_count += 1
+        logger.info(f"Set {qat_layer_count} layers to 'qat' mode (scales will be learned via gradients)")
 
         do_convert = False
         do_warm_start = False
@@ -1063,7 +1066,7 @@ def main():
             num_train_epochs=args.num_train_epochs,
             warmup_ratio=_warmup_ratio,
             warmup_steps=_warmup_steps,
-            logging_steps=50,
+            logging_steps=100,  # Less frequent logging for speed
             save_strategy="steps",
             save_steps=args.save_steps,
             save_total_limit=args.save_total_limit,
@@ -1071,9 +1074,9 @@ def main():
             eval_steps=args.eval_steps,
             fp16=args.fp16,
             report_to=_report_to,
-            # Add gradient clipping
-            max_grad_norm=1.0,  # Tighter clipping to stabilize early training
-            gradient_accumulation_steps=2,  # Accumulate gradients to reduce variance
+            # Gradient settings
+            max_grad_norm=1.0,
+            gradient_accumulation_steps=1,  # No accumulation for max speed (set to 2-4 if OOM)
         )
         if resume_ckpt:
             training_args.resume_from_checkpoint = resume_ckpt
@@ -1086,16 +1089,16 @@ def main():
             weight_decay=args.weight_decay,
             num_train_epochs=args.num_train_epochs,
             warmup_steps=_warmup_steps,
-            logging_steps=50,
+            logging_steps=100,  # Less frequent logging for speed
             save_steps=args.save_steps,
             save_total_limit=args.save_total_limit,
             eval_strategy="steps",
             eval_steps=args.eval_steps,
             fp16=args.fp16,
             report_to=_report_to,
-            # Add gradient clipping
+            # Gradient settings
             max_grad_norm=1.0,
-            gradient_accumulation_steps=2,
+            gradient_accumulation_steps=1,  # No accumulation for max speed
         )
         if resume_ckpt:
             training_args.resume_from_checkpoint = resume_ckpt
