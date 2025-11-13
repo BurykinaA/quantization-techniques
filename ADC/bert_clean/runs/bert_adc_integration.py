@@ -805,13 +805,16 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained(resume_ckpt, use_fast=True)
         tokenizer.padding_side = "right"
 
-        # Convert to ADC layers
+        # Convert to ADC layers using SAME parameters as checkpoint
         model = BertADCConverter.replace_linear_with_adc_qat(
             base_model,
-            bx=8, bw=8, ba=8, k=4,  # Use default ADC parameters
-            ashift=False,
+            bx=args.bx,  # Use args, not hardcoded!
+            bw=args.bw,
+            ba=args.ba,
+            k=args.k,
+            ashift=args.ashift,  # CRITICAL: Must match checkpoint!
             exclude_patterns=["embeddings", "pooler", "qa_outputs"],
-            mvm_limit=256,
+            mvm_limit=args.mvm_limit,
             use_dynamic_delta=(not args.fixed_delta),
             use_delta_anneal=(not args.fixed_delta),
             delta_loss_weight=(0.0 if args.fixed_delta else 0.01),

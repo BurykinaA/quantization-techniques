@@ -5,38 +5,42 @@
 # Configuration
 # ==============================================================================
 
+# IMPORTANT: Since we're starting from PTQ (already ADC), use adc_resume_dir instead of fp_checkpoint_dir!
 # Fine-tuned floating-point checkpoint to start from
-FP_CHECKPOINT="./ADC/bert_clean/checkpoints/outputs_adc_ptq_asymmetric_20251106"
+FP_CHECKPOINT=""  # Leave empty when resuming from PTQ
+
+# ADC PTQ checkpoint to resume from (already has calibrated ADC layers)
+ADC_RESUME_DIR_DEFAULT="./ADC/bert_clean/checkpoints/outputs_adc_ptq_asymmetric_20251106"
 
 # Where to store QAT outputs (checkpoints, logs, metrics)
-OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_qat_fixed_delta"
+OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_qat_from_ptq"
 
 # ADC hardware configuration
 BX=8                 # Activation bits
 BW=8                 # Weight bits
 BA=8                 # ADC bits
 K=4                  # Hardware design parameter
-ASHIFT=true          # Enable A-shift (unsigned activations after GeLU)
+ASHIFT=false         # MUST MATCH PTQ checkpoint! (PTQ was created with ashift=false)
 MVM_LIMIT=256        # Tile size limit for MVM units
 
-# Training hyper-parameters
+# Training hyper-parameters (when resuming from PTQ)
 NUM_EPOCHS=2
 TRAIN_BATCH_SIZE=32
 EVAL_BATCH_SIZE=64
-LEARNING_RATE=3e-5
+LEARNING_RATE=1e-6   # LOW LR when starting from calibrated PTQ (use 3e-5 from scratch)
 WARMUP_RATIO=0.0
 WARMUP_STEPS=0
-EVAL_STEPS=5
+EVAL_STEPS=200       # Eval less frequently to speed up
 SAVE_STEPS=500
 SAVE_TOTAL_LIMIT=3
-KURTOSIS_LAMBDA=0.05  # Start stable; re-enable later (e.g., 0.01) after warmup
+KURTOSIS_LAMBDA=0.0  # Disable for first run from PTQ (can add later)
 USE_FP16=false       # Start in fp32; turn on later when stable
-FIXED_DELTA=true     # Set true to disable dynamic delta / annealing
+FIXED_DELTA=true     # Keep delta fixed (already calibrated in PTQ)
 EVAL_ONLY=false      # Set true to skip training and only run evaluation
 
 # Monitoring
 ENABLE_ADC_MONITORING=true
-ADC_RESUME_DIR=""     # Provide path to resume from ADC checkpoint, or leave empty
+ADC_RESUME_DIR="$ADC_RESUME_DIR_DEFAULT"  # Resume from PTQ checkpoint
 
 # Reproducibility
 SEED=42
@@ -61,7 +65,12 @@ fi
 echo "========================================"
 echo "BERT ADC QAT Training"
 echo "========================================"
-echo "FP Checkpoint:       $FP_CHECKPOINT"
+if [ -n "$FP_CHECKPOINT" ]; then
+    echo "FP Checkpoint:       $FP_CHECKPOINT"
+fi
+if [ -n "$ADC_RESUME_DIR" ]; then
+    echo "Resume from PTQ:     $ADC_RESUME_DIR"
+fi
 echo "Output Directory:    $OUTPUT_DIR"
 echo ""
 echo "ADC Configuration:"
@@ -107,7 +116,6 @@ echo ""
 
 CMD=(
     python ADC/bert_clean/runs/bert_adc_integration.py
-    --fp_checkpoint_dir "$FP_CHECKPOINT"
     --output_dir "$OUTPUT_DIR"
     --bx $BX
     --bw $BW
@@ -126,6 +134,11 @@ CMD=(
     --kurtosis_lambda $KURTOSIS_LAMBDA
     --seed $SEED
 )
+
+# Add fp_checkpoint_dir only if not empty
+if [ -n "$FP_CHECKPOINT" ]; then
+    CMD+=(--fp_checkpoint_dir "$FP_CHECKPOINT")
+fi
 
 if [ "$ASHIFT" = true ]; then
     CMD+=(--ashift)
