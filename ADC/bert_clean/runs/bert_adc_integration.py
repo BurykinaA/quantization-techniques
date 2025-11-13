@@ -5,6 +5,8 @@ import collections
 import logging
 from typing import Dict, Any, Optional, List, Tuple
 import json
+import sys
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -20,6 +22,9 @@ from transformers import (
     Trainer,
     default_data_collator,
     set_seed,
+    TrainerCallback,
+    TrainerState,
+    TrainerControl,
 )
 
 from ADC.bert_clean.core.adc_layers import QATLinearADC, TiledLinearADC, LearnableQuantizer, ADCQuantizer  # noqa: F401
@@ -34,8 +39,17 @@ except ImportError:
     print("ADC monitoring not available")
     ADC_MONITORING_AVAILABLE = False
 
+# WandB import (same as PTQ script)
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    print("Warning: wandb not available, logging will be disabled")
+
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__) 
+
 
 
 class ADCLossTrainer(Trainer):
@@ -49,16 +63,23 @@ class ADCLossTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
         outputs = model(**inputs)
 
-        # Standard HF output cases
-        if isinstance(outputs, tuple):
-            loss = outputs[0] if hasattr(outputs[0], 'loss') else outputs[0]
+        # Extract base loss from model outputs
+        # BertForQuestionAnswering returns QuestionAnsweringModelOutput with .loss attribute
+        if hasattr(outputs, 'loss'):
+            loss = outputs.loss
+        elif isinstance(outputs, tuple):
+            loss = outputs[0]
         elif isinstance(outputs, dict):
             loss = outputs.get('loss', None)
         else:
-            loss = outputs
+            loss = None
+        
+        # Ensure we have a valid loss
+        if loss is None:
+            raise ValueError("Could not extract loss from model outputs")
 
         # Aggregate delta losses from modules that expose `_last_delta_loss`
-        delta_reg = 0.0
+        delta_reg = torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
         for module in model.modules():
             if hasattr(module, '_last_delta_loss') and module._last_delta_loss is not None:
                 try:
@@ -67,7 +88,7 @@ class ADCLossTrainer(Trainer):
                     pass
 
         # W-reshape: kurtosis penalty over ADC QAT linear tiles
-        kurtosis_reg = 0.0
+        kurtosis_reg = torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
         if self.kurtosis_lambda > 0.0 and model.training:
             eps = 1e-6
             for module in model.modules():
@@ -86,10 +107,15 @@ class ADCLossTrainer(Trainer):
                 except Exception:
                     pass
 
-        if isinstance(loss, torch.Tensor):
-            loss = loss + delta_reg + (self.kurtosis_lambda * kurtosis_reg)
-        else:
-            loss = delta_reg + (self.kurtosis_lambda * kurtosis_reg)
+        # Combine all loss components
+        total_loss = loss + delta_reg + (self.kurtosis_lambda * kurtosis_reg)
+        
+        # Debug: Print actual loss values every 50 steps to see if they're just being rounded
+        if model.training and hasattr(self, 'state') and self.state.global_step % 50 == 0:
+            print(f"[DEBUG step {self.state.global_step}] raw_loss={loss.item():.6f} "
+                  f"delta_reg={delta_reg.item():.6e} "
+                  f"kurtosis={kurtosis_reg.item():.6e} "
+                  f"total={total_loss.item():.6f}")
 
         # Call ADC monitoring after each batch
         if self.adc_step_monitor:
@@ -98,7 +124,7 @@ class ADCLossTrainer(Trainer):
             except Exception as e:
                 print(f"ADC monitoring error: {e}")
 
-        return (loss, outputs) if return_outputs else loss
+        return (total_loss, outputs) if return_outputs else total_loss
 
 
 class EpochCallback(TrainerCallback):
@@ -124,16 +150,37 @@ class EpochCallback(TrainerCallback):
 class EvalMetricsLogger(TrainerCallback):
     """Callback to log F1/EM at each evaluation."""
 
+    def __init__(self, use_wandb: bool = False):
+        self.use_wandb = use_wandb
+
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, metrics=None, **kwargs):
         try:
             if metrics is None:
+                logger.warning("EvalMetricsLogger: metrics is None")
                 return
+            
+            # Debug: print all available metrics keys
+            logger.info(f"EvalMetricsLogger: Available metric keys: {list(metrics.keys())}")
+            
             f1 = metrics.get("eval_f1", metrics.get("f1"))
             em = metrics.get("eval_exact_match", metrics.get("exact_match"))
+            
             if f1 is not None and em is not None:
                 logger.info(f"Eval F1: {float(f1):.2f}, EM: {float(em):.2f}")
-        except Exception:
-            pass
+                if self.use_wandb and wandb.run is not None:
+                    wandb.log(
+                        {
+                            "eval/f1": float(f1),
+                            "eval/exact_match": float(em),
+                        },
+                        step=state.global_step,
+                    )
+            else:
+                logger.warning(f"EvalMetricsLogger: F1 or EM not found. f1={f1}, em={em}")
+        except Exception as e:
+            logger.error(f"EvalMetricsLogger error: {e}")
+            import traceback
+            traceback.print_exc()
 
 class BertADCConverter:
     """Convert BERT model to use ADC QAT layers for QA."""
@@ -180,13 +227,9 @@ class BertADCConverter:
             return any(pat in name for pat in exclude_patterns)
         
         def is_after_gelu(name: str) -> bool:
-            """
-            Check if this layer comes after GeLU activation.
-            In BERT: intermediate.dense has GeLU, so output.dense receives post-GeLU activations.
-            """
-            # Pattern: layer.X.output.dense comes after layer.X.intermediate.dense (which has GeLU)
+            """Detect if this linear layer follows a GeLU. Only used for logging now."""
             return "output.dense" in name and "layer." in name
-        
+
         def replace_recursive(module: nn.Module, name: str = ""):
             for child_name, child_module in module.named_children():
                 full_name = f"{name}.{child_name}" if name else child_name
@@ -447,10 +490,11 @@ def prepare_train_features(examples, tokenizer, max_length=384, doc_stride=128):
     )
 
     sample_mapping = tokenized.pop("overflow_to_sample_mapping")
-    offsets_mapping = tokenized.pop("offset_mapping")
+    offsets_mapping = tokenized["offset_mapping"]  # Keep offset_mapping for compute_metrics
 
     tokenized["start_positions"] = []
     tokenized["end_positions"] = []
+    tokenized["example_id"] = []  # Add example_id for compute_metrics
 
     for i, offsets in enumerate(offsets_mapping):
         input_ids = tokenized["input_ids"][i]
@@ -459,6 +503,15 @@ def prepare_train_features(examples, tokenizer, max_length=384, doc_stride=128):
         sequence_ids = tokenized.sequence_ids(i)
         sample_index = sample_mapping[i]
         answers = examples["answers"][sample_index]
+        
+        # Store example_id for mapping back to original examples
+        tokenized["example_id"].append(examples["id"][sample_index])
+
+        # Mask offset_mapping to only include context tokens (needed for postprocessing)
+        tokenized["offset_mapping"][i] = [
+            (o if sequence_ids[k] == 1 else None)  # context_index = 1
+            for k, o in enumerate(offsets)
+        ]
 
         if len(answers["answer_start"]) == 0:
             tokenized["start_positions"].append(cls_index)
@@ -594,6 +647,7 @@ class MetricsComputer:
 
     def compute_metrics(self, eval_pred):
         try:
+            logger.info("MetricsComputer.compute_metrics: Starting metric computation...")
             predictions, _ = eval_pred
             formatted_predictions = postprocess_qa_predictions(
                 examples=self.eval_examples,
@@ -603,8 +657,10 @@ class MetricsComputer:
             references = [{"id": ex_id, "answers": ans} for ex_id, ans in zip(self.eval_examples["id"], self.eval_examples["answers"])]
             predictions_for_metric = [{"id": k, "prediction_text": v} for k, v in formatted_predictions.items()]
             result = self.squad_metric.compute(predictions=predictions_for_metric, references=references)
+            logger.info(f"MetricsComputer.compute_metrics: Computed F1={result['f1']:.2f}, EM={result['exact_match']:.2f}")
             return {"f1": result["f1"], "exact_match": result["exact_match"]}
-        except Exception:
+        except Exception as e:
+            logger.error(f"MetricsComputer.compute_metrics: Error - {e}")
             import traceback
             traceback.print_exc()
             return {"f1": 0.0, "exact_match": 0.0}
@@ -666,6 +722,11 @@ def main():
     parser.add_argument("--fixed_delta", action="store_true", help="Use fixed analytical ADC delta (disable dynamic delta and annealing)")
     parser.add_argument("--adc_resume_dir", type=str, required=False, help="Path to ADC checkpoint dir to resume from")
     parser.add_argument("--disable_adc_monitoring", action="store_true", help="Disable ADC distribution monitoring and pipeline logs")
+    parser.add_argument("--disable_wandb", action="store_true", help="Disable WandB logging")
+    parser.add_argument("--wandb_project", type=str, default="bert-adc-qat", help="WandB project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None, help="WandB run name (auto-generated if not provided)")
+    parser.add_argument("--wandb_tags", type=str, nargs="+", default=None, help="Optional WandB tags")
+    parser.add_argument("--wandb_notes", type=str, default=None, help="Optional WandB notes")
 
     # Data/Trainer settings (same pipeline as FP)
     parser.add_argument("--num_train_epochs", type=float, default=1.0)
@@ -686,6 +747,42 @@ def main():
     args = parser.parse_args()
 
     set_seed(args.seed)
+    
+    # Initialize WandB (same as PTQ script)
+    use_wandb = WANDB_AVAILABLE and not args.disable_wandb
+    wandb_run = None
+
+    if use_wandb:
+        default_run_name = f"qat_bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}"
+        run_name = args.wandb_run_name or default_run_name
+        wandb_config = {
+            "bx": args.bx,
+            "bw": args.bw,
+            "ba": args.ba,
+            "k": args.k,
+            "ashift": args.ashift,
+            "fixed_delta": args.fixed_delta,
+            "num_train_epochs": args.num_train_epochs,
+            "learning_rate": args.learning_rate,
+            "train_batch_size": args.per_device_train_batch_size,
+            "eval_batch_size": args.per_device_eval_batch_size,
+            "warmup_ratio": args.warmup_ratio,
+            "warmup_steps": args.warmup_steps,
+            "seed": args.seed,
+            "mvm_limit": args.mvm_limit,
+            "delta_loss_weight": 0.0 if args.fixed_delta else 0.01,
+        }
+        wandb_run = wandb.init(
+                project=args.wandb_project,
+                name=run_name,
+                config=wandb_config,
+                tags=args.wandb_tags,
+                notes=args.wandb_notes or "",
+        )
+        logger.info(f"WandB initialized: project={args.wandb_project}, run={run_name}")
+    else:
+        logger.info("WandB logging disabled")
+
     
     # Note: signed_activations is now set PER-LAYER in BertADCConverter
     # based on whether the layer comes after GeLU
@@ -827,6 +924,10 @@ def main():
     stats = BertADCConverter.count_adc_qat_layers(model)
     logger.info(f"ADC QAT conversion: {stats['adc_qat_linear']} TiledLinearADC, {stats['regular_linear']} remaining Linear, "
                 f"{stats['total_params']:,} params")
+    if use_wandb and wandb_run is not None:
+        wandb.run.summary["adc_qat_linear_layers"] = stats["adc_qat_linear"]
+        wandb.run.summary["regular_linear_layers"] = stats["regular_linear"]
+        wandb.run.summary["total_params"] = stats["total_params"]
 
     # Data
     raw = load_dataset("squad")
@@ -837,8 +938,10 @@ def main():
         desc="Tokenizing train",
     )
     eval_examples = raw["validation"]
+    # Use prepare_train_features for eval too, so labels (start_positions, end_positions) are included
+    # This allows Trainer to compute F1/EM during training evaluation
     eval_dataset = eval_examples.map(
-        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
+        lambda x: prepare_train_features(x, tokenizer, args.max_length, args.doc_stride),
         batched=True,
         remove_columns=eval_examples.column_names,
         desc="Tokenizing validation",
@@ -851,6 +954,9 @@ def main():
     # Normalize warmup settings so ratio is never None
     _warmup_steps = args.warmup_steps if args.warmup_steps not in (None, 0) else 0
     _warmup_ratio = args.warmup_ratio if _warmup_steps == 0 else 0.0
+    
+    # Configure reporting: use WandB if available and enabled, otherwise none (same as PTQ)
+    _report_to = "wandb" if use_wandb else "none"
 
     try:
         training_args = TrainingArguments(
@@ -869,7 +975,7 @@ def main():
             eval_strategy="steps",
             eval_steps=args.eval_steps,
             fp16=args.fp16,
-            report_to="none",
+            report_to=_report_to,
             # Add gradient clipping
             max_grad_norm=1.0,  # Tighter clipping to stabilize early training
             gradient_accumulation_steps=2,  # Accumulate gradients to reduce variance
@@ -891,7 +997,7 @@ def main():
             eval_strategy="steps",
             eval_steps=args.eval_steps,
             fp16=args.fp16,
-            report_to="none",
+            report_to=_report_to,
             # Add gradient clipping
             max_grad_norm=1.0,
             gradient_accumulation_steps=2,
@@ -900,6 +1006,13 @@ def main():
             training_args.resume_from_checkpoint = resume_ckpt
 
     # Create custom trainer with ADC loss handling
+    callbacks = [EpochCallback(), EvalMetricsLogger(use_wandb=use_wandb)]
+
+    # Preprocess logits for QA metrics (needed to extract start/end logits)
+    def preprocess_logits_for_metrics(logits, labels):
+        """Extract start and end logits for QA metrics computation"""
+        return logits[0], logits[1]  # (start_logits, end_logits)
+
     trainer = ADCLossTrainer(
         model=model,
         args=training_args,
@@ -908,16 +1021,30 @@ def main():
         tokenizer=tokenizer,
         data_collator=default_data_collator,
         compute_metrics=metrics_computer.compute_metrics,
-        callbacks=[EpochCallback(), EvalMetricsLogger()],
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+        callbacks=callbacks,
         adc_step_monitor=adc_step_monitor,  # Add ADC monitoring
         kurtosis_lambda=args.kurtosis_lambda,
     )
 
+    train_metrics = {}
     if args.eval_only:
         logger.info("Skipping training; running evaluation only...")
     else:
         logger.info("Starting ADC QAT fine-tuning with HF Trainer...")
-        trainer.train()
+        train_output = trainer.train()
+        if train_output is not None:
+            train_metrics = getattr(train_output, "metrics", {}) or {}
+            training_loss = getattr(train_output, "training_loss", None)
+            if training_loss is not None and "training_loss" not in train_metrics:
+                train_metrics["training_loss"] = training_loss
+        if use_wandb and wandb_run is not None:
+            wandb_log = {}
+            for key, value in train_metrics.items():
+                if isinstance(value, (int, float)):
+                    wandb_log[f"train/{key}"] = value
+            if wandb_log:
+                wandb.log(wandb_log, step=trainer.state.global_step)
     logger.info("ADC QAT training completed.")
 
     # Final eval (same as FP script)
@@ -933,6 +1060,20 @@ def main():
     eval_metrics = squad_metric.compute(predictions=preds_for_metric, references=refs)
 
     logger.info(f"Final F1: {eval_metrics['f1']:.2f}, EM: {eval_metrics['exact_match']:.2f}")
+    if use_wandb and wandb_run is not None:
+        wandb.log(
+            {
+                "eval/f1": float(eval_metrics["f1"]),
+                "eval/exact_match": float(eval_metrics["exact_match"]),
+            },
+            step=trainer.state.global_step,
+        )
+        wandb.run.summary["final_eval_f1"] = float(eval_metrics["f1"])
+        wandb.run.summary["final_eval_exact_match"] = float(eval_metrics["exact_match"])
+        if train_metrics:
+            for key, value in train_metrics.items():
+                if isinstance(value, (int, float)):
+                    wandb.run.summary[f"train/{key}"] = float(value)
 
     # Generate final ADC distribution plots
     if ADC_MONITORING_AVAILABLE and adc_step_monitor:
@@ -947,6 +1088,10 @@ def main():
     # Save artifacts
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
+    if use_wandb and wandb_run is not None:
+        wandb.run.summary["output_dir"] = args.output_dir
+        if args.fp_checkpoint_dir:
+            wandb.run.summary["fp_checkpoint_dir"] = args.fp_checkpoint_dir
 
     with open(os.path.join(args.output_dir, "eval_metrics.txt"), "w") as f:
         for k, v in sorted(eval_metrics.items()):
@@ -959,7 +1104,12 @@ def main():
         f.write(f"ba (ADC bits): {args.ba}\n")
         f.write(f"k (hardware parameter): {args.k}\n")
         f.write(f"ashift: {args.ashift}\n")
-        f.write(f"signed_activations: {args.signed_activations}\n")
+        activation_strategy = (
+            "per-layer (A-shift for GeLU outputs, symmetric otherwise)"
+            if args.ashift
+            else "per-layer symmetric (signed activations)"
+        )
+        f.write(f"activation_strategy: {activation_strategy}\n")
         if 'exclude_patterns' in locals():
             f.write(f"exclude_patterns: {exclude_patterns}\n")
         f.write(f"mvm_limit: {args.mvm_limit}\n")
@@ -968,6 +1118,8 @@ def main():
     print(f"Artifacts saved to: {args.output_dir}")
     if ADC_MONITORING_AVAILABLE and adc_step_monitor:
         print(f"ADC distribution plots: {os.path.join(args.output_dir, 'adc_distributions')}")
+    if use_wandb and wandb_run is not None:
+        wandb.finish()
 
 
 if __name__ == "__main__":
