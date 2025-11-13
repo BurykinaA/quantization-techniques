@@ -209,6 +209,8 @@ class ADCCalibrator:
         adc_count = 0
         tiled_count = 0
         sample_module_type = None
+        checked_sample = False
+        
         for name, module in self.model.named_modules():
             if isinstance(module, QATLinearADC):
                 adc_count += 1
@@ -219,16 +221,25 @@ class ADCCalibrator:
                 if tiled_count <= 3:  # Show first 3
                     logger.info(f"  Found TiledLinearADC: {name} with {len(module.tiles)} tiles")
             
-            # Check for any module that looks like it might be our ADC layer
-            if 'query' in name and 'layer.0.attention.self.query' == name:
+            # Check for a sample module (use full path)
+            if not checked_sample and 'bert.encoder.layer.0.attention.self.query' == name:
+                checked_sample = True
                 sample_module_type = type(module).__name__
-                logger.info(f"  Sample module 'layer.0.attention.self.query' has type: {type(module)}")
-                logger.info(f"  Module class name: {type(module).__name__}")
-                logger.info(f"  Module class module: {type(module).__module__}")
+                logger.info(f"  *** Sample module 'bert.encoder.layer.0.attention.self.query':")
+                logger.info(f"      Type: {type(module)}")
+                logger.info(f"      Class name: {type(module).__name__}")
+                logger.info(f"      Module: {type(module).__module__}")
+                logger.info(f"      Is QATLinearADC? {isinstance(module, QATLinearADC)}")
+                logger.info(f"      Is TiledLinearADC? {isinstance(module, TiledLinearADC)}")
                 if hasattr(module, 'tiles'):
-                    logger.info(f"  Has 'tiles' attribute with {len(module.tiles)} tiles")
+                    logger.info(f"      Has 'tiles' attribute with {len(module.tiles)} tiles")
                     if len(module.tiles) > 0:
-                        logger.info(f"  First tile type: {type(module.tiles[0])}")
+                        first_tile = module.tiles[0]
+                        logger.info(f"      First tile type: {type(first_tile)}")
+                        logger.info(f"      First tile is QATLinearADC? {isinstance(first_tile, QATLinearADC)}")
+                        logger.info(f"      QATLinearADC from adc_layers: {QATLinearADC}")
+                        logger.info(f"      First tile's class: {type(first_tile)}")
+                        logger.info(f"      Are they same class? {type(first_tile) is QATLinearADC}")
         
         logger.info(f"Total: {adc_count} QATLinearADC, {tiled_count} TiledLinearADC")
         logger.info("Registering hooks...")
