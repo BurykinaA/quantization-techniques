@@ -333,6 +333,73 @@ def load_qa_model_robust(checkpoint_dir: str) -> BertForQuestionAnswering:
             logger.info(f"Missing keys count: {len(missing)} (randomly initialized).")
         return model
 
+def load_state_dict_flexible(model: nn.Module, state_dict: Dict[str, torch.Tensor]) -> Tuple[List[str], List[str]]:
+    """
+    Load state dict with flexible shape handling for quantizer parameters.
+    Handles per-channel quantizer scales that need to be resized.
+    
+    Returns:
+        Tuple of (missing_keys, unexpected_keys)
+    """
+    model_state = model.state_dict()
+    missing_keys = []
+    unexpected_keys = []
+    
+    # First pass: load with flexible shape matching
+    for key, checkpoint_tensor in state_dict.items():
+        if key not in model_state:
+            unexpected_keys.append(key)
+            continue
+        
+        model_param = model.state_dict()[key]
+        
+        # Check if shapes match
+        if checkpoint_tensor.shape == model_param.shape:
+            # Direct copy
+            model.state_dict()[key].copy_(checkpoint_tensor)
+        else:
+            # Handle shape mismatch for quantizer parameters
+            if 'quantizer.scale' in key or 'quantizer.zero_point' in key:
+                # Find the actual parameter in the model
+                param = model
+                for attr in key.split('.'):
+                    param = getattr(param, attr)
+                
+                # Resize if it's a Parameter
+                if isinstance(param, nn.Parameter):
+                    with torch.no_grad():
+                        # Resize the parameter to match checkpoint
+                        new_param = nn.Parameter(checkpoint_tensor.clone())
+                        # Navigate to parent and set attribute
+                        parent = model
+                        attrs = key.split('.')
+                        for attr in attrs[:-1]:
+                            parent = getattr(parent, attr)
+                        setattr(parent, attrs[-1], new_param)
+                        logger.info(f"Resized parameter {key}: {model_param.shape} → {checkpoint_tensor.shape}")
+                elif torch.is_tensor(param):
+                    # It's a buffer, resize via parent module
+                    parent = model
+                    attrs = key.split('.')
+                    for attr in attrs[:-1]:
+                        parent = getattr(parent, attr)
+                    # Unregister old buffer and register new one
+                    delattr(parent, attrs[-1])
+                    parent.register_buffer(attrs[-1], checkpoint_tensor.clone())
+                    logger.info(f"Resized buffer {key}: {model_param.shape} → {checkpoint_tensor.shape}")
+            else:
+                # For non-quantizer parameters, skip mismatched shapes
+                missing_keys.append(key)
+                logger.warning(f"Shape mismatch for {key}: checkpoint {checkpoint_tensor.shape} vs model {model_param.shape}")
+    
+    # Check for missing keys (parameters in model but not in checkpoint)
+    for key in model_state.keys():
+        if key not in state_dict:
+            missing_keys.append(key)
+    
+    return missing_keys, unexpected_keys
+
+
 def warm_start_adc_quantizers_from_qat(model: nn.Module, checkpoint_dir: str) -> int:
     """
     Initialize ADC quantizers (per-tile LearnableQuantizer scales/zero-points)
@@ -836,11 +903,36 @@ def main():
         else:
             raise FileNotFoundError(f"No model file found in {resume_ckpt}")
 
-        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+        # Load state dict with flexible shape handling for quantizer parameters
+        logger.info("Loading state dict with flexible parameter matching...")
+        missing_keys, unexpected_keys = load_state_dict_flexible(model, state_dict)
+        
         if unexpected_keys:
             logger.info(f"Ignored {len(unexpected_keys)} unexpected keys from checkpoint")
         if missing_keys:
             logger.warning(f"Missing {len(missing_keys)} keys when loading checkpoint")
+        
+        logger.info(f"Successfully loaded ADC checkpoint: {len(state_dict)} keys loaded")
+        
+        # Mark all quantizers as initialized so they don't try to reinitialize
+        for name, module in model.named_modules():
+            if isinstance(module, (QATLinearADC, TiledLinearADC)):
+                if isinstance(module, TiledLinearADC):
+                    tiles = module.tiles
+                else:
+                    tiles = [module]
+                
+                for tile in tiles:
+                    if hasattr(tile, 'activation_quantizer'):
+                        tile.activation_quantizer._scale_initialized = True
+                        if hasattr(tile.activation_quantizer, '_zp_initialized'):
+                            tile.activation_quantizer._zp_initialized = True
+                    if hasattr(tile, 'weight_quantizer'):
+                        tile.weight_quantizer._scale_initialized = True
+                        if hasattr(tile.weight_quantizer, '_zp_initialized'):
+                            tile.weight_quantizer._zp_initialized = True
+        
+        logger.info("Marked all quantizers as initialized")
 
         do_convert = False
         do_warm_start = False
