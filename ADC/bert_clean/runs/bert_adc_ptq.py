@@ -203,8 +203,12 @@ class ADCCalibrator:
         # Register hooks on QATLinearADC layers (including tiles inside TiledLinearADC)
         # First, let's see what modules exist (debug)
         logger.info("Scanning model for ADC layers...")
+        logger.info(f"QATLinearADC class: {QATLinearADC}")
+        logger.info(f"TiledLinearADC class: {TiledLinearADC}")
+        
         adc_count = 0
         tiled_count = 0
+        sample_module_type = None
         for name, module in self.model.named_modules():
             if isinstance(module, QATLinearADC):
                 adc_count += 1
@@ -214,6 +218,17 @@ class ADCCalibrator:
                 tiled_count += 1
                 if tiled_count <= 3:  # Show first 3
                     logger.info(f"  Found TiledLinearADC: {name} with {len(module.tiles)} tiles")
+            
+            # Check for any module that looks like it might be our ADC layer
+            if 'query' in name and 'layer.0.attention.self.query' == name:
+                sample_module_type = type(module).__name__
+                logger.info(f"  Sample module 'layer.0.attention.self.query' has type: {type(module)}")
+                logger.info(f"  Module class name: {type(module).__name__}")
+                logger.info(f"  Module class module: {type(module).__module__}")
+                if hasattr(module, 'tiles'):
+                    logger.info(f"  Has 'tiles' attribute with {len(module.tiles)} tiles")
+                    if len(module.tiles) > 0:
+                        logger.info(f"  First tile type: {type(module.tiles[0])}")
         
         logger.info(f"Total: {adc_count} QATLinearADC, {tiled_count} TiledLinearADC")
         logger.info("Registering hooks...")
