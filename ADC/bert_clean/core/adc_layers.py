@@ -259,6 +259,43 @@ class LearnableQuantizer(nn.Module):
         else:
             self.register_buffer('zero_point', torch.zeros(1))
             self._zp_initialized = True
+        
+        # Quantizer mode: controls when parameters are updated
+        # 'calibration': collect statistics, update scales via EMA, no gradients
+        # 'qat': learn scales via gradients only, NO EMA updates
+        # 'fixed': freeze all parameters, no updates
+        self._mode = 'calibration'
+        
+    def set_mode(self, mode: str):
+        """
+        Set quantizer mode:
+        - 'calibration': Initialize scales using input statistics (EMA updates, no gradients)
+        - 'qat': Learn scales via gradients (gradients enabled, NO EMA updates)
+        - 'fixed': Freeze scales (no updates at all)
+        """
+        if mode not in ['calibration', 'qat', 'fixed']:
+            raise ValueError(f"Invalid mode '{mode}'. Must be 'calibration', 'qat', or 'fixed'")
+        
+        old_mode = self._mode
+        self._mode = mode
+        
+        if mode == 'calibration':
+            # Calibration: use EMA updates, disable gradients
+            self.scale.requires_grad = False
+            if not self.symmetric:
+                self.zero_point.requires_grad = False
+        elif mode == 'qat':
+            # QAT: enable gradients, will disable EMA updates in forward()
+            self.scale.requires_grad = True
+            if not self.symmetric:
+                self.zero_point.requires_grad = True
+        elif mode == 'fixed':
+            # Fixed: no updates at all
+            self.scale.requires_grad = False
+            if not self.symmetric:
+                self.zero_point.requires_grad = False
+        
+        print(f"[LearnableQuantizer] Mode changed: {old_mode} → {mode}, scale.requires_grad={self.scale.requires_grad}")
     
     def _initialize_parameters(self, x: torch.Tensor):
         """Initialize parameters with correct shape on first forward pass"""
@@ -372,9 +409,6 @@ class LearnableQuantizer(nn.Module):
                 #self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
     
     def forward(self, x: torch.Tensor, update_stats: bool = None) -> torch.Tensor:
-        if update_stats is None:
-            update_stats = self.training
-        
         # Check input for NaN/inf
         if torch.isnan(x).any() or torch.isinf(x).any():
             print(f"Warning: NaN/inf in quantizer input, range=[{x.min():.3f}, {x.max():.3f}]")
@@ -383,7 +417,16 @@ class LearnableQuantizer(nn.Module):
         # Initialize parameters on first forward pass
         self._initialize_parameters(x)
         
-        if update_stats:
+        # Respect the mode: only update via EMA in 'calibration' mode
+        # In 'qat' mode: scales are updated ONLY via gradients (optimizer.step())
+        # In 'fixed' mode: no updates at all
+        should_update_ema = (self._mode == 'calibration')
+        
+        # Allow override via update_stats parameter (for backward compatibility)
+        if update_stats is not None:
+            should_update_ema = update_stats and (self._mode == 'calibration')
+        
+        if should_update_ema:
             self.update_params(x)
         
         # Ensure scale is valid before using
@@ -500,6 +543,16 @@ class QATLinearADC(nn.Linear):
     def disable_quantization(self):
         self.quantization_enabled = False
     
+    def set_quantizer_mode(self, mode: str):
+        """
+        Set mode for all quantizers in this layer.
+        - 'calibration': Initialize scales using input statistics
+        - 'qat': Learn scales via gradients during training
+        - 'fixed': Freeze all quantization parameters
+        """
+        self.activation_quantizer.set_mode(mode)
+        self.weight_quantizer.set_mode(mode)
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.quantization_enabled:
             return F.linear(x, self.weight, self.bias)
@@ -511,6 +564,7 @@ class QATLinearADC(nn.Linear):
         
         if self._forward_count % 100 == 1:  # Print every 100 forward passes
             print(f"\n[DEBUG QATLinearADC] Forward pass #{self._forward_count}, training={self.training}")
+            print(f"  Quantizer mode: act={self.activation_quantizer._mode}, weight={self.weight_quantizer._mode}")
             print(f"  Input: range=[{x.min().item():.3f}, {x.max().item():.3f}]")
             print(f"  Weight: range=[{self.weight.min().item():.3f}, {self.weight.max().item():.3f}]")
             print(f"  Act quantizer scale: {self.activation_quantizer.scale.item():.6f}, requires_grad={self.activation_quantizer.scale.requires_grad}")
@@ -725,6 +779,11 @@ class TiledLinearADC(nn.Module):
         # Set epoch for all tiles
         for tile in self.tiles:
             tile.set_epoch(epoch)
+    
+    def set_quantizer_mode(self, mode: str):
+        """Set mode for all quantizers in all tiles"""
+        for tile in self.tiles:
+            tile.set_quantizer_mode(mode)
 
     # ===== служебные методы управления (по аналогии с TiledConv2dADC) =====
 

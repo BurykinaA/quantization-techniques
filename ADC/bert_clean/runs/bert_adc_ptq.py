@@ -32,7 +32,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 
-from adc_layers import TiledLinearADC, QATLinearADC, ADCQuantizer
+from ADC.bert_clean.core.adc_layers import TiledLinearADC, QATLinearADC, ADCQuantizer
 from bert_adc_integration import (
     BertADCConverter,
     load_qa_model_robust,
@@ -41,7 +41,6 @@ from bert_adc_integration import (
     postprocess_qa_predictions,
     MetricsComputer,
 )
-
 # WandB import
 try:
     import wandb
@@ -632,6 +631,13 @@ def main():
     
     # Apply calibration
     calibrator.apply_calibration(optimal_params)
+
+    # Set quantizers to 'fixed' mode to prevent accidental updates
+    for name, module in model.named_modules():
+        if isinstance(module, (QATLinearADC, TiledLinearADC)):
+            if hasattr(module, 'set_quantizer_mode'):
+                module.set_quantizer_mode('fixed')
+    logger.info("✓ Quantizers set to 'fixed' mode after calibration")
     
     # Visualize AFTER calibration
     viz_after = None
