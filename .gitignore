@@ -5,3 +5,4 @@ statistics
 wandb
 *pth
 !ADC/bert_clean/runs
+ADC/bert_clean/checkpoints

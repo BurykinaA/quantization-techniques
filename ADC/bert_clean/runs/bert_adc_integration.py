@@ -22,7 +22,7 @@ from transformers import (
     set_seed,
 )
 
-from adc_layers import QATLinearADC, TiledLinearADC, LearnableQuantizer, ADCQuantizer  # noqa: F401
+from ADC.bert_clean.core.adc_layers import QATLinearADC, TiledLinearADC, LearnableQuantizer, ADCQuantizer  # noqa: F401
 
 from transformers import TrainerCallback, TrainingArguments, TrainerState, TrainerControl
 
