@@ -29,11 +29,10 @@ from datetime import datetime
 
 import sys
 from pathlib import Path
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "core"))
 
+# Import with FULL paths to avoid class identity issues
 from ADC.bert_clean.core.adc_layers import TiledLinearADC, QATLinearADC, ADCQuantizer
-from bert_adc_integration import (
+from ADC.bert_clean.runs.bert_adc_integration import (
     BertADCConverter,
     load_qa_model_robust,
     find_last_checkpoint_dir,
