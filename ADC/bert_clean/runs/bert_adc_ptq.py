@@ -201,18 +201,36 @@ class ADCCalibrator:
             return hook
         
         # Register hooks on QATLinearADC layers (including tiles inside TiledLinearADC)
+        # First, let's see what modules exist (debug)
+        logger.info("Scanning model for ADC layers...")
+        adc_count = 0
+        tiled_count = 0
+        for name, module in self.model.named_modules():
+            if isinstance(module, QATLinearADC):
+                adc_count += 1
+                if adc_count <= 3:  # Show first 3
+                    logger.info(f"  Found QATLinearADC: {name}")
+            elif isinstance(module, TiledLinearADC):
+                tiled_count += 1
+                if tiled_count <= 3:  # Show first 3
+                    logger.info(f"  Found TiledLinearADC: {name} with {len(module.tiles)} tiles")
+        
+        logger.info(f"Total: {adc_count} QATLinearADC, {tiled_count} TiledLinearADC")
+        logger.info("Registering hooks...")
+        
+        # Now register hooks
         for name, module in self.model.named_modules():
             if isinstance(module, QATLinearADC):
                 hook = module.register_forward_hook(make_hook(name))
                 hooks.append(hook)
-                logger.info(f"Registered hook on {name}")
+                logger.info(f"Registered hook on QATLinearADC: {name}")
             elif isinstance(module, TiledLinearADC):
                 # Register hooks on individual tiles
                 for tile_idx, tile in enumerate(module.tiles):
                     tile_name = f"{name}.tiles.{tile_idx}"
                     hook = tile.register_forward_hook(make_hook(tile_name))
                     hooks.append(hook)
-                    logger.info(f"Registered hook on {tile_name}")
+                    logger.info(f"Registered hook on tile: {tile_name}")
         
         return hooks
     
