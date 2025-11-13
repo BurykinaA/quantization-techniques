@@ -200,12 +200,19 @@ class ADCCalibrator:
             
             return hook
         
-        # Register hooks on QATLinearADC layers
+        # Register hooks on QATLinearADC layers (including tiles inside TiledLinearADC)
         for name, module in self.model.named_modules():
             if isinstance(module, QATLinearADC):
                 hook = module.register_forward_hook(make_hook(name))
                 hooks.append(hook)
                 logger.info(f"Registered hook on {name}")
+            elif isinstance(module, TiledLinearADC):
+                # Register hooks on individual tiles
+                for tile_idx, tile in enumerate(module.tiles):
+                    tile_name = f"{name}.tiles.{tile_idx}"
+                    hook = tile.register_forward_hook(make_hook(tile_name))
+                    hooks.append(hook)
+                    logger.info(f"Registered hook on {tile_name}")
         
         return hooks
     
@@ -362,7 +369,7 @@ class ADCCalibrator:
         updated_w = 0
         
         for name, module in self.model.named_modules():
-            # Handle both QATLinearADC and TiledLinearADC tiles
+            # Handle QATLinearADC (standalone or as tiles)
             if isinstance(module, QATLinearADC) and name in optimal_params:
                 params = optimal_params[name]
                 

@@ -294,8 +294,6 @@ class LearnableQuantizer(nn.Module):
             self.scale.requires_grad = False
             if not self.symmetric:
                 self.zero_point.requires_grad = False
-        
-        print(f"[LearnableQuantizer] Mode changed: {old_mode} → {mode}, scale.requires_grad={self.scale.requires_grad}")
     
     def _initialize_parameters(self, x: torch.Tensor):
         """Initialize parameters with correct shape on first forward pass"""
@@ -324,9 +322,6 @@ class LearnableQuantizer(nn.Module):
                 # Resize the existing parameter instead of creating new one
                 self.scale.data = self.scale.data.new_zeros(channel_size)
                 self.scale.data.copy_(init_scale)
-                
-                print(f"[DEBUG] LearnableQuantizer initialized: bits={self.num_bits}, symmetric={self.symmetric}, per_channel={self.per_channel}")
-                print(f"[DEBUG] Initial scale stats: min={init_scale.min().item():.6f}, max={init_scale.max().item():.6f}, mean={init_scale.mean().item():.6f}")
             
             self._scale_initialized = True
             
@@ -351,8 +346,6 @@ class LearnableQuantizer(nn.Module):
             if x.abs().max() < 1e-6:
                 # print("Warning: Input is all zeros, skipping quantizer update")
                 return
-            
-            print(f"[DEBUG] update_params called: input range=[{x.min().item():.3f}, {x.max().item():.3f}], scale.requires_grad={self.scale.requires_grad}")
                 
             if self.per_channel:
                 # Per-channel quantization
@@ -383,13 +376,7 @@ class LearnableQuantizer(nn.Module):
                 
                 # Exponential moving average update
                 momentum = 0.01  # Reduced momentum for stability
-                old_scale = self.scale.data.clone()
                 self.scale.data = (1 - momentum) * self.scale.data + momentum * new_scale
-                
-                # DEBUG: This should NOT happen during QAT training! Only during calibration.
-                scale_change = (self.scale.data - old_scale).abs().max().item()
-                if scale_change > 0.001:
-                    print(f"[CRITICAL] Scale changing during training! change={scale_change:.6f} - This will destabilize QAT!")
                 
                 # Clamp the final scale
                 #self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
@@ -556,20 +543,6 @@ class QATLinearADC(nn.Linear):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if not self.quantization_enabled:
             return F.linear(x, self.weight, self.bias)
-
-        # DEBUG: Print quantization stats periodically
-        if not hasattr(self, '_forward_count'):
-            self._forward_count = 0
-        self._forward_count += 1
-        
-        if self._forward_count % 100 == 1:  # Print every 100 forward passes
-            print(f"\n[DEBUG QATLinearADC] Forward pass #{self._forward_count}, training={self.training}")
-            print(f"  Quantizer mode: act={self.activation_quantizer._mode}, weight={self.weight_quantizer._mode}")
-            print(f"  Input: range=[{x.min().item():.3f}, {x.max().item():.3f}]")
-            print(f"  Weight: range=[{self.weight.min().item():.3f}, {self.weight.max().item():.3f}]")
-            print(f"  Act quantizer scale: {self.activation_quantizer.scale.item():.6f}, requires_grad={self.activation_quantizer.scale.requires_grad}")
-            print(f"  Weight quantizer scale: min={self.weight_quantizer.scale.min().item():.6f}, max={self.weight_quantizer.scale.max().item():.6f}, requires_grad={self.weight_quantizer.scale.requires_grad}")
-            print(f"  ADC delta: {self.adc_quantizer._delta.item():.6f}")
 
         # Store raw inputs for monitoring
         x_raw = x.clone().detach()
