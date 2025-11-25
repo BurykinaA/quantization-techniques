@@ -3,13 +3,13 @@
 
 # Configuration
 QAT_CHECKPOINT="./ADC/bert_clean/checkpoints/outputs_qat/squad_qat_20251028_001954"  # Full path to QAT checkpoint
-OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_ptq_asymmetric"
+OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_ptq_k16"
 
 # ADC Hardware Configuration
 BX=8              # Activation bits
 BW=8              # Weight bits
 BA=8              # ADC bits
-K=4               # Hardware design parameter
+K=16              # Hardware design parameter (k=16 works best for BERT)
 ASHIFT=false       # A-shift quantization strategy:
                   #   false = symmetric/signed quantization (standard)
                   #   true  = asymmetric/unsigned + A-shift (optimal for GeLU outputs)

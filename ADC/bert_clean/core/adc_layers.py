@@ -3,6 +3,48 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple
 
+
+def floor_ste(x: torch.Tensor) -> torch.Tensor:
+    """Floor with Straight-Through Estimator for gradient flow"""
+    return x + (torch.floor(x) - x).detach()
+
+
+def round_ste(x: torch.Tensor) -> torch.Tensor:
+    """Round with Straight-Through Estimator for gradient flow"""
+    return x + (torch.round(x) - x).detach()
+
+
+def compute_kurtosis_loss(weight: torch.Tensor, target_kurtosis: float = 1.8) -> torch.Tensor:
+    """
+    Compute kurtosis penalty for W-reshape (Equation 6 from paper).
+    
+    The kurtosis penalty encourages flatter weight distributions to maximize
+    Var[W] and improve ADC utilization.
+    
+    Args:
+        weight: The weight tensor (can be quantized or not)
+        target_kurtosis: Target kurtosis value (paper uses ~1.8 for uniform-like distribution)
+        
+    Returns:
+        Kurtosis loss: (kurtosis - target)^2
+    """
+    # Equation 6: κ = E[((W - μ_W) / σ_W)^4]
+    mean_w = weight.mean()
+    std_w = weight.std()
+    
+    # Avoid division by zero
+    std_w = torch.clamp(std_w, min=1e-6)
+    
+    normalized = (weight - mean_w) / std_w
+    kurtosis = (normalized ** 4).mean()
+    
+    # Loss is squared difference from target
+    # Note: Gaussian has kurtosis=3, uniform has kurtosis=1.8
+    loss = (kurtosis - target_kurtosis) ** 2
+    
+    return loss
+
+
 class StraightThroughQuantize(torch.autograd.Function):
     """
     Straight-through estimator for quantization that allows gradients to flow to scale parameters
@@ -461,6 +503,12 @@ class LearnableQuantizer(nn.Module):
 class QATLinearADC(nn.Linear):
     """
     ADC-based Quantization-Aware Training Linear layer
+    
+    Implements ADC quantization from the paper with:
+    - Equation 2: ADC quantization with floor operation
+    - Equation 3: Fixed analytical delta calculation
+    - Equation 4: A-shift (activation shifting) for better ADC utilization
+    - Equation 6 & 7: W-reshape (kurtosis penalty) for weight distribution reshaping
     """
     def __init__(self, 
                  in_features: int, 
@@ -475,7 +523,11 @@ class QATLinearADC(nn.Linear):
                  use_dynamic_delta: bool = True,
                  use_delta_anneal: bool = True,
                  delta_loss_weight: float = 0.01,
-                 delta_anneal_epochs: float = 1.0):
+                 delta_anneal_epochs: float = 1.0,
+                 # W-reshape (kurtosis) parameters from paper Equation 6 & 7
+                 use_kurtosis_loss: bool = True,
+                 kurtosis_weight: float = 0.0006,  # λ_κ in paper
+                 target_kurtosis: float = 1.8):  # Target kurtosis (uniform-like)
         super().__init__(in_features, out_features, bias)
         
         self.bx = bx
@@ -484,6 +536,11 @@ class QATLinearADC(nn.Linear):
         self.k = k
         self.ashift = ashift
         self.signed_activations = signed_activations
+        
+        # W-reshape (kurtosis) parameters
+        self.use_kurtosis_loss = use_kurtosis_loss
+        self.kurtosis_weight = kurtosis_weight
+        self.target_kurtosis = target_kurtosis
         
         # Activation quantizer (affine for unsigned, symmetric for signed)
         self.activation_quantizer = LearnableQuantizer(
@@ -594,6 +651,16 @@ class QATLinearADC(nn.Linear):
         adc_output, delta_loss = self._adc_quantize_with_loss(y_int)
         # Store latest delta loss for external aggregation
         self._last_delta_loss = delta_loss
+        
+        # 4.5) Compute kurtosis loss for W-reshape (Paper Equation 6 & 7)
+        # κ = E[((W - μ_W) / σ_W)^4], loss = (κ - target)^2
+        if self.training and self.use_kurtosis_loss:
+            kurtosis_loss = self.kurtosis_weight * compute_kurtosis_loss(
+                self.weight, self.target_kurtosis
+            )
+            self._last_kurtosis_loss = kurtosis_loss
+        else:
+            self._last_kurtosis_loss = torch.tensor(0.0, device=y_int.device, dtype=y_int.dtype)
 
         # Store pipeline data for monitoring if we have a monitor attached
         if hasattr(self, '_pipeline_monitor') and self._pipeline_monitor is not None:
@@ -673,8 +740,9 @@ class QATLinearADC(nn.Linear):
             else:
                 scale_for_quant = torch.clamp(dynamic_delta, min=1e-3, max=100.0)
 
-        # Apply ADC quantization
-        y_adc_codes = torch.round(y_int / scale_for_quant)
+        # Apply ADC quantization (Paper Equation 2: uses floor, not round)
+        # y_bar = floor(clip(y / delta, na, pa))
+        y_adc_codes = floor_ste(y_int / scale_for_quant)
         y_adc_codes = torch.clamp(y_adc_codes, na, pa)
 
         # Dequantize back to the scale used for quantization
@@ -686,6 +754,31 @@ class QATLinearADC(nn.Linear):
         """Set the current training epoch for delta annealing"""
         if hasattr(self, 'adc_quantizer'):
             self.adc_quantizer.set_epoch(epoch)
+    
+    def get_auxiliary_losses(self) -> dict:
+        """
+        Get all auxiliary losses for this layer.
+        
+        Returns:
+            Dictionary with:
+            - 'delta_loss': MSE loss between dynamic and analytical delta (if using dynamic delta)
+            - 'kurtosis_loss': W-reshape kurtosis penalty (Equation 6 & 7)
+            - 'total': Sum of all losses
+        """
+        losses = {}
+        
+        # Delta loss (extension, not in paper)
+        delta_loss = getattr(self, '_last_delta_loss', torch.tensor(0.0))
+        losses['delta_loss'] = delta_loss
+        
+        # Kurtosis loss (Paper Equation 6 & 7)
+        kurtosis_loss = getattr(self, '_last_kurtosis_loss', torch.tensor(0.0))
+        losses['kurtosis_loss'] = kurtosis_loss
+        
+        # Total loss for backprop
+        losses['total'] = delta_loss + kurtosis_loss
+        
+        return losses
 
 
 class TiledLinearADC(nn.Module):
@@ -709,6 +802,10 @@ class TiledLinearADC(nn.Module):
                  use_delta_anneal: bool = True,
                  delta_loss_weight: float = 0.01,
                  delta_anneal_epochs: float = 1.0,
+                 # W-reshape (kurtosis) parameters from paper
+                 use_kurtosis_loss: bool = True,
+                 kurtosis_weight: float = 0.0006,
+                 target_kurtosis: float = 1.8,
                  logger=None):
         super().__init__()
         self.logger = logger
@@ -744,6 +841,9 @@ class TiledLinearADC(nn.Module):
                     use_delta_anneal=use_delta_anneal,
                     delta_loss_weight=delta_loss_weight,
                     delta_anneal_epochs=delta_anneal_epochs,
+                    use_kurtosis_loss=use_kurtosis_loss,
+                    kurtosis_weight=kurtosis_weight,
+                    target_kurtosis=target_kurtosis,
                 )
             )
 
@@ -757,6 +857,27 @@ class TiledLinearADC(nn.Module):
         """Set mode for all quantizers in all tiles"""
         for tile in self.tiles:
             tile.set_quantizer_mode(mode)
+    
+    def get_auxiliary_losses(self) -> dict:
+        """
+        Get all auxiliary losses from all tiles.
+        
+        Returns:
+            Dictionary with aggregated losses from all tiles
+        """
+        total_delta = torch.tensor(0.0)
+        total_kurtosis = torch.tensor(0.0)
+        
+        for tile in self.tiles:
+            tile_losses = tile.get_auxiliary_losses()
+            total_delta = total_delta + tile_losses['delta_loss']
+            total_kurtosis = total_kurtosis + tile_losses['kurtosis_loss']
+        
+        return {
+            'delta_loss': total_delta,
+            'kurtosis_loss': total_kurtosis,
+            'total': total_delta + total_kurtosis
+        }
 
     # ===== служебные методы управления (по аналогии с TiledConv2dADC) =====
 

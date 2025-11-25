@@ -10,36 +10,38 @@
 FP_CHECKPOINT=""  # Leave empty when resuming from PTQ
 
 # ADC PTQ checkpoint to resume from (already has calibrated ADC layers)
-ADC_RESUME_DIR_DEFAULT="./ADC/bert_clean/checkpoints/outputs_adc_ptq_asymmetric_20251106"
+# This should point to the output of run_adc_ptq_example.sh
+ADC_RESUME_DIR_DEFAULT="./ADC/bert_clean/checkpoints/outputs_adc_ptq_k16"
 
 # Where to store QAT outputs (checkpoints, logs, metrics)
-OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_qat_from_ptq"
+OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_qat_k16_conservative"
 
-# ADC hardware configuration
+# ADC hardware configuration - MUST MATCH PTQ CHECKPOINT!
 BX=8                 # Activation bits
 BW=8                 # Weight bits
 BA=8                 # ADC bits
-K=4                  # Hardware design parameter
+K=16                 # Hardware design parameter (k=16 gave F1=65 vs k=4 gave F1=17)
 ASHIFT=false         # MUST MATCH PTQ checkpoint! (PTQ was created with ashift=false)
 MVM_LIMIT=256        # Tile size limit for MVM units
 
-# Training hyper-parameters (OPTIMIZED FOR SPEED when resuming from PTQ)
-NUM_EPOCHS=2         # Start with 1 epoch, can extend if needed
-TRAIN_BATCH_SIZE=128  # DOUBLED for faster throughput (32→64)
-EVAL_BATCH_SIZE=128  # DOUBLED for faster eval (64→128)
-LEARNING_RATE=1e-4   # Slightly higher for faster convergence (was 1e-6)
-WARMUP_RATIO=0.0     # No warmup needed when resuming from calibrated model
-WARMUP_STEPS=0
-EVAL_STEPS=500       # LESS frequent eval for speed (was 200)
-SAVE_STEPS=1000      # LESS frequent saves for speed (was 500)
-SAVE_TOTAL_LIMIT=2   # Keep fewer checkpoints to save disk I/O
-KURTOSIS_LAMBDA=0.05  # Disabled for speed (no extra loss computation)
-USE_FP16=true        # ENABLED for 2x speed boost (safe with calibrated quantizers)
+# Training hyper-parameters (when resuming from PTQ)
+# CRITICAL: Very conservative settings to not destroy calibrated weights!
+NUM_EPOCHS=3         # More epochs for gradual learning
+TRAIN_BATCH_SIZE=8
+EVAL_BATCH_SIZE=32
+LEARNING_RATE=1e-6   # EXTREMELY LOW LR - model is already well-calibrated!
+WARMUP_RATIO=0.1     # Warmup to avoid destabilizing calibrated weights
+WARMUP_STEPS=0       # Let warmup_ratio handle it
+EVAL_STEPS=100       # Eval more frequently to catch issues early
+SAVE_STEPS=500
+SAVE_TOTAL_LIMIT=3
+KURTOSIS_LAMBDA=0.0  # DISABLED! Only add after confirming training improves F1
+USE_FP16=false       # Start in fp32; turn on later when stable
 FIXED_DELTA=true     # Keep delta fixed (already calibrated in PTQ)
 EVAL_ONLY=false      # Set true to skip training and only run evaluation
 
 # Monitoring
-ENABLE_ADC_MONITORING=false  # DISABLED for maximum speed (turn on for debugging only)
+ENABLE_ADC_MONITORING=true
 ADC_RESUME_DIR="$ADC_RESUME_DIR_DEFAULT"  # Resume from PTQ checkpoint
 
 # Reproducibility

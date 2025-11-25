@@ -53,11 +53,13 @@ logger = logging.getLogger(__name__)
 
 
 class ADCLossTrainer(Trainer):
-    """Custom trainer that handles ADC delta loss by summing per-layer stored losses"""
+    """Custom trainer that handles ADC auxiliary losses (delta + kurtosis) from get_auxiliary_losses()"""
 
     def __init__(self, *args, adc_step_monitor=None, kurtosis_lambda: float = 0.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.adc_step_monitor = adc_step_monitor
+        # Note: kurtosis_lambda is kept for backward compatibility but the actual kurtosis weight
+        # is now configured per-layer via kurtosis_weight parameter in TiledLinearADC/QATLinearADC
         self.kurtosis_lambda = float(kurtosis_lambda)
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
@@ -78,37 +80,31 @@ class ADCLossTrainer(Trainer):
         if loss is None:
             raise ValueError("Could not extract loss from model outputs")
 
-        # Aggregate delta losses from modules that expose `_last_delta_loss`
-        delta_reg = torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
+        # Aggregate auxiliary losses from ADC layers using the new get_auxiliary_losses() method
+        # This includes both delta_loss (if using dynamic delta) and kurtosis_loss (W-reshape)
+        auxiliary_loss = torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
+        
         for module in model.modules():
-            if hasattr(module, '_last_delta_loss') and module._last_delta_loss is not None:
+            # Use the new get_auxiliary_losses() method from TiledLinearADC/QATLinearADC
+            if isinstance(module, (TiledLinearADC, QATLinearADC)):
+                if hasattr(module, 'get_auxiliary_losses'):
+                    try:
+                        aux_losses = module.get_auxiliary_losses()
+                        if 'total' in aux_losses:
+                            layer_loss = aux_losses['total']
+                            if isinstance(layer_loss, torch.Tensor):
+                                auxiliary_loss = auxiliary_loss + layer_loss.to(loss.device)
+                    except Exception:
+                        pass
+            # Fallback: support older code with just _last_delta_loss attribute
+            elif hasattr(module, '_last_delta_loss') and module._last_delta_loss is not None:
                 try:
-                    delta_reg = delta_reg + module._last_delta_loss
-                except Exception:
-                    pass
-
-        # W-reshape: kurtosis penalty over ADC QAT linear tiles
-        kurtosis_reg = torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
-        if self.kurtosis_lambda > 0.0 and model.training:
-            eps = 1e-6
-            for module in model.modules():
-                try:
-                    # Target QAT ADC linear tiles specifically
-                    if isinstance(module, QATLinearADC):
-                        w = module.weight
-                        if w is None:
-                            continue
-                        w_flat = w.view(-1)
-                        mu = torch.mean(w_flat)
-                        std = torch.std(w_flat) + eps
-                        z = (w_flat - mu) / std
-                        kappa = torch.mean(z ** 4)
-                        kurtosis_reg = kurtosis_reg + kappa
+                    auxiliary_loss = auxiliary_loss + module._last_delta_loss.to(loss.device)
                 except Exception:
                     pass
 
         # Combine all loss components
-        total_loss = loss + delta_reg + (self.kurtosis_lambda * kurtosis_reg)
+        total_loss = loss + auxiliary_loss
 
         # Call ADC monitoring after each batch
         if self.adc_step_monitor:
@@ -192,6 +188,10 @@ class BertADCConverter:
         use_delta_anneal: bool = True,
         delta_loss_weight: float = 0.01,
         delta_anneal_epochs: float = 1.0,
+        # W-reshape (kurtosis) parameters from paper Equation 6 & 7
+        use_kurtosis_loss: bool = True,
+        kurtosis_weight: float = 0.0006,
+        target_kurtosis: float = 1.8,
     ) -> nn.Module:
         """
         Replace all nn.Linear layers in the model with TiledLinearADC, except excluded.
@@ -248,6 +248,9 @@ class BertADCConverter:
                         use_delta_anneal=use_delta_anneal,
                         delta_loss_weight=delta_loss_weight,
                         delta_anneal_epochs=delta_anneal_epochs,
+                        use_kurtosis_loss=use_kurtosis_loss,
+                        kurtosis_weight=kurtosis_weight,
+                        target_kurtosis=target_kurtosis,
                     )
                     # Use the load_weights method instead of manual copying
                     adc_qat_layer.load_weights(child_module)
@@ -879,6 +882,10 @@ def main():
             use_delta_anneal=(not args.fixed_delta),
             delta_loss_weight=(0.0 if args.fixed_delta else 0.01),
             delta_anneal_epochs=1.0,
+            # W-reshape (kurtosis) parameters
+            use_kurtosis_loss=(args.kurtosis_lambda > 0),
+            kurtosis_weight=args.kurtosis_lambda if args.kurtosis_lambda > 0 else 0.0006,
+            target_kurtosis=1.8,
         )
 
         # Load the state dict with strict=False to handle quantizer parameters
@@ -975,6 +982,10 @@ def main():
             use_delta_anneal=(not args.fixed_delta),
             delta_loss_weight=(0.0 if args.fixed_delta else 0.01),
             delta_anneal_epochs=1.0,
+            # W-reshape (kurtosis) parameters
+            use_kurtosis_loss=(args.kurtosis_lambda > 0),
+            kurtosis_weight=args.kurtosis_lambda if args.kurtosis_lambda > 0 else 0.0006,
+            target_kurtosis=1.8,
         )
 
     if do_warm_start:

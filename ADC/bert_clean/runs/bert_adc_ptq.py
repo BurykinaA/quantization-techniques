@@ -594,6 +594,10 @@ def main():
         use_dynamic_delta=False,  # PTQ: use fixed delta after calibration
         use_delta_anneal=False,
         delta_loss_weight=0.0,
+        # PTQ: no kurtosis loss during calibration (not training)
+        use_kurtosis_loss=False,
+        kurtosis_weight=0.0,
+        target_kurtosis=1.8,
     )
     model = model.to(device)
     
@@ -1010,7 +1014,8 @@ def _generate_adc_visualizations(model, sample_input, layer_patterns, title_pref
                 delta = module.adc_quantizer._delta
                 na = module.adc_quantizer.na
                 pa = module.adc_quantizer.pa
-                y_adc_codes = torch.clamp(torch.round(y_int / delta), na, pa)
+                # Use floor to match actual ADC implementation (Paper Equation 2)
+                y_adc_codes = torch.clamp(torch.floor(y_int / delta), na, pa)
                 y_after_adc = y_adc_codes * delta
                 
                 captured_data[layer_name] = {
