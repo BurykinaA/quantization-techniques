@@ -24,18 +24,25 @@ K=16                 # Hardware design parameter (k=16 gave F1=65 vs k=4 gave F1
 ASHIFT=false         # MUST MATCH PTQ checkpoint! (PTQ was created with ashift=false)
 MVM_LIMIT=256        # Tile size limit for MVM units
 
-# Training hyper-parameters (when resuming from PTQ)
-# CRITICAL: Very conservative settings to not destroy calibrated weights!
-NUM_EPOCHS=3         # More epochs for gradual learning
-TRAIN_BATCH_SIZE=8
+# Training hyper-parameters
+# ============================================================================
+# PAPER SETTINGS (for training from scratch or from QAT checkpoint):
+#   NUM_EPOCHS=4, TRAIN_BATCH_SIZE=16, LEARNING_RATE=3e-5, KURTOSIS_LAMBDA=0.0006
+# CONSERVATIVE SETTINGS (for resuming from PTQ - if training destabilizes):
+#   NUM_EPOCHS=3, TRAIN_BATCH_SIZE=8, LEARNING_RATE=1e-6, KURTOSIS_LAMBDA=0.0
+# ============================================================================
+NUM_EPOCHS=4         # Paper: 4 epochs
+TRAIN_BATCH_SIZE=16  # Paper: batch size 16
 EVAL_BATCH_SIZE=32
-LEARNING_RATE=1e-6   # EXTREMELY LOW LR - model is already well-calibrated!
-WARMUP_RATIO=0.1     # Warmup to avoid destabilizing calibrated weights
-WARMUP_STEPS=0       # Let warmup_ratio handle it
-EVAL_STEPS=100       # Eval more frequently to catch issues early
+LEARNING_RATE=3e-5   # Paper: 0.00003 initial LR
+WARMUP_RATIO=0.0     # Paper: linear decay (no warmup mentioned)
+WARMUP_STEPS=0
+EVAL_STEPS=100
 SAVE_STEPS=500
 SAVE_TOTAL_LIMIT=3
-KURTOSIS_LAMBDA=0.0  # DISABLED! Only add after confirming training improves F1
+KURTOSIS_LAMBDA=0.0006  # Paper: W-reshape regularization
+DROPOUT=0.2          # Paper: 0.2 for BERT-base
+LR_SCHEDULER="linear" # Paper: linear decay
 USE_FP16=false       # Start in fp32; turn on later when stable
 FIXED_DELTA=true     # Keep delta fixed (already calibrated in PTQ)
 EVAL_ONLY=false      # Set true to skip training and only run evaluation
@@ -94,6 +101,8 @@ echo "  Eval steps:        $EVAL_STEPS"
 echo "  Save steps:        $SAVE_STEPS"
 echo "  Save limit:        $SAVE_TOTAL_LIMIT"
 echo "  Kurtosis λ:        $KURTOSIS_LAMBDA"
+echo "  Dropout:           $DROPOUT"
+echo "  LR scheduler:      $LR_SCHEDULER"
 echo "  FP16:              $USE_FP16"
 echo "  Fixed delta:       $FIXED_DELTA"
 echo "  Eval only:         $EVAL_ONLY"
@@ -134,6 +143,8 @@ CMD=(
     --save_steps $SAVE_STEPS
     --save_total_limit $SAVE_TOTAL_LIMIT
     --kurtosis_lambda $KURTOSIS_LAMBDA
+    --dropout $DROPOUT
+    --lr_scheduler_type $LR_SCHEDULER
     --seed $SEED
 )
 

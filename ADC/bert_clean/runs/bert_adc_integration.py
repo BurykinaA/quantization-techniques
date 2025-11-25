@@ -807,6 +807,8 @@ def main():
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--eval_only", action="store_true", help="Skip training and run evaluation only with analytical ADC delta")
     parser.add_argument("--kurtosis_lambda", type=float, default=0.0, help="Lambda for W-reshape kurtosis regularization (0 disables)")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate (paper uses 0.2 for BERT-base)")
+    parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="LR scheduler type: linear, cosine, etc.")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -864,6 +866,11 @@ def main():
         # Load the ADC model by first creating a base BERT model, then converting to ADC layers
         # and loading the state dict
         config = AutoConfig.from_pretrained(resume_ckpt)
+        # Apply dropout from args (paper uses 0.2 for BERT-base)
+        if args.dropout != config.hidden_dropout_prob:
+            logger.info(f"Updating dropout: {config.hidden_dropout_prob} -> {args.dropout}")
+            config.hidden_dropout_prob = args.dropout
+            config.attention_probs_dropout_prob = args.dropout
         base_model = BertForQuestionAnswering(config)
         tokenizer = AutoTokenizer.from_pretrained(resume_ckpt, use_fast=True)
         tokenizer.padding_side = "right"
@@ -954,6 +961,17 @@ def main():
         tokenizer = AutoTokenizer.from_pretrained(last_ckpt, use_fast=True)
         tokenizer.padding_side = "right"
         model = load_qa_model_robust(last_ckpt)
+        
+        # Apply dropout from args (paper uses 0.2 for BERT-base)
+        if hasattr(model.config, 'hidden_dropout_prob') and args.dropout != model.config.hidden_dropout_prob:
+            logger.info(f"Updating dropout: {model.config.hidden_dropout_prob} -> {args.dropout}")
+            model.config.hidden_dropout_prob = args.dropout
+            model.config.attention_probs_dropout_prob = args.dropout
+            # Re-apply to model modules
+            for module in model.modules():
+                if hasattr(module, 'dropout') and isinstance(module.dropout, torch.nn.Dropout):
+                    module.dropout.p = args.dropout
+        
         do_convert = True
         do_warm_start = True
 
@@ -1077,6 +1095,7 @@ def main():
             num_train_epochs=args.num_train_epochs,
             warmup_ratio=_warmup_ratio,
             warmup_steps=_warmup_steps,
+            lr_scheduler_type=args.lr_scheduler_type,  # Paper uses linear decay
             logging_steps=100,  # Less frequent logging for speed
             save_strategy="steps",
             save_steps=args.save_steps,
@@ -1100,6 +1119,7 @@ def main():
             weight_decay=args.weight_decay,
             num_train_epochs=args.num_train_epochs,
             warmup_steps=_warmup_steps,
+            lr_scheduler_type=args.lr_scheduler_type,  # Paper uses linear decay
             logging_steps=100,  # Less frequent logging for speed
             save_steps=args.save_steps,
             save_total_limit=args.save_total_limit,
