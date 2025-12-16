@@ -608,7 +608,9 @@ class QATLinearADC(nn.Linear):
         # Integer-path computation:
         # 1) Build activation codes (per-tensor quantizer)
         act_q = self.activation_quantizer
-        s_x = act_q.scale  # shape: ()
+        # Clip by norm: if |s| < min_scale, scale up to min_scale (preserving direction)
+        min_scale = 1e-6
+        s_x = act_q.scale * torch.clamp(min_scale / (act_q.scale.abs() + 1e-8), min=1.0)
         if act_q.symmetric:
             # Signed path (no A-shift): symmetric quantization
             # Use round_ste for proper gradient flow through scales
@@ -636,7 +638,8 @@ class QATLinearADC(nn.Linear):
 
         # 2) Build weight codes (per-channel symmetric, channel_dim=0)
         w_q = self.weight_quantizer
-        s_w_vec = w_q.scale  # shape: (out_features,)
+        # Clip by norm: if |s| < min_scale, scale up to min_scale (preserving direction)
+        s_w_vec = w_q.scale * torch.clamp(min_scale / (w_q.scale.abs() + 1e-8), min=1.0)
         # Broadcast scales to weight shape for division
         s_w_b = s_w_vec.view(-1, 1)
         # Use round_ste for proper gradient flow through scales

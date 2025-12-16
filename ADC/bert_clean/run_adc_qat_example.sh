@@ -31,8 +31,10 @@ MVM_LIMIT=256        # Tile size limit for MVM units
 # CONSERVATIVE SETTINGS (for resuming from PTQ - if training destabilizes):
 #   NUM_EPOCHS=3, TRAIN_BATCH_SIZE=8, LEARNING_RATE=1e-6, KURTOSIS_LAMBDA=0.0
 # ============================================================================
+# NOTE: With round_ste fix for proper gradient flow, the autograd graph is larger.
+# Reduced batch size and enabled FP16 to fit in GPU memory.
 NUM_EPOCHS=4         # Paper: 4 epochs
-TRAIN_BATCH_SIZE=16  # Paper: batch size 16
+TRAIN_BATCH_SIZE=8   # Reduced from 16 due to larger gradient graph with STE fix
 EVAL_BATCH_SIZE=32
 LEARNING_RATE=1e-6   # Paper: 0.00003 initial LR
 WARMUP_RATIO=0.0     # Paper: linear decay (no warmup mentioned)
@@ -43,7 +45,7 @@ SAVE_TOTAL_LIMIT=3
 KURTOSIS_LAMBDA=0.0006  # Paper: W-reshape regularization
 DROPOUT=0.2          # Paper: 0.2 for BERT-base
 LR_SCHEDULER="linear" # Paper: linear decay
-USE_FP16=false       # Start in fp32; turn on later when stable
+USE_FP16=true        # Enable FP16 to reduce memory with larger gradient graph
 FIXED_DELTA=true     # Keep delta fixed (already calibrated in PTQ)
 EVAL_ONLY=false      # Set true to skip training and only run evaluation
 
