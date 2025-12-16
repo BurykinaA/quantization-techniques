@@ -816,6 +816,30 @@ def debug_scale_values(model):
         logger.warning(f"Problematic scales found:")
         for ps in problem_scales[:10]:  # Show first 10
             logger.warning(f"  {ps}")
+    
+    # Compare expected vs actual scales to detect miscalibration
+    scale_comparisons = []
+    for name, module in model.named_modules():
+        # Check QATLinearADC tiles (inside TiledLinearADC)
+        if isinstance(module, QATLinearADC):
+            # For weight quantizer
+            if hasattr(module, 'weight') and hasattr(module, 'weight_quantizer'):
+                w = module.weight.data
+                actual_scale = module.weight_quantizer.scale.data
+                qmax = module.weight_quantizer.qmax
+                expected_scale = w.abs().max() / qmax  # per-tensor expected
+                ratio = (actual_scale.mean() / expected_scale).item() if expected_scale > 0 else 0
+                if ratio < 0.1 or ratio > 10:  # Flag if off by 10x
+                    scale_comparisons.append(
+                        f"{name}.weight: expected={expected_scale:.2e}, actual={actual_scale.mean():.2e}, ratio={ratio:.2f}"
+                    )
+    
+    if scale_comparisons:
+        logger.warning(f"Scale mismatches (ratio < 0.1 or > 10) - {len(scale_comparisons)} found:")
+        for sc in scale_comparisons[:20]:  # Show first 20
+            logger.warning(f"  {sc}")
+    else:
+        logger.info("All scales are within expected range (0.1x to 10x of expected)")
 
 
 def main():
