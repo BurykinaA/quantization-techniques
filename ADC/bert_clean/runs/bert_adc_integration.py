@@ -778,6 +778,46 @@ def add_gradient_hooks(model):
     logger.info(f"Monitoring {scale_param_count} quantizer scale parameters for STE gradient verification")
 
 
+def debug_scale_values(model):
+    """Log statistics about quantizer scale values to diagnose NaN issues."""
+    scale_stats = {
+        "total": 0,
+        "nan": 0,
+        "inf": 0, 
+        "zero": 0,
+        "tiny": 0,  # < 1e-6
+        "negative": 0,
+    }
+    problem_scales = []
+    
+    for name, module in model.named_modules():
+        if hasattr(module, 'scale') and isinstance(module.scale, nn.Parameter):
+            scale = module.scale.data
+            scale_stats["total"] += scale.numel()
+            
+            nan_count = torch.isnan(scale).sum().item()
+            inf_count = torch.isinf(scale).sum().item()
+            zero_count = (scale == 0).sum().item()
+            tiny_count = ((scale.abs() > 0) & (scale.abs() < 1e-6)).sum().item()
+            neg_count = (scale < 0).sum().item()
+            
+            scale_stats["nan"] += nan_count
+            scale_stats["inf"] += inf_count
+            scale_stats["zero"] += zero_count
+            scale_stats["tiny"] += tiny_count
+            scale_stats["negative"] += neg_count
+            
+            if nan_count > 0 or inf_count > 0 or zero_count > 0:
+                problem_scales.append(f"{name}: nan={nan_count}, inf={inf_count}, zero={zero_count}, "
+                                     f"min={scale.min().item():.2e}, max={scale.max().item():.2e}")
+    
+    logger.info(f"Scale statistics: {scale_stats}")
+    if problem_scales:
+        logger.warning(f"Problematic scales found:")
+        for ps in problem_scales[:10]:  # Show first 10
+            logger.warning(f"  {ps}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     # Where to load FP model checkpoint from (dir with checkpoint-* or the checkpoint dir itself)
@@ -956,6 +996,9 @@ def main():
                             tile.weight_quantizer._zp_initialized = True
         
         logger.info("Marked all quantizers as initialized")
+        
+        # Debug: Log scale statistics to identify problematic values
+        debug_scale_values(model)
         
         # Set quantizers to 'qat' mode for gradient learning during training
         logger.info("Setting quantizers to 'qat' mode for gradient learning...")

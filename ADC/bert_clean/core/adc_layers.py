@@ -210,10 +210,6 @@ class ADCQuantizer(nn.Module):
         Returns:
             Tuple of (quantized_output, delta_loss)
         """
-        if torch.isnan(y).any() or torch.isinf(y).any():
-            print(f"Warning: NaN/inf in ADC input, sanitizing. stats: max={y.nan_to_num().max().item()}, min={y.nan_to_num().min().item()}")
-            y = torch.nan_to_num(y, nan=0.0, posinf=1e3, neginf=-1e3)
-
         scale_for_quant = self._delta
         delta_loss = torch.tensor(0.0, device=y.device, dtype=y.dtype)
 
@@ -246,11 +242,6 @@ class ADCQuantizer(nn.Module):
             y, scale_for_quant, self._zero_point, self.na, self.pa,
             True, False, 0, scale_for_quant, self._zero_point
         )
-
-        # Check output for NaN/inf and sanitize instead of raising
-        if torch.isnan(result).any() or torch.isinf(result).any():
-            print(f"Warning: NaN/inf in ADC output, sanitizing...")
-            result = torch.nan_to_num(result, nan=0.0, posinf=float(self.pa), neginf=float(self.na))
 
         return result, delta_loss
 
@@ -438,11 +429,6 @@ class LearnableQuantizer(nn.Module):
                 #self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
     
     def forward(self, x: torch.Tensor, update_stats: bool = None) -> torch.Tensor:
-        # Check input for NaN/inf
-        if torch.isnan(x).any() or torch.isinf(x).any():
-            print(f"Warning: NaN/inf in quantizer input, range=[{x.min():.3f}, {x.max():.3f}]")
-            x = torch.nan_to_num(x, nan=0.0, posinf=1.0, neginf=-1.0)
-        
         # Initialize parameters on first forward pass
         self._initialize_parameters(x)
         
@@ -492,11 +478,6 @@ class LearnableQuantizer(nn.Module):
             self.symmetric, self.per_channel, self.channel_dim,
             self.scale, self.zero_point  # Original parameters for gradient computation
         )
-        
-        # Check output for issues
-        if torch.isnan(result).any() or torch.isinf(result).any():
-            print("Warning: NaN/inf in quantizer output")
-            result = torch.nan_to_num(result, nan=0.0, posinf=1.0, neginf=-1.0)
         
         return result
 
