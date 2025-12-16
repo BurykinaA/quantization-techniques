@@ -11,13 +11,13 @@ FP_CHECKPOINT=""  # Leave empty when resuming from PTQ
 
 # ADC PTQ checkpoint to resume from (already has calibrated ADC layers)
 # This should point to the output of run_adc_ptq_example.sh
-ADC_RESUME_DIR_DEFAULT="./ADC/bert_clean/checkpoints/outputs_adc_ptq_k16"
+ADC_RESUME_DIR_DEFAULT="./ADC/bert_clean/checkpoints/outputs_adc_ptq_k16_fix_20251125"
 
 # Where to store QAT outputs (checkpoints, logs, metrics)
 OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_qat_k16_conservative"
 
 # ADC hardware configuration - MUST MATCH PTQ CHECKPOINT!
-BX=8                 # Activation bits
+BX=8                # Activation bits
 BW=8                 # Weight bits
 BA=8                 # ADC bits
 K=16                 # Hardware design parameter (k=16 gave F1=65 vs k=4 gave F1=17)
@@ -34,7 +34,7 @@ MVM_LIMIT=256        # Tile size limit for MVM units
 NUM_EPOCHS=4         # Paper: 4 epochs
 TRAIN_BATCH_SIZE=16  # Paper: batch size 16
 EVAL_BATCH_SIZE=32
-LEARNING_RATE=3e-5   # Paper: 0.00003 initial LR
+LEARNING_RATE=1e-6   # Paper: 0.00003 initial LR
 WARMUP_RATIO=0.0     # Paper: linear decay (no warmup mentioned)
 WARMUP_STEPS=0
 EVAL_STEPS=100
