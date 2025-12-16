@@ -611,14 +611,16 @@ class QATLinearADC(nn.Linear):
         s_x = act_q.scale  # shape: ()
         if act_q.symmetric:
             # Signed path (no A-shift): symmetric quantization
-            code_x = torch.round(x / s_x)
+            # Use round_ste for proper gradient flow through scales
+            code_x = round_ste(x / s_x)
             qmin_x, qmax_x = act_q.qmin, act_q.qmax
             code_x = torch.clamp(code_x, qmin_x, qmax_x)
         else:
             # Unsigned path: quantize to [0, 2^bx - 1] using zero_point offset
             zp_x = act_q.zero_point
             # Quantization: map input range to [0, 2^bx-1] using learned offset
-            code_x_temp = torch.round(x / s_x + zp_x)
+            # Use round_ste for proper gradient flow through scales
+            code_x_temp = round_ste(x / s_x + zp_x)
             code_x_temp = torch.clamp(code_x_temp, 0, act_q.qmax)
             
             if self.ashift:
@@ -637,7 +639,8 @@ class QATLinearADC(nn.Linear):
         s_w_vec = w_q.scale  # shape: (out_features,)
         # Broadcast scales to weight shape for division
         s_w_b = s_w_vec.view(-1, 1)
-        code_w = torch.round(self.weight / s_w_b)
+        # Use round_ste for proper gradient flow through scales
+        code_w = round_ste(self.weight / s_w_b)
         qmin_w, qmax_w = w_q.qmin, w_q.qmax
         code_w = torch.clamp(code_w, qmin_w, qmax_w)
 

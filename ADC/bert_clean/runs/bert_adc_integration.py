@@ -730,7 +730,12 @@ class MetricsComputer:
 
 
 def add_gradient_hooks(model):
-    """Add hooks to monitor gradients and detect infinite gradients"""
+    """Add hooks to monitor gradients and detect infinite gradients.
+    
+    Also monitors quantizer scale parameters to verify STE gradient flow is working.
+    """
+    # Track scale gradient statistics for verification
+    scale_grad_stats = {"count": 0, "nonzero_count": 0, "total_norm": 0.0}
     
     def grad_hook(name):
         def hook(grad):
@@ -739,12 +744,19 @@ def add_gradient_hooks(model):
                 has_nan = torch.isnan(grad).any()
                 has_inf = torch.isinf(grad).any()
                 
+                # Track quantizer scale gradients specifically (verify STE fix)
+                if "quantizer.scale" in name:
+                    scale_grad_stats["count"] += 1
+                    if grad_norm > 1e-10:
+                        scale_grad_stats["nonzero_count"] += 1
+                    scale_grad_stats["total_norm"] += grad_norm
+                    
+                    # Log first few scale gradients to verify they're non-zero
+                    if scale_grad_stats["count"] <= 5:
+                        logger.info(f"Scale gradient [{name}]: norm={grad_norm:.6e}")
+                
                 # Log at a slightly higher threshold to reduce noise; still clip
                 if has_nan or has_inf or grad_norm > 500:
-                    # print(f"GRADIENT ISSUE in {name}: norm={grad_norm:.6f}, nan={has_nan}, inf={has_inf}")
-                    # print(f"  Grad shape: {grad.shape}, min: {grad.min().item():.6f}, max: {grad.max().item():.6f}")
-                    # pass  # Comment out gradient logging to reduce noise
-                    
                     # More aggressive gradient clipping
                     if has_nan or has_inf:
                         grad = torch.nan_to_num(grad, nan=0.0, posinf=10.0, neginf=-10.0)
@@ -755,11 +767,15 @@ def add_gradient_hooks(model):
         return hook
     
     # Add hooks to all parameters
+    scale_param_count = 0
     for name, param in model.named_parameters():
         if param.requires_grad:
             param.register_hook(grad_hook(name))
+            if "quantizer.scale" in name:
+                scale_param_count += 1
     
-    print("Added gradient monitoring hooks to all parameters")
+    logger.info(f"Added gradient monitoring hooks to all parameters")
+    logger.info(f"Monitoring {scale_param_count} quantizer scale parameters for STE gradient verification")
 
 
 def main():
