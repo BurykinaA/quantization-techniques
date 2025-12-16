@@ -593,18 +593,6 @@ class QATLinearADC(nn.Linear):
         min_scale = 1e-6
         s_x = act_q.scale * torch.clamp(min_scale / (act_q.scale.abs() + 1e-8), min=1.0)
         
-        # DEBUG: Check for gradient explosion potential (only first forward pass)
-        if not hasattr(self, '_debug_logged') or not self._debug_logged:
-            self._debug_logged = True
-            x_abs_max = x.abs().max().item()
-            s_x_min = s_x.abs().min().item()
-            # Gradient w.r.t. scale is approx -x/s^2, check if this would explode
-            grad_potential = x_abs_max / (s_x_min ** 2) if s_x_min > 0 else float('inf')
-            print(f"[DEBUG {self._get_name()}] x: max={x_abs_max:.2e}, s_x: min={s_x_min:.2e}, "
-                  f"grad_potential (x/s²): {grad_potential:.2e}")
-            if grad_potential > 1e6:
-                print(f"  ⚠️ WARNING: Gradient explosion likely! x/s² = {grad_potential:.2e}")
-        
         if act_q.symmetric:
             # Signed path (no A-shift): symmetric quantization
             # Use round_ste for proper gradient flow through scales
@@ -636,17 +624,6 @@ class QATLinearADC(nn.Linear):
         s_w_vec = w_q.scale * torch.clamp(min_scale / (w_q.scale.abs() + 1e-8), min=1.0)
         # Broadcast scales to weight shape for division
         s_w_b = s_w_vec.view(-1, 1)
-        
-        # DEBUG: Check weight gradient explosion potential
-        if hasattr(self, '_debug_logged') and self._debug_logged and not hasattr(self, '_debug_w_logged'):
-            self._debug_w_logged = True
-            w_abs_max = self.weight.abs().max().item()
-            s_w_min = s_w_vec.abs().min().item()
-            grad_potential_w = w_abs_max / (s_w_min ** 2) if s_w_min > 0 else float('inf')
-            print(f"[DEBUG {self._get_name()}] w: max={w_abs_max:.2e}, s_w: min={s_w_min:.2e}, "
-                  f"grad_potential (w/s²): {grad_potential_w:.2e}")
-            if grad_potential_w > 1e6:
-                print(f"  ⚠️ WARNING: Weight gradient explosion likely! w/s² = {grad_potential_w:.2e}")
         
         # Use round_ste for proper gradient flow through scales
         code_w = round_ste(self.weight / s_w_b)
