@@ -9,30 +9,51 @@ def floor_ste(x: torch.Tensor) -> torch.Tensor:
     return x + (torch.floor(x) - x).detach()
 
 
-class RoundSTEFunction(torch.autograd.Function):
-    """Round with Straight-Through Estimator and gradient clipping by norm."""
+class SafeDivideFunction(torch.autograd.Function):
+    """Division with gradient clipping by norm for the scale (denominator).
+    
+    Computes x / scale in forward, but clips the gradient w.r.t. scale
+    in backward to prevent explosion while preserving direction.
+    """
+    MAX_GRAD_NORM = 1000.0  # Maximum gradient norm for scale
     
     @staticmethod
-    def forward(ctx, x):
-        return torch.round(x)
+    def forward(ctx, x, scale):
+        ctx.save_for_backward(x, scale)
+        return x / scale
     
     @staticmethod
     def backward(ctx, grad_output):
-        # Clip gradient by norm to prevent explosion while preserving direction
-        max_grad_norm = 1.0  # Maximum gradient norm
-        grad_norm = grad_output.norm()
-        if grad_norm > max_grad_norm:
-            grad_output = grad_output * (max_grad_norm / grad_norm)
-        return grad_output
+        x, scale = ctx.saved_tensors
+        
+        # Gradient for x: grad_output / scale (standard)
+        grad_x = grad_output / scale
+        
+        # Gradient for scale: -grad_output * x / scale²
+        # This is what explodes when scale is small!
+        grad_scale = -grad_output * x / (scale ** 2)
+        
+        # Clip by norm to prevent explosion while preserving direction
+        grad_norm = grad_scale.norm()
+        if grad_norm > SafeDivideFunction.MAX_GRAD_NORM:
+            grad_scale = grad_scale * (SafeDivideFunction.MAX_GRAD_NORM / grad_norm)
+        
+        return grad_x, grad_scale
+
+
+def safe_divide(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    """Divide x by scale with gradient clipping for scale.
+    
+    Forward: x / scale (unchanged)
+    Backward: Clips gradient w.r.t. scale by norm to prevent explosion
+    while preserving gradient direction.
+    """
+    return SafeDivideFunction.apply(x, scale)
 
 
 def round_ste(x: torch.Tensor) -> torch.Tensor:
-    """Round with Straight-Through Estimator for gradient flow.
-    
-    Uses gradient clipping by norm to prevent gradient explosion
-    while preserving gradient direction.
-    """
-    return RoundSTEFunction.apply(x)
+    """Round with Straight-Through Estimator for gradient flow."""
+    return x + (torch.round(x) - x).detach()
 
 
 def compute_kurtosis_loss(weight: torch.Tensor, target_kurtosis: float = 1.8) -> torch.Tensor:
@@ -610,28 +631,23 @@ class QATLinearADC(nn.Linear):
         # Integer-path computation:
         # 1) Build activation codes (per-tensor quantizer)
         act_q = self.activation_quantizer
-        # Clip by norm: if |s| < min_scale, scale up to min_scale (preserving direction)
-        # min_scale=0.01 caps gradient magnitude at ~10,000 (instead of millions with 1e-6)
-        min_scale = 0.001
-        s_x = act_q.scale * torch.clamp(min_scale / (act_q.scale.abs() + 1e-8), min=1.0)
+        s_x = act_q.scale  # Use original scale (gradient clipping happens in safe_divide)
         
         if act_q.symmetric:
             # Signed path (no A-shift): symmetric quantization
-            # Use round_ste for proper gradient flow through scales
-            code_x = round_ste(x / s_x)
+            # Use safe_divide for gradient clipping, round_ste for STE
+            code_x = round_ste(safe_divide(x, s_x))
             qmin_x, qmax_x = act_q.qmin, act_q.qmax
             code_x = torch.clamp(code_x, qmin_x, qmax_x)
         else:
             # Unsigned path: quantize to [0, 2^bx - 1] using zero_point offset
             zp_x = act_q.zero_point
-            # Quantization: map input range to [0, 2^bx-1] using learned offset
-            # Use round_ste for proper gradient flow through scales
-            code_x_temp = round_ste(x / s_x + zp_x)
+            # Use safe_divide for gradient clipping, round_ste for STE
+            code_x_temp = round_ste(safe_divide(x, s_x) + zp_x)
             code_x_temp = torch.clamp(code_x_temp, 0, act_q.qmax)
             
             if self.ashift:
                 # A-shift: subtract fixed C instead of learned zp_x
-                # This centers around a fixed point to maximize 2nd moment
                 code_x = code_x_temp - self.C
             else:
                 # Standard asymmetric: subtract learned zero_point to center
@@ -642,13 +658,12 @@ class QATLinearADC(nn.Linear):
 
         # 2) Build weight codes (per-channel symmetric, channel_dim=0)
         w_q = self.weight_quantizer
-        # Clip by norm: if |s| < min_scale, scale up to min_scale (preserving direction)
-        s_w_vec = w_q.scale * torch.clamp(min_scale / (w_q.scale.abs() + 1e-8), min=1.0)
+        s_w_vec = w_q.scale  # Use original scale (gradient clipping happens in safe_divide)
         # Broadcast scales to weight shape for division
         s_w_b = s_w_vec.view(-1, 1)
         
-        # Use round_ste for proper gradient flow through scales
-        code_w = round_ste(self.weight / s_w_b)
+        # Use safe_divide for gradient clipping, round_ste for STE
+        code_w = round_ste(safe_divide(self.weight, s_w_b))
         qmin_w, qmax_w = w_q.qmin, w_q.qmax
         code_w = torch.clamp(code_w, qmin_w, qmax_w)
 
