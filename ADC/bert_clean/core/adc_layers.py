@@ -611,7 +611,8 @@ class QATLinearADC(nn.Linear):
         # 1) Build activation codes (per-tensor quantizer)
         act_q = self.activation_quantizer
         # Clip by norm: if |s| < min_scale, scale up to min_scale (preserving direction)
-        min_scale = 1e-6
+        # min_scale=0.01 caps gradient magnitude at ~10,000 (instead of millions with 1e-6)
+        min_scale = 0.001
         s_x = act_q.scale * torch.clamp(min_scale / (act_q.scale.abs() + 1e-8), min=1.0)
         
         if act_q.symmetric:
