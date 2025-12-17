@@ -9,9 +9,30 @@ def floor_ste(x: torch.Tensor) -> torch.Tensor:
     return x + (torch.floor(x) - x).detach()
 
 
+class RoundSTEFunction(torch.autograd.Function):
+    """Round with Straight-Through Estimator and gradient clipping by norm."""
+    
+    @staticmethod
+    def forward(ctx, x):
+        return torch.round(x)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        # Clip gradient by norm to prevent explosion while preserving direction
+        max_grad_norm = 1.0  # Maximum gradient norm
+        grad_norm = grad_output.norm()
+        if grad_norm > max_grad_norm:
+            grad_output = grad_output * (max_grad_norm / grad_norm)
+        return grad_output
+
+
 def round_ste(x: torch.Tensor) -> torch.Tensor:
-    """Round with Straight-Through Estimator for gradient flow"""
-    return x + (torch.round(x) - x).detach()
+    """Round with Straight-Through Estimator for gradient flow.
+    
+    Uses gradient clipping by norm to prevent gradient explosion
+    while preserving gradient direction.
+    """
+    return RoundSTEFunction.apply(x)
 
 
 def compute_kurtosis_loss(weight: torch.Tensor, target_kurtosis: float = 1.8) -> torch.Tensor:
