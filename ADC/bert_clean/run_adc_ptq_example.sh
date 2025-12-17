@@ -3,7 +3,7 @@
 
 # Configuration
 QAT_CHECKPOINT="./ADC/bert_clean/checkpoints/outputs_qat/squad_qat_20251028_001954"  # Full path to QAT checkpoint
-OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_ptq_k16"
+OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_ptq_k16_mse"
 
 # ADC Hardware Configuration
 BX=8              # Activation bits
@@ -16,8 +16,8 @@ ASHIFT=false       # A-shift quantization strategy:
 MVM_LIMIT=256     # Memory vector multiplication limit for tiling
 
 # Calibration Settings
-CALIBRATION_METHOD="percentile"  # Options: minmax, percentile, mse
-NUM_CALIBRATION_BATCHES=100     # Number of batches for calibration
+CALIBRATION_METHOD="mse"  # Options: minmax, percentile, mse
+NUM_CALIBRATION_BATCHES=200     # Number of batches for calibration
 CALIBRATION_BATCH_SIZE=8        # Batch size during calibration
 
 # Evaluation Settings
@@ -27,7 +27,7 @@ DOC_STRIDE=128
 
 # WandB Settings
 WANDB_PROJECT="bert-adc-ptq"
-WANDB_RUN_NAME="ptq_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_ASHIFT${ASHIFT}"
+WANDB_RUN_NAME="ptq_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_ASHIFT${ASHIFT}_mse"
 
 # Visualization Settings
 DISABLE_VISUALIZATIONS=false  # Set to true to disable ADC visualizations
