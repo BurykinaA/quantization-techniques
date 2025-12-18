@@ -20,13 +20,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from datasets import load_dataset
-from transformers import AutoTokenizer, set_seed
+from transformers import AutoTokenizer, AutoConfig, BertForQuestionAnswering, set_seed
 
 from ADC.bert_clean.core.adc_layers import TiledLinearADC, QATLinearADC
 from ADC.bert_clean.runs.bert_adc_integration import (
-    load_qa_model_robust,
+    BertADCConverter,
     find_last_checkpoint_dir,
     prepare_validation_features,
+    load_state_dict_flexible,
 )
 
 try:
@@ -272,6 +273,14 @@ def main():
                        help="Layer patterns to visualize")
     parser.add_argument("--seed", type=int, default=42)
     
+    # ADC configuration (must match training)
+    parser.add_argument("--bx", type=int, default=8, help="Activation bits")
+    parser.add_argument("--bw", type=int, default=8, help="Weight bits")
+    parser.add_argument("--ba", type=int, default=8, help="ADC bits")
+    parser.add_argument("--k", type=int, default=16, help="Hardware parameter")
+    parser.add_argument("--mvm_limit", type=int, default=256, help="MVM limit for tiling")
+    parser.add_argument("--ashift", action="store_true", help="Enable A-shift")
+    
     args = parser.parse_args()
     set_seed(args.seed)
     
@@ -279,15 +288,60 @@ def main():
     checkpoint_dir = find_last_checkpoint_dir(args.checkpoint_dir)
     logger.info(f"Loading checkpoint from: {checkpoint_dir}")
     
-    # Load model and tokenizer
+    # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir, use_fast=True)
-    model = load_qa_model_robust(checkpoint_dir)
+    tokenizer.padding_side = "right"
+    
+    # Create base BERT model
+    logger.info("Creating base BERT model...")
+    config = AutoConfig.from_pretrained(checkpoint_dir)
+    base_model = BertForQuestionAnswering(config)
+    
+    # Convert to ADC layers
+    logger.info(f"Converting to ADC layers (bx={args.bx}, bw={args.bw}, ba={args.ba}, k={args.k})...")
+    model = BertADCConverter.replace_linear_with_adc_qat(
+        base_model,
+        bx=args.bx,
+        bw=args.bw,
+        ba=args.ba,
+        k=args.k,
+        ashift=args.ashift,
+        exclude_patterns=["embeddings", "pooler", "qa_outputs"],
+        mvm_limit=args.mvm_limit,
+        use_dynamic_delta=False,
+        use_delta_anneal=False,
+        delta_loss_weight=0.0,
+        use_kurtosis_loss=False,
+        kurtosis_weight=0.0,
+        target_kurtosis=1.8,
+    )
+    
+    # Load checkpoint weights
+    logger.info("Loading checkpoint weights...")
+    bin_path = os.path.join(checkpoint_dir, 'pytorch_model.bin')
+    safetensors_path = os.path.join(checkpoint_dir, 'model.safetensors')
+    
+    if os.path.exists(safetensors_path):
+        from safetensors.torch import load_file
+        checkpoint = load_file(safetensors_path)
+        logger.info(f"Loaded from safetensors: {safetensors_path}")
+    elif os.path.exists(bin_path):
+        checkpoint = torch.load(bin_path, map_location='cpu')
+        logger.info(f"Loaded from pytorch_model.bin: {bin_path}")
+    else:
+        raise FileNotFoundError(f"No checkpoint found in {checkpoint_dir}")
+    
+    # Load state dict flexibly (handles shape mismatches)
+    load_state_dict_flexible(model, checkpoint)
+    logger.info("Checkpoint weights loaded successfully")
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     model.eval()
     
-    logger.info(f"Model loaded on {device}")
+    # Count ADC layers
+    adc_count = sum(1 for _, m in model.named_modules() if isinstance(m, (QATLinearADC, TiledLinearADC)))
+    logger.info(f"Model loaded on {device} with {adc_count} ADC layers")
     
     # Prepare sample input
     logger.info("Loading sample data...")
@@ -349,4 +403,5 @@ if __name__ == "__main__":
 #     --checkpoint_dir ./ADC/bert_clean/checkpoints/outputs_adc_qat_k16_conservative/checkpoint-2000 \
 #     --wandb_run_id hvuslkoh \
 #     --wandb_project bert-adc-qat \
-#     --output_dir ./viz_qat
+#     --output_dir ./viz_qat \
+#     --bx 8 --bw 8 --ba 8 --k 16 --mvm_limit 256
