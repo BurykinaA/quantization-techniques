@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 
 # Import with FULL paths to avoid class identity issues
-from ADC.bert_clean.core.adc_layers import TiledLinearADC, QATLinearADC, ADCQuantizer
+from ADC.bert_clean.core.adc_layers import TiledLinearADC, QATLinearADC
 from ADC.bert_clean.runs.bert_adc_integration import (
     BertADCConverter,
     load_qa_model_robust,
@@ -591,9 +591,6 @@ def main():
         ashift=args.ashift,
         exclude_patterns=["embeddings", "pooler", "qa_outputs"],
         mvm_limit=args.mvm_limit,
-        use_dynamic_delta=False,  # PTQ: use fixed delta after calibration
-        use_delta_anneal=False,
-        delta_loss_weight=0.0,
         # PTQ: no kurtosis loss during calibration (not training)
         use_kurtosis_loss=False,
         kurtosis_weight=0.0,
@@ -1011,9 +1008,9 @@ def _generate_adc_visualizations(model, sample_input, layer_patterns, title_pref
                 y_int = F.linear(code_x, code_w, bias=None)
                 
                 # ADC quantization
-                delta = module.adc_quantizer._delta
-                na = module.adc_quantizer.na
-                pa = module.adc_quantizer.pa
+                delta = module.delta
+                na = module.na
+                pa = module.pa
                 # Use floor to match actual ADC implementation (Paper Equation 2)
                 y_adc_codes = torch.clamp(torch.floor(y_int / delta), na, pa)
                 y_after_adc = y_adc_codes * delta
@@ -1028,7 +1025,7 @@ def _generate_adc_visualizations(model, sample_input, layer_patterns, title_pref
                     'y_adc_codes': y_adc_codes.detach().cpu().numpy(),
                     's_x': s_x.detach().cpu().item(),
                     's_w': s_w_vec.detach().cpu().numpy(),
-                    'delta': delta.detach().cpu().item(),
+                    'delta': delta,
                     'na': na,
                     'pa': pa,
                 }

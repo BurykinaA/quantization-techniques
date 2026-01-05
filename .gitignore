@@ -6,3 +6,4 @@ wandb
 *pth
 !ADC/bert_clean/runs
 ADC/bert_clean/checkpoints
+ADC/bert_clean_old/checkpoints

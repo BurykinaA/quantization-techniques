@@ -2,14 +2,14 @@
 # Example script to run ADC Post-Training Quantization (PTQ) with WandB logging and visualizations
 
 # Configuration
-QAT_CHECKPOINT="./ADC/bert_clean_old/checkpoints/outputs_qat/squad_qat_20251028_001954"  # Full path to QAT checkpoint
-OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_ptq_k16_mse"
+QAT_CHECKPOINT="./ADC/bert_clean/checkpoints/outputs_qat/squad_qat_20251028_001954"  # Full path to QAT checkpoint
+OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_ptq_k4_mse"
 
 # ADC Hardware Configuration
 BX=8              # Activation bits
 BW=8              # Weight bits
 BA=8              # ADC bits
-K=16              # Hardware design parameter (k=16 works best for BERT)
+K=4              # Hardware design parameter (k=16 works best for BERT)
 ASHIFT=false       # A-shift quantization strategy:
                   #   false = symmetric/signed quantization (standard)
                   #   true  = asymmetric/unsigned + A-shift (optimal for GeLU outputs)

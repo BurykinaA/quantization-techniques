@@ -27,17 +27,14 @@ from transformers import (
     TrainerControl,
 )
 
-from ADC.bert_clean.core.adc_layers import QATLinearADC, TiledLinearADC, LearnableQuantizer, ADCQuantizer  # noqa: F401
+from ADC.bert_clean.core.adc_layers import QATLinearADC, TiledLinearADC, LearnableQuantizer  # noqa: F401
 
 from transformers import TrainerCallback, TrainingArguments, TrainerState, TrainerControl
 
-# Import ADC monitoring
-try:
-    from adc_monitoring_integration import create_adc_training_monitor, add_adc_monitoring_to_model
-    ADC_MONITORING_AVAILABLE = True
-except ImportError:
-    print("ADC monitoring not available")
-    ADC_MONITORING_AVAILABLE = False
+
+from adc_monitoring_integration import create_adc_training_monitor, add_adc_monitoring_to_model
+ADC_MONITORING_AVAILABLE = True
+
 
 # WandB import (same as PTQ script)
 try:
@@ -55,14 +52,11 @@ logger = logging.getLogger(__name__)
 class ADCLossTrainer(Trainer):
     """Custom trainer that handles ADC auxiliary losses (delta + kurtosis) from get_auxiliary_losses()"""
 
-    def __init__(self, *args, adc_step_monitor=None, kurtosis_lambda: float = 0.0, **kwargs):
+    def __init__(self, *args, adc_step_monitor=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.adc_step_monitor = adc_step_monitor
-        # Note: kurtosis_lambda is kept for backward compatibility but the actual kurtosis weight
-        # is now configured per-layer via kurtosis_weight parameter in TiledLinearADC/QATLinearADC
-        self.kurtosis_lambda = float(kurtosis_lambda)
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
         outputs = model(**inputs)
 
         # Extract base loss from model outputs
@@ -96,12 +90,6 @@ class ADCLossTrainer(Trainer):
                                 auxiliary_loss = auxiliary_loss + layer_loss.to(loss.device)
                     except Exception:
                         pass
-            # Fallback: support older code with just _last_delta_loss attribute
-            elif hasattr(module, '_last_delta_loss') and module._last_delta_loss is not None:
-                try:
-                    auxiliary_loss = auxiliary_loss + module._last_delta_loss.to(loss.device)
-                except Exception:
-                    pass
 
         # Combine all loss components
         total_loss = loss + auxiliary_loss
@@ -114,26 +102,6 @@ class ADCLossTrainer(Trainer):
                 print(f"ADC monitoring error: {e}")
 
         return (total_loss, outputs) if return_outputs else total_loss
-
-
-class EpochCallback(TrainerCallback):
-    """Callback to set current epoch on ADC quantizers for delta annealing"""
-
-    def on_epoch_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        """Set the current epoch on all ADC quantizers in the model"""
-        model = kwargs.get('model')
-        if model is not None:
-            current_epoch = state.epoch or 0.0
-            self._set_epoch_recursive(model, current_epoch)
-            logger.info(f"Set epoch {current_epoch:.2f} on ADC quantizers")
-
-    def _set_epoch_recursive(self, module, epoch):
-        """Recursively set epoch on all modules that have set_epoch method"""
-        if hasattr(module, 'set_epoch'):
-            module.set_epoch(epoch)
-
-        for child in module.children():
-            self._set_epoch_recursive(child, epoch)
 
 
 class EvalMetricsLogger(TrainerCallback):
@@ -184,10 +152,6 @@ class BertADCConverter:
         ashift: bool = False,
         exclude_patterns: Optional[List[str]] = None,
         mvm_limit: int = 256,  # Default to 256 to match CLI default
-        use_dynamic_delta: bool = True,
-        use_delta_anneal: bool = True,
-        delta_loss_weight: float = 0.01,
-        delta_anneal_epochs: float = 1.0,
         # W-reshape (kurtosis) parameters from paper Equation 6 & 7
         use_kurtosis_loss: bool = True,
         kurtosis_weight: float = 0.0006,
@@ -244,10 +208,6 @@ class BertADCConverter:
                         ashift=layer_ashift,
                         signed_activations=layer_signed_activations,
                         mvm_limit=mvm_limit,
-                        use_dynamic_delta=use_dynamic_delta,
-                        use_delta_anneal=use_delta_anneal,
-                        delta_loss_weight=delta_loss_weight,
-                        delta_anneal_epochs=delta_anneal_epochs,
                         use_kurtosis_loss=use_kurtosis_loss,
                         kurtosis_weight=kurtosis_weight,
                         target_kurtosis=target_kurtosis,
@@ -965,10 +925,6 @@ def main():
             ashift=args.ashift,  # CRITICAL: Must match checkpoint!
             exclude_patterns=["embeddings", "pooler", "qa_outputs"],
             mvm_limit=args.mvm_limit,
-            use_dynamic_delta=(not args.fixed_delta),
-            use_delta_anneal=(not args.fixed_delta),
-            delta_loss_weight=(0.0 if args.fixed_delta else 0.01),
-            delta_anneal_epochs=1.0,
             # W-reshape (kurtosis) parameters
             use_kurtosis_loss=(args.kurtosis_lambda > 0),
             kurtosis_weight=args.kurtosis_lambda if args.kurtosis_lambda > 0 else 0.0006,
@@ -1218,7 +1174,7 @@ def main():
             training_args.resume_from_checkpoint = resume_ckpt
 
     # Create custom trainer with ADC loss handling
-    callbacks = [EpochCallback(), EvalMetricsLogger(use_wandb=use_wandb)]
+    callbacks = [EvalMetricsLogger(use_wandb=use_wandb)]
 
     # Preprocess logits for QA metrics (needed to extract start/end logits)
     def preprocess_logits_for_metrics(logits, labels):
@@ -1236,7 +1192,6 @@ def main():
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         callbacks=callbacks,
         adc_step_monitor=adc_step_monitor,  # Add ADC monitoring
-        kurtosis_lambda=args.kurtosis_lambda,
     )
 
     train_metrics = {}

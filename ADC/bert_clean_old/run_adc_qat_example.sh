@@ -11,16 +11,16 @@ FP_CHECKPOINT=""  # Leave empty when resuming from PTQ
 
 # ADC PTQ checkpoint to resume from (already has calibrated ADC layers)
 # This should point to the output of run_adc_ptq_example.sh
-ADC_RESUME_DIR_DEFAULT="./ADC/bert_clean_old/checkpoints/outputs_adc_ptq_k16_fix_20251125"
+ADC_RESUME_DIR_DEFAULT="./ADC/bert_clean/checkpoints/outputs_adc_qat_k4_conservative_a8w4x4" #"./ADC/bert_clean/checkpoints/outputs_ad_ptq"
 
 # Where to store QAT outputs (checkpoints, logs, metrics)
-OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_qat_k16_conservative"
+OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_qat_k4_conservative_a8w4x4_continue"
 
 # ADC hardware configuration - MUST MATCH PTQ CHECKPOINT!
 BX=8                # Activation bits
 BW=8                 # Weight bits
 BA=8                 # ADC bits
-K=16                 # Hardware design parameter (k=16 gave F1=65 vs k=4 gave F1=17)
+K=4                 # Hardware design parameter (k=16 gave F1=65 vs k=4 gave F1=17)
 ASHIFT=false         # MUST MATCH PTQ checkpoint! (PTQ was created with ashift=false)
 MVM_LIMIT=256        # Tile size limit for MVM units
 
@@ -33,13 +33,13 @@ MVM_LIMIT=256        # Tile size limit for MVM units
 # ============================================================================
 # NOTE: With round_ste fix for proper gradient flow, the autograd graph is larger.
 # Reduced batch size and enabled FP16 to fit in GPU memory.
-NUM_EPOCHS=1         # Paper: 4 epochs
+NUM_EPOCHS=3         # Paper: 4 epochs
 TRAIN_BATCH_SIZE=8   # Reduced from 16 due to larger gradient graph with STE fix
 EVAL_BATCH_SIZE=32
 LEARNING_RATE=1e-6   # Paper: 0.00003 initial LR
 WARMUP_RATIO=0.0     # Paper: linear decay (no warmup mentioned)
 WARMUP_STEPS=0
-EVAL_STEPS=50
+EVAL_STEPS=500
 SAVE_STEPS=500
 SAVE_TOTAL_LIMIT=3
 KURTOSIS_LAMBDA=0.0006  # Paper: W-reshape regularization

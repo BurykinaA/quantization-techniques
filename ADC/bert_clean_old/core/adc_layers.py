@@ -2,62 +2,289 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, Tuple
-from ADC.bert_clean.core.grad_functions import *
+
+
+def floor_ste(x: torch.Tensor) -> torch.Tensor:
+    """Floor with Straight-Through Estimator for gradient flow"""
+    return x + (torch.floor(x) - x).detach()
+
+
+class SafeDivideFunction(torch.autograd.Function):
+    """Division with gradient clipping by norm for the scale (denominator).
+    
+    Computes x / scale in forward, but clips the gradient w.r.t. scale
+    in backward to prevent explosion while preserving direction.
+    """
+    MAX_GRAD_NORM = 1000.0  # Maximum gradient norm for scale
+    
+    @staticmethod
+    def forward(ctx, x, scale):
+        ctx.save_for_backward(x, scale)
+        return x / scale
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, scale = ctx.saved_tensors
+        
+        # Gradient for x: grad_output / scale (standard)
+        grad_x = grad_output / scale
+        
+        # Gradient for scale: -grad_output * x / scale²
+        grad_scale = -grad_output * x / (scale ** 2)
+        
+        # Clip by norm to prevent explosion while preserving direction
+        grad_norm = grad_scale.norm()
+        if grad_norm > SafeDivideFunction.MAX_GRAD_NORM:
+            grad_scale = grad_scale * (SafeDivideFunction.MAX_GRAD_NORM / grad_norm)
+        
+        return grad_x, grad_scale
+
+
+def safe_divide(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    """Divide x by scale with gradient clipping for scale.
+    
+    Forward: x / scale (unchanged)
+    Backward: Clips gradient w.r.t. scale by norm to prevent explosion
+    while preserving gradient direction.
+    """
+    return SafeDivideFunction.apply(x, scale)
+
+
+def round_ste(x: torch.Tensor) -> torch.Tensor:
+    """Round with Straight-Through Estimator for gradient flow."""
+    return x + (torch.round(x) - x).detach()
 
 
 def compute_kurtosis_loss(weight: torch.Tensor, target_kurtosis: float = 1.8) -> torch.Tensor:
+    """
+    Compute kurtosis penalty for W-reshape (Equation 6 from paper).
+    
+    The kurtosis penalty encourages flatter weight distributions to maximize
+    Var[W] and improve ADC utilization.
+    
+    Args:
+        weight: The weight tensor (can be quantized or not)
+        target_kurtosis: Target kurtosis value (paper uses ~1.8 for uniform-like distribution)
+        
+    Returns:
+        Kurtosis loss: (kurtosis - target)^2
+    """
     # Equation 6: κ = E[((W - μ_W) / σ_W)^4]
     mean_w = weight.mean()
     std_w = weight.std()
+    
+    # Avoid division by zero
     std_w = torch.clamp(std_w, min=1e-6)
     
     normalized = (weight - mean_w) / std_w
     kurtosis = (normalized ** 4).mean()
     
+    # Loss is squared difference from target
+    # Note: Gaussian has kurtosis=3, uniform has kurtosis=1.8
     loss = (kurtosis - target_kurtosis) ** 2
+    
     return loss
 
 
-# class ADCQuantizer(nn.Module):
-#     """
-#     ADC Quantizer implementing the quantization described in equation (2) and (3)
-#     """
-#     def __init__(self, M: int, bx: int, bw: int, ba: int, k: int = 4, signed_activations: bool = False):
-#         super().__init__()
-#         self.M = M  # Memory dimension
-#         self.bx = bx  # Activation bits
-#         self.bw = bw  # Weight bits
-#         self.ba = ba  # ADC bits
-#         self.k = k   # Hardware design parameter
-#         self.signed_activations = signed_activations
-
-#         # Analytical delta calculation from paper Equation (3)
-#         # Unsigned: ∆a = 2M(2^bx - 1)(2^(bw-1) - 1) / (2^ba × k)
-#         # Signed:   ∆a = 2M(2^(bx-1) - 1)(2^(bw-1) - 1) / (2^ba × k)
-#         if signed_activations:
-#             activation_level_magnitude = float(2 ** (bx - 1) - 1)
-#         else:
-#             activation_level_magnitude = float(2 ** bx - 1)
-#         weight_level_max = float(2 ** (bw - 1) - 1)
-#         denom = float((2 ** ba) * k)
-#         self.delta = (2.0 * float(M) * activation_level_magnitude * weight_level_max) / denom
-
-#         self.na = -(2**(ba-1))  # Negative clipping value
-#         self.pa = 2**(ba-1) - 1  # Positive clipping value
-
-#         self.register_buffer('_zero_point', torch.zeros(1))
-
-
-#     def forward(self, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-#         scale_for_quant = self.delta
+class StraightThroughQuantize(torch.autograd.Function):
+    """
+    Straight-through estimator for quantization that allows gradients to flow to scale parameters
+    """
+    @staticmethod
+    def forward(ctx, input, scale, zero_point, qmin, qmax, symmetric, per_channel, channel_dim, original_scale, original_zp):
+        ctx.save_for_backward(input, original_scale, original_zp)  # Save original parameters for gradient computation
+        ctx.qmin = qmin
+        ctx.qmax = qmax
+        ctx.symmetric = symmetric
+        ctx.per_channel = per_channel
+        ctx.channel_dim = channel_dim
         
-#         #per tensor
-#         result = StraightThroughQuantize.apply(
-#             y, scale_for_quant, self._zero_point, self.na, self.pa,
-#             True, False, 0, scale_for_quant, self._zero_point
-#         )
+        # Perform quantization using the broadcasted scale/zero_point
+        if symmetric:
+            x_scaled = input / scale
+            x_quant = torch.clamp(torch.round(x_scaled), qmin, qmax)
+            output = x_quant * scale
+        else:
+            x_scaled = input / scale + zero_point
+            x_quant = torch.clamp(torch.round(x_scaled), qmin, qmax)
+            output = (x_quant - zero_point) * scale
+        
+        return output
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, original_scale, original_zp = ctx.saved_tensors
+        
+        # For gradient computation, we need to use the broadcasted versions
+        if ctx.per_channel:
+            # Recreate the broadcasted scale and zero_point
+            shape = [1] * input.ndim
+            shape[ctx.channel_dim] = -1
+            scale = original_scale.view(shape)
+            
+            if not ctx.symmetric:
+                zero_point = original_zp.view(shape)
+            else:
+                zero_point = torch.zeros_like(scale)
+        else:
+            scale = original_scale
+            if not ctx.symmetric:
+                zero_point = original_zp
+            else:
+                zero_point = torch.zeros_like(scale)
+        
+        # Compute pre-quantized values to determine where clamping occurs
+        if ctx.symmetric:
+            pre_quant = input / scale
+        else:
+            pre_quant = input / scale + zero_point
+        
+        # Create mask for values that are NOT clamped
+        #mask = (pre_quant > ctx.qmin) & (pre_quant < ctx.qmax)
+        
+        # Apply straight-through only where not clamped
+        grad_input = grad_output #* mask.float()
+        
+        # Compute gradients for scale parameter
+        if ctx.symmetric:
+            quantized_levels = torch.clamp(torch.round(input / scale), ctx.qmin, ctx.qmax)
+            # Gradient of output w.r.t. scale
+            scale_grad_per_element = grad_output * (quantized_levels - input / scale)
+        else:
+            x_scaled = input / scale + zero_point
+            quantized_levels = torch.clamp(torch.round(x_scaled), ctx.qmin, ctx.qmax) - zero_point
+            scale_grad_per_element = grad_output * (quantized_levels - input / scale)
+        
+        # Sum over appropriate dimensions to match original scale shape
+        if ctx.per_channel:
+            # For per-channel, sum over all dimensions except the channel dimension
+            dims_to_sum = list(range(input.ndim))
+            dims_to_sum.remove(ctx.channel_dim)
+            grad_scale = torch.mean(scale_grad_per_element, dim=dims_to_sum, keepdim=False)
+            
+            # Make sure the shape matches exactly
+            if grad_scale.shape != original_scale.shape:
+                grad_scale = grad_scale.view_as(original_scale)
+        else:
+            # For per-tensor, sum over all dimensions but keep as tensor with same shape as scale
+            grad_scale = torch.mean(scale_grad_per_element).view_as(original_scale)
+        
+        # Compute gradients for zero_point (if not symmetric)
+        if not ctx.symmetric:
+            if ctx.per_channel:
+                # For per-channel zero point - using gradient = -s approach
+                zp_grad_per_element = -grad_output * scale
+                zp_grad_per_element = torch.clamp(zp_grad_per_element, -1.0, 1.0)
+                dims_to_sum = list(range(input.ndim))
+                dims_to_sum.remove(ctx.channel_dim)
+                grad_zero_point = torch.mean(zp_grad_per_element, dim=dims_to_sum, keepdim=False)
+                
+                if grad_zero_point.shape != original_zp.shape:
+                    grad_zero_point = grad_zero_point.view_as(original_zp)
+            else:
+                # For per-tensor zero point
+                zp_grad_per_element = -grad_output * scale
+                zp_grad_per_element = torch.clamp(zp_grad_per_element, -1.0, 1.0)
+                grad_zero_point = torch.mean(zp_grad_per_element).view_as(original_zp)
+        else:
+            grad_zero_point = None
+        
+        return grad_input, None, None, None, None, None, None, None, grad_scale, grad_zero_point
 
-#         return result
+class ADCQuantizer(nn.Module):
+    """
+    ADC Quantizer implementing the quantization described in equation (2) and (3)
+    """
+    def __init__(self, M: int, bx: int, bw: int, ba: int, k: int = 4, signed_activations: bool = False, use_dynamic_delta: bool = True, delta_momentum: float = 0.05, use_delta_anneal: bool = True, delta_anneal_epochs: float = 1.0, delta_loss_weight: float = 0.01):
+        super().__init__()
+        self.M = M  # Memory dimension
+        self.bx = bx  # Activation bits
+        self.bw = bw  # Weight bits
+        self.ba = ba  # ADC bits
+        self.k = k   # Hardware design parameter
+        self.signed_activations = signed_activations
+        self.use_dynamic_delta = use_dynamic_delta
+        self.delta_momentum = delta_momentum
+        self.use_delta_anneal = use_delta_anneal
+        self.delta_anneal_epochs = delta_anneal_epochs  # Number of epochs for annealing
+        self.delta_loss_weight = delta_loss_weight  # Weight for delta MSE loss
+
+        # Calculate quantization step (delta) according to equation (3)
+        if signed_activations:
+            activation_range = 2**(bx-1) - 1
+        else:
+            activation_range = 2**bx - 1
+
+        weight_range = 2**(bw-1) - 1  # symmetric weights
+
+        # Analytical delta calculation from paper Equation (3)
+        # Unsigned: ∆a = 2M(2^bx - 1)(2^(bw-1) - 1) / (2^ba × k)
+        # Signed:   ∆a = 2M(2^(bx-1) - 1)(2^(bw-1) - 1) / (2^ba × k)
+        if signed_activations:
+            activation_level_magnitude = float(2 ** (bx - 1) - 1)  # Fixed: added -1
+        else:
+            activation_level_magnitude = float(2 ** bx - 1)
+        weight_level_max = float(2 ** (bw - 1) - 1) if bw > 1 else 1.0
+        denom = float((2 ** ba) * k)
+        self.delta = (2.0 * float(M) * activation_level_magnitude * weight_level_max) / denom
+
+        # ADC quantization range
+        self.na = -(2**(ba-1))  # Negative clipping value
+        self.pa = 2**(ba-1) - 1  # Positive clipping value
+
+        self.register_buffer('_delta', torch.tensor(self.delta, dtype=torch.float32))
+        # Running absmax for dynamic delta calibration
+        self.register_buffer('_running_absmax', torch.tensor(0.0, dtype=torch.float32))
+        # Current epoch for annealing
+        self.register_buffer('_current_epoch', torch.tensor(0.0, dtype=torch.float32))
+        self.register_buffer('_zero_point', torch.zeros(1))
+
+    def set_epoch(self, epoch: float):
+        """Set the current training epoch for delta annealing"""
+        self._current_epoch.copy_(torch.tensor(epoch, dtype=torch.float32))
+
+    def forward(self, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Apply ADC quantization according to equation (2):
+        y_q = round(clip(y/delta, na, pa))
+
+        Returns:
+            Tuple of (quantized_output, delta_loss)
+        """
+        scale_for_quant = self._delta
+        delta_loss = torch.tensor(0.0, device=y.device, dtype=y.dtype)
+
+        if self.use_dynamic_delta:
+            with torch.no_grad():
+                current_absmax = y.detach().abs().max()
+                if torch.isfinite(current_absmax):
+                    if self._running_absmax.item() == 0.0:
+                        self._running_absmax.copy_(current_absmax)
+                    else:
+                        self._running_absmax.copy_((1 - self.delta_momentum) * self._running_absmax + self.delta_momentum * current_absmax)
+
+            dynamic_delta = torch.clamp(self._running_absmax / max(self.pa, 1), min=1e-6)
+
+            # Add MSE loss between dynamic and analytical delta
+            if self.training and self.delta_loss_weight > 0:
+                delta_loss = self.delta_loss_weight * F.mse_loss(dynamic_delta, self._delta)
+
+            if self.use_delta_anneal:
+                # Epoch-based annealing: alpha from 0->1 over delta_anneal_epochs
+                current_epoch = self._current_epoch.item()
+                alpha = min(current_epoch / self.delta_anneal_epochs, 1.0)
+                blended = (1.0 - alpha) * dynamic_delta + alpha * self._delta
+                scale_for_quant = torch.clamp(blended, min=1e-3, max=100.0)
+            else:
+                scale_for_quant = torch.clamp(dynamic_delta, min=1e-3, max=100.0)
+
+        # Use StraightThroughQuantize with selected delta as scale
+        result = StraightThroughQuantize.apply(
+            y, scale_for_quant, self._zero_point, self.na, self.pa,
+            True, False, 0, scale_for_quant, self._zero_point
+        )
+
+        return result, delta_loss
 
 class LearnableQuantizer(nn.Module):
     """
@@ -82,33 +309,35 @@ class LearnableQuantizer(nn.Module):
             self.qmin = 0
             self.qmax = 2 ** num_bits - 1
         
+        # Initialize scale parameter with correct shape
+        # Use smaller initial scale for better precision (will be updated during training)
         init_scale = 0.01 if symmetric else 0.02  # Smaller for symmetric, slightly larger for asymmetric
         if per_channel:
-            # For per-channel: create placeholder (will be reshaped in _initialize_parameters)
-            self.scale = nn.Parameter(torch.tensor([init_scale], dtype=torch.float32))
+            # We'll set the correct size during the first forward pass
+            self.register_parameter('scale', nn.Parameter(torch.ones(1) * init_scale))
             self._scale_initialized = False
         else:
-            # For per-tensor: create final parameter
-            self.scale = nn.Parameter(torch.tensor([init_scale], dtype=torch.float32))
+            self.register_parameter('scale', nn.Parameter(torch.ones(1) * init_scale))
             self._scale_initialized = True
         
-        # Initialize zero_point if asymmetric
         if not symmetric:
+            # Learnable zero point for asymmetric quantization
+            # Initialize to middle of range for better coverage of negative values
             init_zp = (self.qmax + self.qmin) / 2.0
-            
             if per_channel:
-                # For per-channel: create placeholder
-                self.zero_point = nn.Parameter(torch.tensor([init_zp], dtype=torch.float32))
+                self.register_parameter('zero_point', nn.Parameter(torch.ones(1) * init_zp))
                 self._zp_initialized = False
             else:
-                # For per-tensor: create final parameter
-                self.zero_point = nn.Parameter(torch.tensor([init_zp], dtype=torch.float32))
+                self.register_parameter('zero_point', nn.Parameter(torch.ones(1) * init_zp))
                 self._zp_initialized = True
         else:
-            # For symmetric: zero_point is always 0, no gradients needed
             self.register_buffer('zero_point', torch.zeros(1))
-            self._zp_initialized = True  # Always initialized (it's just zeros)
+            self._zp_initialized = True
         
+        # Quantizer mode: controls when parameters are updated
+        # 'calibration': collect statistics, update scales via EMA, no gradients
+        # 'qat': learn scales via gradients only, NO EMA updates
+        # 'fixed': freeze all parameters, no updates
         self._mode = 'calibration'
         
     def set_mode(self, mode: str):
@@ -121,9 +350,11 @@ class LearnableQuantizer(nn.Module):
         if mode not in ['calibration', 'qat', 'fixed']:
             raise ValueError(f"Invalid mode '{mode}'. Must be 'calibration', 'qat', or 'fixed'")
         
+        old_mode = self._mode
         self._mode = mode
         
         if mode == 'calibration':
+            # Calibration: use EMA updates, disable gradients
             self.scale.requires_grad = False
             if not self.symmetric:
                 self.zero_point.requires_grad = False
@@ -156,6 +387,8 @@ class LearnableQuantizer(nn.Module):
                     x_absmax = x_reshaped.abs().max(dim=1)[0]
                 
                 init_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
+                # Ensure scale is never too small
+                #init_scale = torch.clamp(init_scale, min=1e-3, max=10.0)
                 
                 # Handle case where x_absmax is 0
                 init_scale = torch.where(init_scale == 0, torch.ones_like(init_scale) * 0.1, init_scale)
@@ -179,14 +412,14 @@ class LearnableQuantizer(nn.Module):
             
         with torch.no_grad():
             # Check input for NaN/inf
-            # if torch.isnan(x).any() or torch.isinf(x).any():
-            #     print("Warning: NaN/inf in quantizer input, skipping parameter update")
-            #     return
+            if torch.isnan(x).any() or torch.isinf(x).any():
+                print("Warning: NaN/inf in quantizer input, skipping parameter update")
+                return
             
             # Skip update if input is all zeros (dead activations)
-            # if x.abs().max() < 1e-6:
-            #     # print("Warning: Input is all zeros, skipping quantizer update")
-            #     return
+            if x.abs().max() < 1e-6:
+                # print("Warning: Input is all zeros, skipping quantizer update")
+                return
                 
             if self.per_channel:
                 # Per-channel quantization
@@ -209,6 +442,9 @@ class LearnableQuantizer(nn.Module):
             if self.symmetric:
                 x_absmax = torch.max(x_min.abs(), x_max.abs())
                 new_scale = x_absmax / (2 ** (self.num_bits - 1) - 1)
+                # Ensure scale is never too small or too large
+                #new_scale = torch.clamp(new_scale, min=1e-3, max=10.0)
+                
                 # Handle zero case
                 new_scale = torch.where(new_scale == 0, torch.ones_like(new_scale) * 0.1, new_scale)
                 
@@ -216,8 +452,12 @@ class LearnableQuantizer(nn.Module):
                 momentum = 0.01  # Reduced momentum for stability
                 self.scale.data = (1 - momentum) * self.scale.data + momentum * new_scale
                 
+                # Clamp the final scale
+                #self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
             else:
                 new_scale = (x_max - x_min) / (2 ** self.num_bits - 1)
+                # Ensure scale is never too small
+                #new_scale = torch.clamp(new_scale, min=1e-3, max=10.0)
                 new_zero_point = -x_min / new_scale
                 new_zero_point = torch.clamp(new_zero_point, self.qmin, self.qmax)
                 
@@ -226,6 +466,8 @@ class LearnableQuantizer(nn.Module):
                 self.scale.data = (1 - momentum) * self.scale.data + momentum * new_scale
                 self.zero_point.data = (1 - momentum) * self.zero_point.data + momentum * new_zero_point
                 
+                # Clamp final values
+                #self.scale.data = torch.clamp(self.scale.data, min=1e-3, max=10.0)
     
     def forward(self, x: torch.Tensor, update_stats: bool = None) -> torch.Tensor:
         # Initialize parameters on first forward pass
@@ -300,6 +542,10 @@ class QATLinearADC(nn.Linear):
                  k: int = 4,   # Hardware design parameter
                  ashift: bool = False,
                  signed_activations: bool = False,
+                 use_dynamic_delta: bool = True,
+                 use_delta_anneal: bool = True,
+                 delta_loss_weight: float = 0.01,
+                 delta_anneal_epochs: float = 1.0,
                  # W-reshape (kurtosis) parameters from paper Equation 6 & 7
                  use_kurtosis_loss: bool = True,
                  kurtosis_weight: float = 0.0006,  # λ_κ in paper
@@ -335,26 +581,19 @@ class QATLinearADC(nn.Linear):
         
         # ADC quantizer
         # HACK: For A-shift, force signed delta formula (codes are signed after shift)
-        # а как с этим вообще ashift связан то епта
         adc_signed_activations = True if ashift else signed_activations
-        # self.adc_quantizer = ADCQuantizer(
-        #     M=in_features,
-        #     bx=bx,
-        #     bw=bw,
-        #     ba=ba,
-        #     k=k,
-        #     signed_activations=adc_signed_activations,  #signed_activations
-        # )
-        if signed_activations:
-            activation_level_magnitude = float(2 ** (bx - 1) - 1)
-        else:
-            activation_level_magnitude = float(2 ** bx - 1)
-        weight_level_max = float(2 ** (bw - 1) - 1)
-        denom = float((2 ** ba) * k)
-        self.delta = (2.0 * float(in_features) * activation_level_magnitude * weight_level_max) / denom
-
-        self.na = -(2**(ba-1))  # Negative clipping value
-        self.pa = 2**(ba-1) - 1  # Positive clipping value
+        self.adc_quantizer = ADCQuantizer(
+            M=in_features,
+            bx=bx,
+            bw=bw,
+            ba=ba,
+            k=k,
+            signed_activations=adc_signed_activations,  #signed_activations
+            use_dynamic_delta=use_dynamic_delta,
+            use_delta_anneal=use_delta_anneal,
+            delta_anneal_epochs=delta_anneal_epochs,
+            delta_loss_weight=delta_loss_weight
+        )
         
         # Ashift constant
         if ashift:
@@ -431,19 +670,13 @@ class QATLinearADC(nn.Linear):
         w_quantized = code_w * s_w_b
 
         # 3) Integer MM in code domain
-        y_int = F.linear(code_x, code_w, bias=None) # добавить где надо настоящее превращение в инт
+        y_int = F.linear(code_x, code_w, bias=None)
 
-        delta = self.delta
-        na = self.na
-        pa = self.pa
-
-        # Apply ADC quantization (Paper Equation 2: uses floor, not round)
-        y_adc_codes = floor_ste(y_int / delta)
-        y_adc_codes = torch.clamp(y_adc_codes, na, pa)
-
-        # Dequantize back to the scale used for quantization
-        adc_output = y_adc_codes * delta
-
+        # 4) ADC quantization with dynamic delta and annealing
+        adc_output, delta_loss = self._adc_quantize_with_loss(y_int)
+        # Store latest delta loss for external aggregation
+        self._last_delta_loss = delta_loss
+        
         # 4.5) Compute kurtosis loss for W-reshape (Paper Equation 6 & 7)
         # κ = E[((W - μ_W) / σ_W)^4], loss = (κ - target)^2
         if self.training and self.use_kurtosis_loss:
@@ -493,6 +726,59 @@ class QATLinearADC(nn.Linear):
             y_real = y_real + self.bias
 
         return y_real
+
+    def _adc_quantize_with_loss(self, y_int: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Apply ADC quantization with dynamic delta, annealing, and loss calculation"""
+        delta = self.adc_quantizer._delta
+        na = self.adc_quantizer.na
+        pa = self.adc_quantizer.pa
+
+        # Start with analytical delta
+        scale_for_quant = delta
+        delta_loss = torch.tensor(0.0, device=y_int.device, dtype=y_int.dtype)
+        
+        # Debug logging removed per user request
+
+        if self.adc_quantizer.use_dynamic_delta:
+            with torch.no_grad():
+                current_absmax = y_int.detach().abs().max()
+                if torch.isfinite(current_absmax):
+                    if self.adc_quantizer._running_absmax.item() == 0.0:
+                        self.adc_quantizer._running_absmax.copy_(current_absmax)
+                    else:
+                        self.adc_quantizer._running_absmax.copy_(
+                            (1 - self.adc_quantizer.delta_momentum) * self.adc_quantizer._running_absmax +
+                            self.adc_quantizer.delta_momentum * current_absmax
+                        )
+
+            dynamic_delta = torch.clamp(self.adc_quantizer._running_absmax / max(pa, 1), min=1e-6)
+
+            # Add MSE loss between dynamic and analytical delta
+            if self.training and self.adc_quantizer.delta_loss_weight > 0:
+                delta_loss = self.adc_quantizer.delta_loss_weight * F.mse_loss(dynamic_delta, delta)
+
+            if self.adc_quantizer.use_delta_anneal:
+                current_epoch = self.adc_quantizer._current_epoch.item()
+                alpha = min(current_epoch / self.adc_quantizer.delta_anneal_epochs, 1.0)
+                blended = (1.0 - alpha) * dynamic_delta + alpha * delta
+                scale_for_quant = torch.clamp(blended, min=1e-3, max=100.0)
+            else:
+                scale_for_quant = torch.clamp(dynamic_delta, min=1e-3, max=100.0)
+
+        # Apply ADC quantization (Paper Equation 2: uses floor, not round)
+        # y_bar = floor(clip(y / delta, na, pa))
+        y_adc_codes = floor_ste(y_int / scale_for_quant)
+        y_adc_codes = torch.clamp(y_adc_codes, na, pa)
+
+        # Dequantize back to the scale used for quantization
+        adc_output = y_adc_codes * scale_for_quant
+
+        return adc_output, delta_loss
+
+    def set_epoch(self, epoch: float):
+        """Set the current training epoch for delta annealing"""
+        if hasattr(self, 'adc_quantizer'):
+            self.adc_quantizer.set_epoch(epoch)
     
     def get_auxiliary_losses(self) -> dict:
         """
@@ -506,12 +792,16 @@ class QATLinearADC(nn.Linear):
         """
         losses = {}
         
+        # Delta loss (extension, not in paper)
+        delta_loss = getattr(self, '_last_delta_loss', torch.tensor(0.0))
+        losses['delta_loss'] = delta_loss
+        
         # Kurtosis loss (Paper Equation 6 & 7)
         kurtosis_loss = getattr(self, '_last_kurtosis_loss', torch.tensor(0.0))
         losses['kurtosis_loss'] = kurtosis_loss
         
         # Total loss for backprop
-        losses['total'] = kurtosis_loss
+        losses['total'] = delta_loss + kurtosis_loss
         
         return losses
 
@@ -533,6 +823,10 @@ class TiledLinearADC(nn.Module):
                  ashift: bool = False,
                  signed_activations: bool = False,
                  mvm_limit: int = 512,
+                 use_dynamic_delta: bool = True,
+                 use_delta_anneal: bool = True,
+                 delta_loss_weight: float = 0.01,
+                 delta_anneal_epochs: float = 1.0,
                  # W-reshape (kurtosis) parameters from paper
                  use_kurtosis_loss: bool = True,
                  kurtosis_weight: float = 0.0006,
@@ -568,11 +862,21 @@ class TiledLinearADC(nn.Module):
                     bx=bx, bw=bw, ba=ba, k=k,
                     ashift=ashift,
                     signed_activations=signed_activations,
+                    use_dynamic_delta=use_dynamic_delta,
+                    use_delta_anneal=use_delta_anneal,
+                    delta_loss_weight=delta_loss_weight,
+                    delta_anneal_epochs=delta_anneal_epochs,
                     use_kurtosis_loss=use_kurtosis_loss,
                     kurtosis_weight=kurtosis_weight,
                     target_kurtosis=target_kurtosis,
                 )
             )
+
+    def set_epoch(self, epoch: float):
+        """Set the current training epoch for delta annealing"""
+        # Set epoch for all tiles
+        for tile in self.tiles:
+            tile.set_epoch(epoch)
     
     def set_quantizer_mode(self, mode: str):
         """Set mode for all quantizers in all tiles"""
@@ -586,18 +890,34 @@ class TiledLinearADC(nn.Module):
         Returns:
             Dictionary with aggregated losses from all tiles
         """
+        total_delta = torch.tensor(0.0)
         total_kurtosis = torch.tensor(0.0)
         
         for tile in self.tiles:
             tile_losses = tile.get_auxiliary_losses()
+            total_delta = total_delta + tile_losses['delta_loss']
             total_kurtosis = total_kurtosis + tile_losses['kurtosis_loss']
         
         return {
+            'delta_loss': total_delta,
             'kurtosis_loss': total_kurtosis,
-            'total': total_kurtosis
+            'total': total_delta + total_kurtosis
         }
 
     # ===== служебные методы управления (по аналогии с TiledConv2dADC) =====
+
+    def enable_adc(self, indices=None):
+        """Включить ADC у всех плиток или у заданных индексов."""
+        idxs = range(self.n_tiles) if indices is None else indices
+        for i in idxs:
+            self.tiles[i].use_adc = True
+
+    def disable_adc(self, indices=None):
+        """Выключить ADC у всех плиток или у заданных индексов."""
+        idxs = range(self.n_tiles) if indices is None else indices
+        for i in idxs:
+            self.tiles[i].use_adc = False
+
     def _set_quantizer_state(self, enabled: bool):
         for t in self.tiles:
             if enabled:

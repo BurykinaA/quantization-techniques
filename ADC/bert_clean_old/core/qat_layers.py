@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional
 
-class StraightThroughQuantize(torch.autograd.Function): #схуя у меня 2 класса 
+class StraightThroughQuantize(torch.autograd.Function):
     """
     Straight-through estimator for quantization with correct gradient flow to scale.
     Note: For asymmetric quantization, zero_point gradient is ~0 (it cancels out mathematically).
