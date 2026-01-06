@@ -17,48 +17,6 @@ def compute_kurtosis_loss(weight: torch.Tensor, target_kurtosis: float = 1.8) ->
     loss = (kurtosis - target_kurtosis) ** 2
     return loss
 
-
-# class ADCQuantizer(nn.Module):
-#     """
-#     ADC Quantizer implementing the quantization described in equation (2) and (3)
-#     """
-#     def __init__(self, M: int, bx: int, bw: int, ba: int, k: int = 4, signed_activations: bool = False):
-#         super().__init__()
-#         self.M = M  # Memory dimension
-#         self.bx = bx  # Activation bits
-#         self.bw = bw  # Weight bits
-#         self.ba = ba  # ADC bits
-#         self.k = k   # Hardware design parameter
-#         self.signed_activations = signed_activations
-
-#         # Analytical delta calculation from paper Equation (3)
-#         # Unsigned: ∆a = 2M(2^bx - 1)(2^(bw-1) - 1) / (2^ba × k)
-#         # Signed:   ∆a = 2M(2^(bx-1) - 1)(2^(bw-1) - 1) / (2^ba × k)
-#         if signed_activations:
-#             activation_level_magnitude = float(2 ** (bx - 1) - 1)
-#         else:
-#             activation_level_magnitude = float(2 ** bx - 1)
-#         weight_level_max = float(2 ** (bw - 1) - 1)
-#         denom = float((2 ** ba) * k)
-#         self.delta = (2.0 * float(M) * activation_level_magnitude * weight_level_max) / denom
-
-#         self.na = -(2**(ba-1))  # Negative clipping value
-#         self.pa = 2**(ba-1) - 1  # Positive clipping value
-
-#         self.register_buffer('_zero_point', torch.zeros(1))
-
-
-#     def forward(self, y: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-#         scale_for_quant = self.delta
-        
-#         #per tensor
-#         result = StraightThroughQuantize.apply(
-#             y, scale_for_quant, self._zero_point, self.na, self.pa,
-#             True, False, 0, scale_for_quant, self._zero_point
-#         )
-
-#         return result
-
 class LearnableQuantizer(nn.Module):
     """
     Learnable quantizer with proper gradient flow to scale parameters
@@ -123,7 +81,7 @@ class LearnableQuantizer(nn.Module):
         
         self._mode = mode
         
-        if mode == 'calibration':
+        if mode == 'calibration' or mode == 'fixed':
             self.scale.requires_grad = False
             if not self.symmetric:
                 self.zero_point.requires_grad = False
@@ -132,11 +90,6 @@ class LearnableQuantizer(nn.Module):
             self.scale.requires_grad = True
             if not self.symmetric:
                 self.zero_point.requires_grad = True
-        elif mode == 'fixed':
-            # Fixed: no updates at all
-            self.scale.requires_grad = False
-            if not self.symmetric:
-                self.zero_point.requires_grad = False
     
     def _initialize_parameters(self, x: torch.Tensor):
         """Initialize parameters with correct shape on first forward pass"""
@@ -178,16 +131,7 @@ class LearnableQuantizer(nn.Module):
             return  # Only update during training
             
         with torch.no_grad():
-            # Check input for NaN/inf
-            # if torch.isnan(x).any() or torch.isinf(x).any():
-            #     print("Warning: NaN/inf in quantizer input, skipping parameter update")
-            #     return
-            
-            # Skip update if input is all zeros (dead activations)
-            # if x.abs().max() < 1e-6:
-            #     # print("Warning: Input is all zeros, skipping quantizer update")
-            #     return
-                
+
             if self.per_channel:
                 # Per-channel quantization
                 if self.channel_dim == 0:
@@ -361,14 +305,6 @@ class QATLinearADC(nn.Linear):
             self.C = 2 ** (bx - 1)
         else:
             self.C = 0
-        
-        self.quantization_enabled = True
-    
-    def enable_quantization(self):
-        self.quantization_enabled = True
-    
-    def disable_quantization(self):
-        self.quantization_enabled = False
     
     def set_quantizer_mode(self, mode: str):
         """
@@ -381,9 +317,6 @@ class QATLinearADC(nn.Linear):
         self.weight_quantizer.set_mode(mode)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if not self.quantization_enabled:
-            return F.linear(x, self.weight, self.bias)
-
         # Store raw inputs for monitoring
         x_raw = x.clone().detach()
         w_raw = self.weight.clone().detach()
@@ -488,8 +421,9 @@ class QATLinearADC(nn.Linear):
                 # No correction needed - the offsets cancel perfectly
                 pass
 
-        # 6) Add bias if present
+        # 6) Add bias if present ВОТ ЭТО ВАЖНО
         if self.bias is not None:
+            # print('BIAS ', self.bias)
             y_real = y_real + self.bias
 
         return y_real
@@ -596,14 +530,6 @@ class TiledLinearADC(nn.Module):
             'kurtosis_loss': total_kurtosis,
             'total': total_kurtosis
         }
-
-    # ===== служебные методы управления (по аналогии с TiledConv2dADC) =====
-    def _set_quantizer_state(self, enabled: bool):
-        for t in self.tiles:
-            if enabled:
-                t.enable_quantization()
-            else:
-                t.disable_quantization()
 
     def train(self, mode: bool = True):
         super().train(mode)
