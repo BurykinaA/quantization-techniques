@@ -3,6 +3,7 @@ import os
 import time
 import collections
 import logging
+import random
 from typing import Dict, Any, Optional, List, Tuple
 import json
 import sys
@@ -48,19 +49,90 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__) 
 
 
+def get_bitaug_neighbors(target_ba: int, neighbor_range: int = 1, min_bits: int = 4, max_bits: int = 12) -> list[int]:
+    """
+    Get neighboring bit precisions for BitAug (Paper Section: Bit Augmentation).
+    
+    Following paper insights: neighbors should be close to target to avoid adding noise.
+    
+    Args:
+        target_ba: Target ADC bit precision
+        neighbor_range: How many bits above/below target to include (default: 1 for ±1 bits)
+        min_bits: Minimum allowed bit precision
+        max_bits: Maximum allowed bit precision
+        
+    Returns:
+        List of valid neighboring bit precisions (excluding target itself)
+    """
+    neighbors = []
+    for offset in range(-neighbor_range, neighbor_range + 1):
+        if offset == 0:
+            continue  # Skip target itself
+        bit = target_ba + offset
+        if min_bits <= bit <= max_bits:
+            neighbors.append(bit)
+    return neighbors
+
+
+def set_model_adc_bits(model: nn.Module, ba: int):
+    """
+    Set ADC bit precision for all ADC layers in the model.
+    
+    Args:
+        model: Model containing TiledLinearADC/QATLinearADC layers
+        ba: New ADC bit precision
+    """
+    for module in model.modules():
+        if isinstance(module, (TiledLinearADC, QATLinearADC)):
+            if hasattr(module, 'set_adc_bits'):
+                module.set_adc_bits(ba)
+
 
 class ADCLossTrainer(Trainer):
-    """Custom trainer that handles ADC auxiliary losses (delta + kurtosis) from get_auxiliary_losses()"""
+    """
+    Custom trainer that handles:
+    - ADC auxiliary losses (kurtosis/W-reshape) from get_auxiliary_losses()
+    - BitAug: Bit Augmentation for improved training (Paper Equation 10)
+    """
 
-    def __init__(self, *args, adc_step_monitor=None, **kwargs):
+    def __init__(
+        self, 
+        *args, 
+        adc_step_monitor=None,
+        # BitAug parameters (Paper: Bit Augmentation)
+        use_bitaug: bool = False,
+        bitaug_lambda: float = 0.5,
+        target_ba: int = 8,
+        bitaug_neighbors: list[int] | None = None,
+        **kwargs
+    ):
         super().__init__(*args, **kwargs)
         self.adc_step_monitor = adc_step_monitor
+        
+        # BitAug configuration
+        self.use_bitaug = use_bitaug
+        self.bitaug_lambda = bitaug_lambda
+        self.target_ba = target_ba
+        
+        # Get neighbors if not provided
+        if bitaug_neighbors is None and use_bitaug:
+            self.bitaug_neighbors = get_bitaug_neighbors(target_ba, neighbor_range=1)
+        else:
+            self.bitaug_neighbors = bitaug_neighbors or []
+        
+        if use_bitaug:
+            logger.info(f"BitAug enabled: target_ba={target_ba}, lambda={bitaug_lambda}, "
+                       f"neighbors={self.bitaug_neighbors}")
 
-    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+    def _compute_task_loss(self, model, inputs) -> tuple[torch.Tensor, any]:
+        """
+        Compute task-specific loss (QA loss for BERT).
+        
+        Returns:
+            Tuple of (loss, outputs)
+        """
         outputs = model(**inputs)
-
-        # Extract base loss from model outputs
-        # BertForQuestionAnswering returns QuestionAnsweringModelOutput with .loss attribute
+        
         if hasattr(outputs, 'loss'):
             loss = outputs.loss
         elif isinstance(outputs, tuple):
@@ -70,16 +142,19 @@ class ADCLossTrainer(Trainer):
         else:
             loss = None
         
-        # Ensure we have a valid loss
         if loss is None:
             raise ValueError("Could not extract loss from model outputs")
+        
+        return loss, outputs
 
-        # Aggregate auxiliary losses from ADC layers using the new get_auxiliary_losses() method
-        # This includes both delta_loss (if using dynamic delta) and kurtosis_loss (W-reshape)
-        auxiliary_loss = torch.tensor(0.0, device=loss.device, dtype=loss.dtype)
+    def _compute_auxiliary_loss(self, model, device, dtype) -> torch.Tensor:
+        """
+        Aggregate auxiliary losses from all ADC layers.
+        Includes kurtosis loss (W-reshape, Paper Eq. 6 & 7).
+        """
+        auxiliary_loss = torch.tensor(0.0, device=device, dtype=dtype)
         
         for module in model.modules():
-            # Use the new get_auxiliary_losses() method from TiledLinearADC/QATLinearADC
             if isinstance(module, (TiledLinearADC, QATLinearADC)):
                 if hasattr(module, 'get_auxiliary_losses'):
                     try:
@@ -87,12 +162,48 @@ class ADCLossTrainer(Trainer):
                         if 'total' in aux_losses:
                             layer_loss = aux_losses['total']
                             if isinstance(layer_loss, torch.Tensor):
-                                auxiliary_loss = auxiliary_loss + layer_loss.to(loss.device)
+                                auxiliary_loss = auxiliary_loss + layer_loss.to(device)
                     except Exception:
                         pass
+        
+        return auxiliary_loss
 
-        # Combine all loss components
-        total_loss = loss + auxiliary_loss
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        """
+        Compute total loss with optional BitAug (Paper Equation 10).
+        
+        BitAug loss formula:
+            L_A = L(θ, ba) + λ_b * L(θ, ẽba)
+        
+        where:
+            - L(θ, ba) is the loss with target ADC bit precision
+            - L(θ, ẽba) is the loss with a randomly sampled neighbor bit precision
+            - λ_b is the BitAug coefficient
+        """
+        # === Step 1: Forward pass with target ADC bits ===
+        main_loss, outputs = self._compute_task_loss(model, inputs)
+        auxiliary_loss = self._compute_auxiliary_loss(model, main_loss.device, main_loss.dtype)
+        
+        total_loss = main_loss + auxiliary_loss
+        
+        # === Step 2: BitAug - forward pass with augmented bit precision ===
+        if self.use_bitaug and self.training and self.bitaug_neighbors:
+            # Randomly sample one bit precision from neighbors (Paper Eq. 10)
+            aug_ba = random.choice(self.bitaug_neighbors)
+            
+            # Temporarily change ADC bits
+            set_model_adc_bits(model, aug_ba)
+            
+            # Forward pass with augmented bits (no need to keep outputs)
+            aug_loss, _ = self._compute_task_loss(model, inputs)
+            aug_auxiliary = self._compute_auxiliary_loss(model, main_loss.device, main_loss.dtype)
+            
+            # Add BitAug loss component
+            bitaug_loss = self.bitaug_lambda * (aug_loss + aug_auxiliary)
+            total_loss = total_loss + bitaug_loss
+            
+            # Restore target ADC bits
+            set_model_adc_bits(model, self.target_ba)
 
         # Call ADC monitoring after each batch
         if self.adc_step_monitor:
@@ -849,6 +960,18 @@ def main():
     parser.add_argument("--kurtosis_lambda", type=float, default=0.0, help="Lambda for W-reshape kurtosis regularization (0 disables)")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate (paper uses 0.2 for BERT-base)")
     parser.add_argument("--lr_scheduler_type", type=str, default="linear", help="LR scheduler type: linear, cosine, etc.")
+    
+    # BitAug parameters (Paper: Bit Augmentation, Equation 8-10)
+    parser.add_argument("--bitaug", action="store_true", 
+                       help="Enable BitAug: augment training with multiple ADC bit precisions")
+    parser.add_argument("--bitaug_lambda", type=float, default=0.5, 
+                       help="BitAug loss coefficient λ_b (default: 0.5)")
+    parser.add_argument("--bitaug_neighbor_range", type=int, default=1, 
+                       help="BitAug neighbor range: ±N bits around target ba (default: 1 for ±1 bit)")
+    parser.add_argument("--bitaug_min_bits", type=int, default=4, 
+                       help="Minimum bit precision for BitAug sampling")
+    parser.add_argument("--bitaug_max_bits", type=int, default=12, 
+                       help="Maximum bit precision for BitAug sampling")
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -1181,6 +1304,24 @@ def main():
         """Extract start and end logits for QA metrics computation"""
         return logits[0], logits[1]  # (start_logits, end_logits)
 
+    # Prepare BitAug neighbors if enabled
+    bitaug_neighbors = None
+    if args.bitaug:
+        bitaug_neighbors = get_bitaug_neighbors(
+            target_ba=args.ba,
+            neighbor_range=args.bitaug_neighbor_range,
+            min_bits=args.bitaug_min_bits,
+            max_bits=args.bitaug_max_bits
+        )
+        logger.info(f"BitAug enabled: target_ba={args.ba}, lambda={args.bitaug_lambda}, "
+                   f"neighbors={bitaug_neighbors}")
+        if use_wandb and wandb_run is not None:
+            wandb.run.config.update({
+                "bitaug": True,
+                "bitaug_lambda": args.bitaug_lambda,
+                "bitaug_neighbors": bitaug_neighbors,
+            })
+
     trainer = ADCLossTrainer(
         model=model,
         args=training_args,
@@ -1192,6 +1333,11 @@ def main():
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         callbacks=callbacks,
         adc_step_monitor=adc_step_monitor,  # Add ADC monitoring
+        # BitAug parameters
+        use_bitaug=args.bitaug,
+        bitaug_lambda=args.bitaug_lambda,
+        target_ba=args.ba,
+        bitaug_neighbors=bitaug_neighbors,
     )
 
     train_metrics = {}

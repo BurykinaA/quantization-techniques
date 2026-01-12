@@ -316,6 +316,31 @@ class QATLinearADC(nn.Linear):
         self.activation_quantizer.set_mode(mode)
         self.weight_quantizer.set_mode(mode)
     
+    def set_adc_bits(self, ba: int):
+        """
+        Dynamically set ADC bit precision (for BitAug).
+        
+        This recalculates delta (Eq. 3) and clipping values based on new ba.
+        Used by BitAug to pass different bit precisions during training.
+        
+        Args:
+            ba: New ADC bit precision
+        """
+        self.ba = ba
+        
+        # Recalculate delta (Paper Equation 3)
+        if self.signed_activations:
+            activation_level_magnitude = float(2 ** (self.bx - 1) - 1)
+        else:
+            activation_level_magnitude = float(2 ** self.bx - 1)
+        weight_level_max = float(2 ** (self.bw - 1) - 1)
+        denom = float((2 ** ba) * self.k)
+        self.delta = (2.0 * float(self.in_features) * activation_level_magnitude * weight_level_max) / denom
+        
+        # Recalculate clipping values
+        self.na = -(2 ** (ba - 1))
+        self.pa = 2 ** (ba - 1) - 1
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # Store raw inputs for monitoring
         x_raw = x.clone().detach()
@@ -512,6 +537,20 @@ class TiledLinearADC(nn.Module):
         """Set mode for all quantizers in all tiles"""
         for tile in self.tiles:
             tile.set_quantizer_mode(mode)
+    
+    def set_adc_bits(self, ba: int):
+        """
+        Dynamically set ADC bit precision for all tiles (for BitAug).
+        
+        Args:
+            ba: New ADC bit precision
+        """
+        for tile in self.tiles:
+            tile.set_adc_bits(ba)
+    
+    def get_adc_bits(self) -> int:
+        """Get current ADC bit precision from first tile"""
+        return self.tiles[0].ba if self.tiles else 8
     
     def get_auxiliary_losses(self) -> dict:
         """

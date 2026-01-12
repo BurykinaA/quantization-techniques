@@ -49,6 +49,17 @@ USE_FP16=false        # Enable FP16 to reduce memory with larger gradient graph
 FIXED_DELTA=true     # Keep delta fixed (already calibrated in PTQ)
 EVAL_ONLY=false      # Set true to skip training and only run evaluation
 
+# BitAug configuration (Paper: Bit Augmentation, Equation 8-10)
+# ============================================================================
+# BitAug improves training by augmenting with neighboring ADC bit precisions.
+# At each iteration: L_A = L(θ, ba) + λ_b * L(θ, sampled_neighbor_ba)
+# ============================================================================
+USE_BITAUG=true         # Enable BitAug
+BITAUG_LAMBDA=0.5        # BitAug loss coefficient λ_b
+BITAUG_NEIGHBOR_RANGE=1  # ±N bits around target ba (e.g., 1 means ba-1 and ba+1)
+BITAUG_MIN_BITS=4        # Minimum bit precision for sampling
+BITAUG_MAX_BITS=12       # Maximum bit precision for sampling
+
 # Monitoring
 ENABLE_ADC_MONITORING=true
 ADC_RESUME_DIR="$ADC_RESUME_DIR_DEFAULT"  # Resume from PTQ checkpoint
@@ -67,6 +78,11 @@ if [ "$ASHIFT" = true ]; then
     WANDB_TAGS+=("ashift")
 else
     WANDB_TAGS+=("symmetric")
+fi
+
+if [ "$USE_BITAUG" = true ]; then
+    WANDB_TAGS+=("bitaug")
+    WANDB_RUN_NAME="${WANDB_RUN_NAME}_bitaug"
 fi
 
 # ==============================================================================
@@ -108,6 +124,14 @@ echo "  LR scheduler:      $LR_SCHEDULER"
 echo "  FP16:              $USE_FP16"
 echo "  Fixed delta:       $FIXED_DELTA"
 echo "  Eval only:         $EVAL_ONLY"
+echo ""
+echo "BitAug:"
+echo "  Enabled:           $USE_BITAUG"
+if [ "$USE_BITAUG" = true ]; then
+    echo "  Lambda:            $BITAUG_LAMBDA"
+    echo "  Neighbor range:    ±$BITAUG_NEIGHBOR_RANGE bits"
+    echo "  Min/Max bits:      $BITAUG_MIN_BITS - $BITAUG_MAX_BITS"
+fi
 echo ""
 echo "Monitoring:"
 echo "  ADC monitoring:    $ENABLE_ADC_MONITORING"
@@ -173,6 +197,15 @@ fi
 
 if [ "$EVAL_ONLY" = true ]; then
     CMD+=(--eval_only)
+fi
+
+# BitAug flags
+if [ "$USE_BITAUG" = true ]; then
+    CMD+=(--bitaug)
+    CMD+=(--bitaug_lambda $BITAUG_LAMBDA)
+    CMD+=(--bitaug_neighbor_range $BITAUG_NEIGHBOR_RANGE)
+    CMD+=(--bitaug_min_bits $BITAUG_MIN_BITS)
+    CMD+=(--bitaug_max_bits $BITAUG_MAX_BITS)
 fi
 
 if [ -n "$ADC_RESUME_DIR" ]; then
