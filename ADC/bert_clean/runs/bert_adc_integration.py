@@ -198,7 +198,7 @@ class ADCLossTrainer(Trainer):
             aug_loss, _ = self._compute_task_loss(model, inputs)
             
             # Add BitAug loss component (task loss only)
-            total_loss = total_loss + self.bitaug_lambda * aug_loss
+            total_loss += self.bitaug_lambda * aug_loss
             
             # Restore target ADC bits
             set_model_adc_bits(model, self.target_ba)
