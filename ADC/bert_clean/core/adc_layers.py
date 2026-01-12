@@ -281,24 +281,19 @@ class QATLinearADC(nn.Linear):
         # HACK: For A-shift, force signed delta formula (codes are signed after shift)
         # а как с этим вообще ashift связан то епта
         adc_signed_activations = True if ashift else signed_activations
-        # self.adc_quantizer = ADCQuantizer(
-        #     M=in_features,
-        #     bx=bx,
-        #     bw=bw,
-        #     ba=ba,
-        #     k=k,
-        #     signed_activations=adc_signed_activations,  #signed_activations
-        # )
+        # Precompute constants that don't depend on ba (used in delta calculation)
         if signed_activations:
-            activation_level_magnitude = float(2 ** (bx - 1) - 1)
+            self._activation_level_magnitude = float(2 ** (bx - 1) - 1)
         else:
-            activation_level_magnitude = float(2 ** bx - 1)
-        weight_level_max = float(2 ** (bw - 1) - 1)
+            self._activation_level_magnitude = float(2 ** bx - 1)
+        self._weight_level_max = float(2 ** (bw - 1) - 1)
+        
+        # Calculate initial delta and clipping values based on ba
         denom = float((2 ** ba) * k)
-        self.delta = (2.0 * float(in_features) * activation_level_magnitude * weight_level_max) / denom
+        self.delta = (2.0 * float(in_features) * self._activation_level_magnitude * self._weight_level_max) / denom
 
-        self.na = -(2**(ba-1))  # Negative clipping value
-        self.pa = 2**(ba-1) - 1  # Positive clipping value
+        self.na = -(2 ** (ba - 1))  # Negative clipping value
+        self.pa = 2 ** (ba - 1) - 1  # Positive clipping value
         
         # Ashift constant
         if ashift:
@@ -328,14 +323,9 @@ class QATLinearADC(nn.Linear):
         """
         self.ba = ba
         
-        # Recalculate delta (Paper Equation 3)
-        if self.signed_activations:
-            activation_level_magnitude = float(2 ** (self.bx - 1) - 1)
-        else:
-            activation_level_magnitude = float(2 ** self.bx - 1)
-        weight_level_max = float(2 ** (self.bw - 1) - 1)
+        # Recalculate delta using precomputed constants (Paper Equation 3)
         denom = float((2 ** ba) * self.k)
-        self.delta = (2.0 * float(self.in_features) * activation_level_magnitude * weight_level_max) / denom
+        self.delta = (2.0 * float(self.in_features) * self._activation_level_magnitude * self._weight_level_max) / denom
         
         # Recalculate clipping values
         self.na = -(2 ** (ba - 1))
