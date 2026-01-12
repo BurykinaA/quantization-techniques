@@ -196,10 +196,9 @@ class ADCLossTrainer(Trainer):
             
             # Forward pass with augmented bits (no need to keep outputs)
             aug_loss, _ = self._compute_task_loss(model, inputs)
-            aug_auxiliary = self._compute_auxiliary_loss(model, main_loss.device, main_loss.dtype)
             
-            # Add BitAug loss component
-            bitaug_loss = self.bitaug_lambda * (aug_loss + aug_auxiliary)
+            # Add BitAug loss component (task loss only)
+            bitaug_loss = self.bitaug_lambda * aug_loss
             total_loss = total_loss + bitaug_loss
             
             # Restore target ADC bits
