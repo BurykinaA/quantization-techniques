@@ -187,7 +187,7 @@ class ADCLossTrainer(Trainer):
         total_loss = main_loss + auxiliary_loss
         
         # === Step 2: BitAug - forward pass with augmented bit precision ===
-        if self.use_bitaug and self.training and self.bitaug_neighbors:
+        if self.use_bitaug and model.training and self.bitaug_neighbors:
             # Randomly sample one bit precision from neighbors (Paper Eq. 10)
             aug_ba = random.choice(self.bitaug_neighbors)
             

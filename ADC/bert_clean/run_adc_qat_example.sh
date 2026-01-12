@@ -14,7 +14,7 @@ FP_CHECKPOINT=""  # Leave empty when resuming from PTQ
 ADC_RESUME_DIR_DEFAULT="./ADC/bert_clean_old/checkpoints/outputs_adc_ptq_k16_fix_20251125"
 
 # Where to store QAT outputs (checkpoints, logs, metrics)
-OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_qat_k16_conservative"
+OUTPUT_DIR="./ADC/bert_clean/checkpoints/outputs_adc_qat_k16_bitaug"
 
 # ADC hardware configuration - MUST MATCH PTQ CHECKPOINT!
 BX=8                # Activation bits
@@ -70,7 +70,7 @@ SEED=42
 # WandB settings
 WANDB_ENABLE=true
 WANDB_PROJECT="bert-adc-qat"
-WANDB_RUN_NAME="qat_bx${BX}_bw${BW}_ba${BA}_k${K}"
+WANDB_RUN_NAME="qat_bx${BX}_bw${BW}_ba${BA}_k${K}_bitaug${USE_BITAUG}"
 WANDB_TAGS=("qat" "adc" "${BX}bx" "${BW}bw" "${BA}ba")
 WANDB_NOTES="ADC QAT demo run on SQuAD v1.1"
 
