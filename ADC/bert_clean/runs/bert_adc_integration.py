@@ -39,7 +39,7 @@ from ADC.bert_clean.core.adc_layers import (
 from transformers import TrainerCallback, TrainingArguments, TrainerState, TrainerControl
 
 
-from adc_monitoring_integration import create_adc_training_monitor, add_adc_monitoring_to_model
+from .adc_monitoring_integration import create_adc_training_monitor, add_adc_monitoring_to_model
 ADC_MONITORING_AVAILABLE = True
 
 
