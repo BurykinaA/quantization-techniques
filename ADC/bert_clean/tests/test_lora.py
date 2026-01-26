@@ -126,6 +126,12 @@ def test_gradient_flow():
     nn.init.xavier_uniform_(base_layer.weight)
     
     lora_layer = LoRAQATLinearADC(base_layer, r=4, alpha=8.0)
+    
+    # IMPORTANT: Set B to non-zero so gradients flow to A
+    # When B=0, d(A@B)/dA = B^T = 0, so no gradient to A (mathematically correct!)
+    with torch.no_grad():
+        lora_layer.lora_B.normal_(0, 0.1)
+    
     lora_layer.train()
     
     # Forward pass
@@ -162,6 +168,13 @@ def test_gradient_flow_tiled():
     )
     
     lora_layer = LoRATiledLinearADC(base_layer, r=4, alpha=8.0)
+    
+    # Set B to non-zero so gradients flow to A
+    # When B=0, d(A@B)/dA = B^T = 0, so no gradient to A
+    with torch.no_grad():
+        for lora_b in lora_layer.lora_B:
+            lora_b.normal_(0, 0.1)
+    
     lora_layer.train()
     
     x = torch.randn(2, 128, requires_grad=True)
@@ -173,10 +186,12 @@ def test_gradient_flow_tiled():
     for i, tile in enumerate(lora_layer.tiled_layer.tiles):
         assert tile.weight.grad is None, f"Tile {i} weight should not have gradients"
     
-    # Check LoRA parameters have gradients
+    # Check LoRA parameters have gradients and they are non-zero
     for i in range(lora_layer.n_tiles):
         assert lora_layer.lora_A[i].grad is not None, f"LoRA A[{i}] should have gradients"
         assert lora_layer.lora_B[i].grad is not None, f"LoRA B[{i}] should have gradients"
+        assert lora_layer.lora_A[i].grad.abs().sum() > 0, f"LoRA A[{i}] gradient should be non-zero"
+        assert lora_layer.lora_B[i].grad.abs().sum() > 0, f"LoRA B[{i}] gradient should be non-zero"
     
     print("  PASSED: Gradients flow correctly for tiled LoRA layer")
 
