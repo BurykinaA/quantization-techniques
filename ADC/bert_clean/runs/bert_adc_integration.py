@@ -28,7 +28,13 @@ from transformers import (
     TrainerControl,
 )
 
-from ADC.bert_clean.core.adc_layers import QATLinearADC, TiledLinearADC, LearnableQuantizer  # noqa: F401
+from ADC.bert_clean.core.adc_layers import (
+    QATLinearADC, 
+    TiledLinearADC, 
+    LearnableQuantizer,
+    LoRAQATLinearADC,
+    LoRATiledLinearADC,
+)  # noqa: F401
 
 from transformers import TrainerCallback, TrainingArguments, TrainerState, TrainerControl
 
@@ -83,9 +89,176 @@ def set_model_adc_bits(model: nn.Module, ba: int):
         ba: New ADC bit precision
     """
     for module in model.modules():
-        if isinstance(module, (TiledLinearADC, QATLinearADC)):
+        if isinstance(module, (TiledLinearADC, QATLinearADC, LoRATiledLinearADC)):
             if hasattr(module, 'set_adc_bits'):
                 module.set_adc_bits(ba)
+
+
+def warmup_lora_mse(
+    model: nn.Module,
+    dataloader,
+    num_steps: int = 100,
+    lr: float = 1e-3,
+    device: str = 'cuda'
+) -> float:
+    """
+    Warmup LoRA parameters using MSE optimization (Paper Equation 12).
+    
+    Minimizes: ||Qx(X)Qw(W) - Y||^2_F
+    where Y = QA(Qx(X)Qw(W + AB))
+    
+    This finds A, B such that the ADC-quantized output with LoRA
+    matches the quantized output WITHOUT ADC as closely as possible.
+    The goal is to compensate for ADC quantization error via LoRA.
+    
+    Args:
+        model: Model with LoRA layers (LoRATiledLinearADC)
+        dataloader: DataLoader for warmup data
+        num_steps: Number of optimization steps
+        lr: Learning rate for warmup optimization
+        device: Device to run on
+        
+    Returns:
+        Final average MSE loss
+    """
+    # Collect LoRA parameters
+    lora_params = []
+    for name, param in model.named_parameters():
+        if 'lora_A' in name or 'lora_B' in name:
+            param.requires_grad = True
+            lora_params.append(param)
+    
+    if not lora_params:
+        logger.warning("No LoRA parameters found for warmup")
+        return 0.0
+    
+    # Collect LoRA layers for per-layer MSE computation
+    lora_layers = []
+    lora_layer_names = []
+    for name, module in model.named_modules():
+        if isinstance(module, (LoRATiledLinearADC, LoRAQATLinearADC)):
+            lora_layers.append(module)
+            lora_layer_names.append(name)
+    
+    if not lora_layers:
+        logger.warning("No LoRA layers found for warmup")
+        return 0.0
+    
+    logger.info(f"LoRA MSE warmup (Eq. 12): {len(lora_params)} params, "
+               f"{len(lora_layers)} layers, {num_steps} steps, lr={lr}")
+    
+    optimizer = torch.optim.Adam(lora_params, lr=lr)
+    model.train()
+    
+    # Hook storage for layer inputs/outputs
+    layer_inputs = {}
+    
+    def make_input_hook(layer_name):
+        def hook(module, args, kwargs):
+            # Store the input tensor for this layer
+            if len(args) > 0:
+                layer_inputs[layer_name] = args[0].detach().clone()
+        return hook
+    
+    # Register forward pre-hooks to capture inputs
+    hooks = []
+    for name, layer in zip(lora_layer_names, lora_layers):
+        hook = layer.register_forward_pre_hook(make_input_hook(name), with_kwargs=True)
+        hooks.append(hook)
+    
+    total_loss = 0.0
+    step = 0
+    
+    try:
+        for batch in dataloader:
+            if step >= num_steps:
+                break
+            
+            # Move batch to device
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
+            
+            optimizer.zero_grad()
+            layer_inputs.clear()
+            
+            # Forward pass to capture layer inputs
+            with torch.no_grad():
+                _ = model(**batch)
+            
+            # Now compute per-layer MSE loss (Equation 12)
+            # ||Qx(X)Qw(W) - QA(Qx(X)Qw(W + AB))||^2_F
+            mse_loss = torch.tensor(0.0, device=device, requires_grad=True)
+            
+            for name, layer in zip(lora_layer_names, lora_layers):
+                if name not in layer_inputs:
+                    continue
+                
+                x = layer_inputs[name].requires_grad_(False)
+                
+                # Reference: Qx(X) @ Qw(W) - no ADC, no LoRA
+                with torch.no_grad():
+                    ref_output = layer.compute_reference_output(x)
+                
+                # LoRA output: QA(Qx(X) @ Qw(W + AB)) - with ADC, with LoRA
+                lora_output = layer(x)
+                
+                # MSE loss for this layer (Frobenius norm squared)
+                layer_mse = ((ref_output - lora_output) ** 2).mean()
+                mse_loss = mse_loss + layer_mse
+            
+            mse_loss.backward()
+            optimizer.step()
+            
+            total_loss += mse_loss.item()
+            step += 1
+            
+            if step % 20 == 0:
+                logger.info(f"LoRA warmup step {step}/{num_steps}, MSE loss: {mse_loss.item():.6f}")
+    
+    finally:
+        # Remove hooks
+        for hook in hooks:
+            hook.remove()
+    
+    avg_loss = total_loss / max(step, 1)
+    logger.info(f"LoRA MSE warmup complete. Average MSE loss: {avg_loss:.6f}")
+    
+    return avg_loss
+
+
+def get_lora_param_count(model: nn.Module) -> dict:
+    """
+    Count trainable and total parameters in a model with LoRA.
+    
+    Returns:
+        Dictionary with 'lora_params', 'frozen_params', 'total_params', 'compression_ratio'
+    """
+    lora_params = 0
+    frozen_params = 0
+    trainable_other = 0
+    
+    for name, param in model.named_parameters():
+        if 'lora_A' in name or 'lora_B' in name:
+            lora_params += param.numel()
+        elif not param.requires_grad:
+            frozen_params += param.numel()
+        else:
+            trainable_other += param.numel()
+    
+    total_trainable = lora_params + trainable_other
+    total_params = lora_params + frozen_params + trainable_other
+    
+    # Compression ratio: how many times fewer trainable params vs full fine-tuning
+    full_trainable = frozen_params + lora_params + trainable_other  # If nothing was frozen
+    compression_ratio = full_trainable / total_trainable if total_trainable > 0 else 1.0
+    
+    return {
+        'lora_params': lora_params,
+        'frozen_params': frozen_params,
+        'trainable_other': trainable_other,
+        'total_trainable': total_trainable,
+        'total_params': total_params,
+        'compression_ratio': compression_ratio,
+    }
 
 
 class ADCLossTrainer(Trainer):
@@ -265,6 +438,12 @@ class BertADCConverter:
         use_kurtosis_loss: bool = True,
         kurtosis_weight: float = 0.0006,
         target_kurtosis: float = 1.8,
+        # LoRA parameters (Paper Section 3.4: Training Overhead Reduction)
+        use_lora: bool = False,
+        lora_r: int = 8,
+        lora_alpha: float = 16.0,
+        lora_dropout: float = 0.0,
+        lora_target_modules: Optional[List[str]] = None,
     ) -> nn.Module:
         """
         Replace all nn.Linear layers in the model with TiledLinearADC, except excluded.
@@ -279,6 +458,12 @@ class BertADCConverter:
                     uses asymmetric quantization + A-shift, all others use symmetric.
             exclude_patterns: List of substrings of module names to exclude.
             mvm_limit: Memory vector multiplication limit for tiling.
+            use_lora: Enable ADC-LoRA for reduced trainable parameters.
+            lora_r: LoRA rank (dimension of low-rank matrices).
+            lora_alpha: LoRA scaling factor (scaling = alpha / r).
+            lora_dropout: Dropout rate for LoRA path.
+            lora_target_modules: List of module name patterns to apply LoRA to.
+                                 Default: ["query", "value"] (standard for transformers).
             
         Note:
             signed_activations is now determined per-layer automatically:
@@ -288,9 +473,19 @@ class BertADCConverter:
         if exclude_patterns is None:
             # Default: don't quantize embeddings/pooler and QA output head unless requested
             exclude_patterns = ["embeddings", "pooler", "qa_outputs"]
+        
+        if lora_target_modules is None:
+            # Default LoRA targets: query and value projections (standard for transformers)
+            lora_target_modules = ["query", "value"]
 
         def should_exclude(name: str) -> bool:
             return any(pat in name for pat in exclude_patterns)
+        
+        def should_apply_lora(name: str) -> bool:
+            """Check if this layer should have LoRA applied."""
+            if not use_lora:
+                return False
+            return any(target in name for target in lora_target_modules)
         
         def is_after_gelu(name: str) -> bool:
             """Detect if this linear layer follows a GeLU. Only used for logging now."""
@@ -323,10 +518,24 @@ class BertADCConverter:
                     )
                     # Use the load_weights method instead of manual copying
                     adc_qat_layer.load_weights(child_module)
-                    setattr(module, child_name, adc_qat_layer)
                     
-                    quant_type = "A-shift (asymmetric)" if layer_ashift else "symmetric"
-                    logger.info(f"Replaced {full_name} with TiledLinearADC ({quant_type}, bx={bx}, bw={bw}, ba={ba}, k={k})")
+                    # Wrap with LoRA if this layer should have LoRA applied
+                    if should_apply_lora(full_name):
+                        adc_qat_layer = LoRATiledLinearADC(
+                            tiled_layer=adc_qat_layer,
+                            r=lora_r,
+                            alpha=lora_alpha,
+                            dropout=lora_dropout,
+                        )
+                        quant_type = "A-shift (asymmetric)" if layer_ashift else "symmetric"
+                        logger.info(f"Replaced {full_name} with LoRATiledLinearADC "
+                                   f"({quant_type}, bx={bx}, bw={bw}, ba={ba}, k={k}, "
+                                   f"lora_r={lora_r}, lora_alpha={lora_alpha})")
+                    else:
+                        quant_type = "A-shift (asymmetric)" if layer_ashift else "symmetric"
+                        logger.info(f"Replaced {full_name} with TiledLinearADC ({quant_type}, bx={bx}, bw={bw}, ba={ba}, k={k})")
+                    
+                    setattr(module, child_name, adc_qat_layer)
                 else:
                     replace_recursive(child_module, full_name)
 
@@ -335,9 +544,12 @@ class BertADCConverter:
 
     @staticmethod
     def count_adc_qat_layers(model: nn.Module) -> Dict[str, int]:
-        counts = {"adc_qat_linear": 0, "regular_linear": 0, "total_params": 0}
+        counts = {"adc_qat_linear": 0, "lora_linear": 0, "regular_linear": 0, "total_params": 0, "lora_params": 0}
         for _, module in model.named_modules():
-            if isinstance(module, (QATLinearADC, TiledLinearADC)):
+            if isinstance(module, (LoRATiledLinearADC, LoRAQATLinearADC)):
+                counts["lora_linear"] += 1
+                counts["lora_params"] += module.get_num_trainable_params()
+            elif isinstance(module, (QATLinearADC, TiledLinearADC)):
                 counts["adc_qat_linear"] += 1
             elif isinstance(module, nn.Linear):
                 counts["regular_linear"] += 1
@@ -970,6 +1182,25 @@ def main():
                        help="Minimum bit precision for BitAug sampling")
     parser.add_argument("--bitaug_max_bits", type=int, default=12, 
                        help="Maximum bit precision for BitAug sampling")
+    
+    # ADC-LoRA parameters (Paper Section 3.4: Training Overhead Reduction)
+    parser.add_argument("--use_lora", action="store_true",
+                       help="Enable ADC-LoRA: reduce trainable parameters by using low-rank adaptation. "
+                            "Implements Eq. 11: Y = QA(Qx(X)Qw(W + AB))")
+    parser.add_argument("--lora_r", type=int, default=8,
+                       help="LoRA rank r (dimension of low-rank matrices, default: 8)")
+    parser.add_argument("--lora_alpha", type=float, default=16.0,
+                       help="LoRA scaling factor alpha (scaling = alpha/r, default: 16.0)")
+    parser.add_argument("--lora_dropout", type=float, default=0.0,
+                       help="LoRA dropout rate (default: 0.0)")
+    parser.add_argument("--lora_target_modules", type=str, nargs="+", 
+                       default=["query", "value"],
+                       help="Module name patterns to apply LoRA to (default: ['query', 'value'])")
+    parser.add_argument("--lora_warmup_steps", type=int, default=0,
+                       help="Number of MSE warmup steps for LoRA initialization (default: 0, disabled)")
+    parser.add_argument("--lora_warmup_lr", type=float, default=1e-3,
+                       help="Learning rate for LoRA MSE warmup (default: 1e-3)")
+    
     args = parser.parse_args()
 
     set_seed(args.seed)
@@ -979,7 +1210,8 @@ def main():
     wandb_run = None
 
     if use_wandb:
-        default_run_name = f"qat_bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}"
+        lora_suffix = f"_lora_r{args.lora_r}" if args.use_lora else ""
+        default_run_name = f"qat_bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}{lora_suffix}"
         run_name = args.wandb_run_name or default_run_name
         wandb_config = {
             "bx": args.bx,
@@ -997,6 +1229,13 @@ def main():
             "seed": args.seed,
             "mvm_limit": args.mvm_limit,
             "delta_loss_weight": 0.0 if args.fixed_delta else 0.01,
+            # LoRA parameters
+            "use_lora": args.use_lora,
+            "lora_r": args.lora_r if args.use_lora else None,
+            "lora_alpha": args.lora_alpha if args.use_lora else None,
+            "lora_dropout": args.lora_dropout if args.use_lora else None,
+            "lora_target_modules": args.lora_target_modules if args.use_lora else None,
+            "lora_warmup_steps": args.lora_warmup_steps if args.use_lora else None,
         }
         wandb_run = wandb.init(
                 project=args.wandb_project,
@@ -1050,6 +1289,12 @@ def main():
             use_kurtosis_loss=(args.kurtosis_lambda > 0),
             kurtosis_weight=args.kurtosis_lambda if args.kurtosis_lambda > 0 else 0.0006,
             target_kurtosis=1.8,
+            # LoRA parameters (Paper Section 3.4)
+            use_lora=args.use_lora,
+            lora_r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            lora_target_modules=args.lora_target_modules,
         )
 
         # Load the state dict with strict=False to handle quantizer parameters
@@ -1154,16 +1399,17 @@ def main():
             k=args.k,
             ashift=args.ashift,
             exclude_patterns=exclude_patterns,
-            # When eval_only, force analytical delta (disable dynamics)
             mvm_limit=args.mvm_limit,
-            use_dynamic_delta=(not args.fixed_delta),
-            use_delta_anneal=(not args.fixed_delta),
-            delta_loss_weight=(0.0 if args.fixed_delta else 0.01),
-            delta_anneal_epochs=1.0,
             # W-reshape (kurtosis) parameters
             use_kurtosis_loss=(args.kurtosis_lambda > 0),
             kurtosis_weight=args.kurtosis_lambda if args.kurtosis_lambda > 0 else 0.0006,
             target_kurtosis=1.8,
+            # LoRA parameters (Paper Section 3.4)
+            use_lora=args.use_lora,
+            lora_r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            lora_target_modules=args.lora_target_modules,
         )
 
     if do_warm_start:
@@ -1209,10 +1455,25 @@ def main():
             adc_step_monitor = None
 
     stats = BertADCConverter.count_adc_qat_layers(model)
-    logger.info(f"ADC QAT conversion: {stats['adc_qat_linear']} TiledLinearADC, {stats['regular_linear']} remaining Linear, "
+    logger.info(f"ADC QAT conversion: {stats['adc_qat_linear']} TiledLinearADC, "
+                f"{stats.get('lora_linear', 0)} LoRATiledLinearADC, "
+                f"{stats['regular_linear']} remaining Linear, "
                 f"{stats['total_params']:,} params")
+    
+    # Log LoRA-specific information
+    if args.use_lora:
+        lora_stats = get_lora_param_count(model)
+        logger.info(f"LoRA enabled: {lora_stats['lora_params']:,} trainable LoRA params, "
+                   f"{lora_stats['frozen_params']:,} frozen params, "
+                   f"compression ratio: {lora_stats['compression_ratio']:.1f}x")
+        if use_wandb and wandb_run is not None:
+            wandb.run.summary["lora_params"] = lora_stats["lora_params"]
+            wandb.run.summary["frozen_params"] = lora_stats["frozen_params"]
+            wandb.run.summary["lora_compression_ratio"] = lora_stats["compression_ratio"]
+    
     if use_wandb and wandb_run is not None:
         wandb.run.summary["adc_qat_linear_layers"] = stats["adc_qat_linear"]
+        wandb.run.summary["lora_linear_layers"] = stats.get("lora_linear", 0)
         wandb.run.summary["regular_linear_layers"] = stats["regular_linear"]
         wandb.run.summary["total_params"] = stats["total_params"]
 
@@ -1337,6 +1598,33 @@ def main():
         target_ba=args.ba,
         bitaug_neighbors=bitaug_neighbors,
     )
+
+    # LoRA MSE warmup (Paper Equation 12)
+    if args.use_lora and args.lora_warmup_steps > 0 and not args.eval_only:
+        logger.info(f"Running LoRA MSE warmup for {args.lora_warmup_steps} steps...")
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model.to(device)
+        
+        # Create a small dataloader for warmup
+        warmup_dataloader = torch.utils.data.DataLoader(
+            train_dataset,
+            batch_size=args.per_device_train_batch_size,
+            shuffle=True,
+            collate_fn=default_data_collator,
+        )
+        
+        warmup_loss = warmup_lora_mse(
+            model=model,
+            dataloader=warmup_dataloader,
+            num_steps=args.lora_warmup_steps,
+            lr=args.lora_warmup_lr,
+            device=device,
+        )
+        
+        if use_wandb and wandb_run is not None:
+            wandb.log({"lora/warmup_loss": warmup_loss})
+        
+        logger.info(f"LoRA warmup complete with final loss: {warmup_loss:.6f}")
 
     train_metrics = {}
     if args.eval_only:
