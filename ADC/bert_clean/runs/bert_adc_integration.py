@@ -614,6 +614,7 @@ def load_state_dict_flexible(model: nn.Module, state_dict: Dict[str, torch.Tenso
     """
     Load state dict with flexible shape handling for quantizer parameters.
     Handles per-channel quantizer scales that need to be resized.
+    Also handles LoRA key remapping (e.g., query.tiles.0 -> query.tiled_layer.tiles.0).
     
     Returns:
         Tuple of (missing_keys, unexpected_keys)
@@ -621,58 +622,96 @@ def load_state_dict_flexible(model: nn.Module, state_dict: Dict[str, torch.Tenso
     model_state = model.state_dict()
     missing_keys = []
     unexpected_keys = []
+    loaded_keys = set()
+    remapped_count = 0
     
-    # First pass: load with flexible shape matching
-    for key, checkpoint_tensor in state_dict.items():
+    # Build a mapping for LoRA key remapping
+    # When LoRA wraps TiledLinearADC, path changes from .tiles. to .tiled_layer.tiles.
+    def remap_key_for_lora(key: str) -> str:
+        """Try to remap checkpoint key to model key for LoRA layers."""
+        # Check if the key needs LoRA remapping
+        # Pattern: something.tiles.X.something -> something.tiled_layer.tiles.X.something
+        if '.tiles.' in key and '.tiled_layer.' not in key:
+            # Find modules that might be LoRA-wrapped in the model
+            # Try adding .tiled_layer. before .tiles.
+            parts = key.split('.tiles.')
+            if len(parts) == 2:
+                remapped = parts[0] + '.tiled_layer.tiles.' + parts[1]
+                if remapped in model_state:
+                    return remapped
+        return key
+    
+    # Create a remapped state dict
+    remapped_state_dict = {}
+    for key, tensor in state_dict.items():
+        remapped_key = remap_key_for_lora(key)
+        if remapped_key != key:
+            remapped_count += 1
+        remapped_state_dict[remapped_key] = tensor
+    
+    if remapped_count > 0:
+        logger.info(f"Remapped {remapped_count} keys for LoRA compatibility")
+    
+    # Now load using standard approach with strict=False
+    # First, handle shape mismatches for quantizer parameters
+    for key, checkpoint_tensor in remapped_state_dict.items():
         if key not in model_state:
             unexpected_keys.append(key)
             continue
         
-        model_param = model.state_dict()[key]
+        model_shape = model_state[key].shape
         
-        # Check if shapes match
-        if checkpoint_tensor.shape == model_param.shape:
-            # Direct copy
-            model.state_dict()[key].copy_(checkpoint_tensor)
-        else:
+        if checkpoint_tensor.shape != model_shape:
             # Handle shape mismatch for quantizer parameters
             if 'quantizer.scale' in key or 'quantizer.zero_point' in key:
-                # Find the actual parameter in the model
-                param = model
-                for attr in key.split('.'):
-                    param = getattr(param, attr)
-                
-                # Resize if it's a Parameter
-                if isinstance(param, nn.Parameter):
+                # Find the actual parameter in the model and resize it
+                try:
+                    param = model
+                    for attr in key.split('.'):
+                        param = getattr(param, attr)
+                    
                     with torch.no_grad():
-                        # Resize the parameter to match checkpoint
-                        new_param = nn.Parameter(checkpoint_tensor.clone())
-                        # Navigate to parent and set attribute
-                        parent = model
-                        attrs = key.split('.')
-                        for attr in attrs[:-1]:
-                            parent = getattr(parent, attr)
-                        setattr(parent, attrs[-1], new_param)
-                        logger.info(f"Resized parameter {key}: {model_param.shape} → {checkpoint_tensor.shape}")
-                elif torch.is_tensor(param):
-                    # It's a buffer, resize via parent module
-                    parent = model
-                    attrs = key.split('.')
-                    for attr in attrs[:-1]:
-                        parent = getattr(parent, attr)
-                    # Unregister old buffer and register new one
-                    delattr(parent, attrs[-1])
-                    parent.register_buffer(attrs[-1], checkpoint_tensor.clone())
-                    logger.info(f"Resized buffer {key}: {model_param.shape} → {checkpoint_tensor.shape}")
+                        if isinstance(param, nn.Parameter):
+                            param.data = checkpoint_tensor.clone()
+                        elif torch.is_tensor(param):
+                            param.copy_(checkpoint_tensor)
+                    loaded_keys.add(key)
+                except Exception as e:
+                    logger.warning(f"Failed to load {key}: {e}")
+                    missing_keys.append(key)
             else:
-                # For non-quantizer parameters, skip mismatched shapes
                 missing_keys.append(key)
-                logger.warning(f"Shape mismatch for {key}: checkpoint {checkpoint_tensor.shape} vs model {model_param.shape}")
+                logger.warning(f"Shape mismatch for {key}: checkpoint {checkpoint_tensor.shape} vs model {model_shape}")
+        else:
+            loaded_keys.add(key)
+    
+    # Now do the actual load for matching keys
+    # Filter state dict to only include keys that exist in model and have matching shapes
+    filtered_state_dict = {}
+    for key, tensor in remapped_state_dict.items():
+        if key in model_state and key not in missing_keys:
+            if tensor.shape == model_state[key].shape or key in loaded_keys:
+                filtered_state_dict[key] = tensor
+    
+    # Load the filtered state dict
+    load_result = model.load_state_dict(filtered_state_dict, strict=False)
+    
+    # Combine missing/unexpected with load_result
+    for key in load_result.missing_keys:
+        if key not in missing_keys and key not in loaded_keys:
+            missing_keys.append(key)
+    for key in load_result.unexpected_keys:
+        if key not in unexpected_keys:
+            unexpected_keys.append(key)
     
     # Check for missing keys (parameters in model but not in checkpoint)
     for key in model_state.keys():
-        if key not in state_dict:
-            missing_keys.append(key)
+        if key not in remapped_state_dict and key not in missing_keys:
+            # Only add if not a LoRA parameter (those are expected to be missing)
+            if 'lora_A' not in key and 'lora_B' not in key:
+                missing_keys.append(key)
+    
+    logger.info(f"Loaded {len(filtered_state_dict)} keys into model")
     
     return missing_keys, unexpected_keys
 
@@ -1325,21 +1364,27 @@ def main():
         
         # Mark all quantizers as initialized so they don't try to reinitialize
         for name, module in model.named_modules():
-            if isinstance(module, (QATLinearADC, TiledLinearADC)):
-                if isinstance(module, TiledLinearADC):
-                    tiles = module.tiles
-                else:
-                    tiles = [module]
-                
-                for tile in tiles:
-                    if hasattr(tile, 'activation_quantizer'):
-                        tile.activation_quantizer._scale_initialized = True
-                        if hasattr(tile.activation_quantizer, '_zp_initialized'):
-                            tile.activation_quantizer._zp_initialized = True
-                    if hasattr(tile, 'weight_quantizer'):
-                        tile.weight_quantizer._scale_initialized = True
-                        if hasattr(tile.weight_quantizer, '_zp_initialized'):
-                            tile.weight_quantizer._zp_initialized = True
+            # Handle LoRA-wrapped layers
+            if isinstance(module, LoRATiledLinearADC):
+                tiles = module.tiled_layer.tiles
+            elif isinstance(module, LoRAQATLinearADC):
+                tiles = [module.base_layer]
+            elif isinstance(module, TiledLinearADC):
+                tiles = module.tiles
+            elif isinstance(module, QATLinearADC):
+                tiles = [module]
+            else:
+                continue
+            
+            for tile in tiles:
+                if hasattr(tile, 'activation_quantizer'):
+                    tile.activation_quantizer._scale_initialized = True
+                    if hasattr(tile.activation_quantizer, '_zp_initialized'):
+                        tile.activation_quantizer._zp_initialized = True
+                if hasattr(tile, 'weight_quantizer'):
+                    tile.weight_quantizer._scale_initialized = True
+                    if hasattr(tile.weight_quantizer, '_zp_initialized'):
+                        tile.weight_quantizer._zp_initialized = True
         
         logger.info("Marked all quantizers as initialized")
         
