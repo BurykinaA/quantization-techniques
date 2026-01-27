@@ -55,12 +55,12 @@ LORA_WARMUP_LR=0.001              # Learning rate for warmup
 # ==============================================================================
 
 NUM_EPOCHS=3
-TRAIN_BATCH_SIZE=16   # Can use larger batch with LoRA (less memory for gradients)
-EVAL_BATCH_SIZE=32
+TRAIN_BATCH_SIZE=8   # Can use larger batch with LoRA (less memory for gradients)
+EVAL_BATCH_SIZE=16
 LEARNING_RATE=1e-4    # Higher LR is OK for LoRA (fewer params to update)
 WARMUP_RATIO=0.1
 WARMUP_STEPS=0
-EVAL_STEPS=100
+EVAL_STEPS=10
 SAVE_STEPS=500
 SAVE_TOTAL_LIMIT=3
 KURTOSIS_LAMBDA=0.0006  # Paper: W-reshape regularization (applied to effective weight)
