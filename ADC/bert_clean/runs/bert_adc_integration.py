@@ -1605,9 +1605,14 @@ def main():
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         model.to(device)
         
+        # Select only columns needed for model input (avoid None values in other columns)
+        model_input_columns = ["input_ids", "attention_mask", "token_type_ids", "start_positions", "end_positions"]
+        warmup_columns = [col for col in model_input_columns if col in train_dataset.column_names]
+        warmup_dataset = train_dataset.select_columns(warmup_columns)
+        
         # Create a small dataloader for warmup
         warmup_dataloader = torch.utils.data.DataLoader(
-            train_dataset,
+            warmup_dataset,
             batch_size=args.per_device_train_batch_size,
             shuffle=True,
             collate_fn=default_data_collator,
