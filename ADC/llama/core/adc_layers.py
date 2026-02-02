@@ -339,7 +339,8 @@ class QATLinearADC(nn.Linear):
         # Integer-path computation:
         # 1) Build activation codes (per-tensor quantizer)
         act_q = self.activation_quantizer
-        s_x = act_q.scale  # Use original scale (gradient clipping happens in safe_divide)
+        # Ensure scale is on the same device as input
+        s_x = act_q.scale.to(x.device)
         
         if act_q.symmetric:
             # Signed path (no A-shift): symmetric quantization
@@ -349,7 +350,7 @@ class QATLinearADC(nn.Linear):
             code_x = torch.clamp(code_x, qmin_x, qmax_x)
         else:
             # Unsigned path: quantize to [0, 2^bx - 1] using zero_point offset
-            zp_x = act_q.zero_point
+            zp_x = act_q.zero_point.to(x.device)
             # Use safe_divide for gradient clipping, round_ste for STE
             code_x_temp = round_ste(safe_divide(x, s_x) + zp_x)
             code_x_temp = torch.clamp(code_x_temp, 0, act_q.qmax)
@@ -366,7 +367,8 @@ class QATLinearADC(nn.Linear):
 
         # 2) Build weight codes (per-channel symmetric, channel_dim=0)
         w_q = self.weight_quantizer
-        s_w_vec = w_q.scale  # Use original scale (gradient clipping happens in safe_divide)
+        # Ensure scale is on the same device as weights
+        s_w_vec = w_q.scale.to(self.weight.device)
         # Broadcast scales to weight shape for division
         s_w_b = s_w_vec.view(-1, 1)
         
@@ -428,7 +430,7 @@ class QATLinearADC(nn.Linear):
             if self.ashift:
                 # A-shift: we subtracted C, so residual is (zp_x - C)
                 # Correction: subtract zp_x contribution, add back C contribution
-                zp_x = act_q.zero_point
+                zp_x = act_q.zero_point.to(y_real.device)
                 y_real = y_real - (zp_x * s_x) * (s_w_vec * wq_sum)  # remove zp offset
                 y_real = y_real + (self.C * s_x) * (s_w_vec * wq_sum)  # add back C offset
             else:
@@ -722,13 +724,13 @@ class LoRAQATLinearADC(nn.Module):
         """
         # 1) Build activation codes (same as forward)
         act_q = self.base_layer.activation_quantizer
-        s_x = act_q.scale
+        s_x = act_q.scale.to(x.device)
         
         if act_q.symmetric:
             code_x = round_ste(safe_divide(x, s_x))
             code_x = torch.clamp(code_x, act_q.qmin, act_q.qmax)
         else:
-            zp_x = act_q.zero_point
+            zp_x = act_q.zero_point.to(x.device)
             code_x_temp = round_ste(safe_divide(x, s_x) + zp_x)
             code_x_temp = torch.clamp(code_x_temp, 0, act_q.qmax)
             
@@ -739,7 +741,7 @@ class LoRAQATLinearADC(nn.Module):
         
         # 2) Build weight codes using BASE weight W only (NO LoRA!)
         w_q = self.base_layer.weight_quantizer
-        s_w_vec = w_q.scale
+        s_w_vec = w_q.scale.to(self.base_layer.weight.device)
         s_w_b = s_w_vec.view(-1, 1)
         
         code_w = round_ste(safe_divide(self.base_layer.weight, s_w_b))
@@ -755,7 +757,7 @@ class LoRAQATLinearADC(nn.Module):
         if not act_q.symmetric:
             wq_sum = code_w.sum(dim=1)
             if self.base_layer.ashift:
-                zp_x = act_q.zero_point
+                zp_x = act_q.zero_point.to(x.device)
                 y_real = y_real - (zp_x * s_x) * (s_w_vec * wq_sum)
                 y_real = y_real + (self.base_layer.C * s_x) * (s_w_vec * wq_sum)
         
@@ -788,14 +790,14 @@ class LoRAQATLinearADC(nn.Module):
         
         # 1) Build activation codes (per-tensor quantizer)
         act_q = self.base_layer.activation_quantizer
-        s_x = act_q.scale
+        s_x = act_q.scale.to(x.device)
         
         if act_q.symmetric:
             code_x = round_ste(safe_divide(x, s_x))
             qmin_x, qmax_x = act_q.qmin, act_q.qmax
             code_x = torch.clamp(code_x, qmin_x, qmax_x)
         else:
-            zp_x = act_q.zero_point
+            zp_x = act_q.zero_point.to(x.device)
             code_x_temp = round_ste(safe_divide(x, s_x) + zp_x)
             code_x_temp = torch.clamp(code_x_temp, 0, act_q.qmax)
             
@@ -806,7 +808,7 @@ class LoRAQATLinearADC(nn.Module):
         
         # 2) Build weight codes using EFFECTIVE weight (W + LoRA)
         w_q = self.base_layer.weight_quantizer
-        s_w_vec = w_q.scale
+        s_w_vec = w_q.scale.to(effective_weight.device)
         s_w_b = s_w_vec.view(-1, 1)
         
         # Quantize effective weight (this is the key ADC-LoRA difference!)
@@ -846,7 +848,7 @@ class LoRAQATLinearADC(nn.Module):
             wq_sum = code_w.sum(dim=1)
             
             if self.base_layer.ashift:
-                zp_x = act_q.zero_point
+                zp_x = act_q.zero_point.to(x.device)
                 y_real = y_real - (zp_x * s_x) * (s_w_vec * wq_sum)
                 y_real = y_real + (self.base_layer.C * s_x) * (s_w_vec * wq_sum)
         
@@ -1011,13 +1013,13 @@ class LoRATiledLinearADC(nn.Module):
             
             # Activation quantization
             act_q = tile.activation_quantizer
-            s_x = act_q.scale
+            s_x = act_q.scale.to(xi.device)
             
             if act_q.symmetric:
                 code_x = round_ste(safe_divide(xi, s_x))
                 code_x = torch.clamp(code_x, act_q.qmin, act_q.qmax)
             else:
-                zp_x = act_q.zero_point
+                zp_x = act_q.zero_point.to(xi.device)
                 code_x_temp = round_ste(safe_divide(xi, s_x) + zp_x)
                 code_x_temp = torch.clamp(code_x_temp, 0, act_q.qmax)
                 
@@ -1028,7 +1030,7 @@ class LoRATiledLinearADC(nn.Module):
             
             # Weight quantization using BASE weight only (NO LoRA!)
             w_q = tile.weight_quantizer
-            s_w_vec = w_q.scale
+            s_w_vec = w_q.scale.to(tile.weight.device)
             s_w_b = s_w_vec.view(-1, 1)
             
             code_w = round_ste(safe_divide(tile.weight, s_w_b))
@@ -1044,7 +1046,7 @@ class LoRATiledLinearADC(nn.Module):
             if not act_q.symmetric:
                 wq_sum = code_w.sum(dim=1)
                 if tile.ashift:
-                    zp_x = act_q.zero_point
+                    zp_x = act_q.zero_point.to(xi.device)
                     y_real = y_real - (zp_x * s_x) * (s_w_vec * wq_sum)
                     y_real = y_real + (tile.C * s_x) * (s_w_vec * wq_sum)
             
@@ -1089,13 +1091,13 @@ class LoRATiledLinearADC(nn.Module):
             
             # ===== ADC Quantization Pipeline for this tile =====
             act_q = tile.activation_quantizer
-            s_x = act_q.scale
+            s_x = act_q.scale.to(xi.device)
             
             if act_q.symmetric:
                 code_x = round_ste(safe_divide(xi, s_x))
                 code_x = torch.clamp(code_x, act_q.qmin, act_q.qmax)
             else:
-                zp_x = act_q.zero_point
+                zp_x = act_q.zero_point.to(xi.device)
                 code_x_temp = round_ste(safe_divide(xi, s_x) + zp_x)
                 code_x_temp = torch.clamp(code_x_temp, 0, act_q.qmax)
                 
@@ -1106,7 +1108,7 @@ class LoRATiledLinearADC(nn.Module):
             
             # Weight quantization with effective weight
             w_q = tile.weight_quantizer
-            s_w_vec = w_q.scale
+            s_w_vec = w_q.scale.to(effective_weight.device)
             s_w_b = s_w_vec.view(-1, 1)
             
             code_w = round_ste(safe_divide(effective_weight, s_w_b))
@@ -1127,7 +1129,7 @@ class LoRATiledLinearADC(nn.Module):
             if not act_q.symmetric:
                 wq_sum = code_w.sum(dim=1)
                 if tile.ashift:
-                    zp_x = act_q.zero_point
+                    zp_x = act_q.zero_point.to(xi.device)
                     y_real = y_real - (zp_x * s_x) * (s_w_vec * wq_sum)
                     y_real = y_real + (tile.C * s_x) * (s_w_vec * wq_sum)
             
