@@ -266,12 +266,13 @@ class ADCCalibrator:
                 # Simulate quantization to get y_int
                 with torch.no_grad():
                     act_q = module.activation_quantizer
-                    s_x = act_q.scale
+                    # Ensure scale is on the same device as input
+                    s_x = act_q.scale.to(x.device)
                     if act_q.symmetric:
                         code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
                     else:
                         # Unsigned path: quantize to [0, 2^bx - 1] using zero_point offset
-                        zp_x = act_q.zero_point
+                        zp_x = act_q.zero_point.to(x.device)
                         code_x_temp = torch.clamp(torch.round(x / s_x + zp_x), 0, act_q.qmax)
                         
                         if hasattr(module, 'ashift') and module.ashift:
@@ -282,7 +283,8 @@ class ADCCalibrator:
                             code_x = code_x_temp - zp_x
                     
                     w_q = module.weight_quantizer
-                    s_w_vec = w_q.scale
+                    # Ensure scale is on the same device as weights
+                    s_w_vec = w_q.scale.to(w.device)
                     s_w_b = s_w_vec.view(-1, 1)
                     code_w = torch.clamp(torch.round(w / s_w_b), w_q.qmin, w_q.qmax)
                     
@@ -1073,13 +1075,13 @@ def _generate_adc_visualizations(model, sample_input, layer_patterns, title_pref
                 act_q = module.activation_quantizer
                 w_q = module.weight_quantizer
                 
-                # Build codes
-                s_x = act_q.scale
+                # Build codes - ensure scales are on the same device as inputs
+                s_x = act_q.scale.to(x.device)
                 if act_q.symmetric:
                     code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
                 else:
                     # Unsigned path: quantize to [0, 2^bx - 1] using zero_point offset
-                    zp_x = act_q.zero_point
+                    zp_x = act_q.zero_point.to(x.device)
                     code_x_temp = torch.clamp(torch.round(x / s_x + zp_x), 0, act_q.qmax)
                     
                     if hasattr(module, 'ashift') and module.ashift:
@@ -1089,8 +1091,8 @@ def _generate_adc_visualizations(model, sample_input, layer_patterns, title_pref
                         # Standard asymmetric: subtract learned zero_point to center
                         code_x = code_x_temp - zp_x
                 
-                # Weight codes
-                s_w_vec = w_q.scale
+                # Weight codes - ensure scales are on the same device as weights
+                s_w_vec = w_q.scale.to(module.weight.device)
                 s_w_b = s_w_vec.view(-1, 1)
                 code_w = torch.clamp(torch.round(module.weight / s_w_b), w_q.qmin, w_q.qmax)
                 
