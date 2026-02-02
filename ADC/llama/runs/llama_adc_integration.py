@@ -28,7 +28,7 @@ from transformers import (
     TrainerControl,
 )
 
-from ADC.bert_clean.core.adc_layers import (
+from ADC.llama.core.adc_layers import (
     QATLinearADC, 
     TiledLinearADC, 
     LearnableQuantizer,

@@ -3,7 +3,7 @@ Easy integration for monitoring ADC distributions in your BERT training
 """
 
 import torch
-from ADC.bert_clean.visualisation.adc_distribution_plotter import ADCDistributionPlotter
+from ADC.llama.visualisation.adc_distribution_plotter import ADCDistributionPlotter
 
 
 def add_adc_monitoring_to_layer(layer, layer_name: str, plotter: ADCDistributionPlotter, monitor_full_pipeline: bool = True):

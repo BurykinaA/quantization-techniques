@@ -31,8 +31,8 @@ import sys
 from pathlib import Path
 
 # Import with FULL paths to avoid class identity issues
-from ADC.bert_clean.core.adc_layers import TiledLinearADC, QATLinearADC
-from ADC.bert_clean.runs.bert_adc_integration import (
+from ADC.llama.core.adc_layers import TiledLinearADC, QATLinearADC
+from ADC.llama.runs.llama_adc_integration import (
     BertADCConverter,
     load_qa_model_robust,
     find_last_checkpoint_dir,
