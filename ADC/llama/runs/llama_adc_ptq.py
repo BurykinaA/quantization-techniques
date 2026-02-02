@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
 """
-Post-Training Quantization (PTQ) for ADC-based BERT QA
-Calibrates ADC quantizers using a calibration dataset
+Post-Training Quantization (PTQ) for ADC-based LLaMA models
+Calibrates ADC quantizers using a calibration dataset and evaluates perplexity
+
+Supports:
+- meta-llama/Llama-3.1-8B
+- meta-llama/Llama-3.2-3B
+- meta-llama/Llama-3.2-1B
 """
 
 import argparse
 import os
 import logging
-from typing import Dict, List
+import math
+from typing import Optional, Dict
 import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import evaluate
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
-    AutoConfig,
-    BertForQuestionAnswering,
+    AutoModelForCausalLM,
     set_seed,
 )
 from torch.utils.data import DataLoader
@@ -30,16 +34,8 @@ from datetime import datetime
 import sys
 from pathlib import Path
 
-# Import with FULL paths to avoid class identity issues
+# Import ADC layers from llama module
 from ADC.llama.core.adc_layers import TiledLinearADC, QATLinearADC
-from ADC.llama.runs.llama_adc_integration import (
-    BertADCConverter,
-    load_qa_model_robust,
-    find_last_checkpoint_dir,
-    prepare_validation_features,
-    postprocess_qa_predictions,
-    MetricsComputer,
-)
 # WandB import
 try:
     import wandb
@@ -52,6 +48,105 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class LlamaADCConverter:
+    """Convert LLaMA model to use ADC QAT layers for causal LM."""
+
+    @staticmethod
+    def is_after_silu(name: str) -> bool:
+        """
+        Detect if this linear layer follows a SiLU activation.
+        In LLaMA MLP: output = down_proj(silu(gate_proj(x)) * up_proj(x))
+        So down_proj receives SiLU output.
+        """
+        return "down_proj" in name
+
+    @staticmethod
+    def replace_linear_with_adc(
+        model: nn.Module,
+        bx: int = 8,
+        bw: int = 8,
+        ba: int = 8,
+        k: int = 4,
+        ashift: bool = False,
+        exclude_patterns: Optional[list[str]] = None,
+        mvm_limit: int = 256,
+        use_kurtosis_loss: bool = False,
+        kurtosis_weight: float = 0.0,
+        target_kurtosis: float = 1.8,
+    ) -> nn.Module:
+        """
+        Replace all nn.Linear layers in the LLaMA model with TiledLinearADC.
+
+        Args:
+            model: LLaMA model to convert.
+            bx: Bits for activation quantization.
+            bw: Bits for weight quantization.
+            ba: Bits for ADC quantization.
+            k: Hardware design parameter for ADC.
+            ashift: Enable A-shift for layers after SiLU. When True, down_proj
+                    uses asymmetric quantization + A-shift, all others use symmetric.
+            exclude_patterns: List of substrings of module names to exclude.
+            mvm_limit: Memory vector multiplication limit for tiling.
+        """
+        if exclude_patterns is None:
+            # Default: don't quantize embeddings and lm_head
+            exclude_patterns = ["embed_tokens", "lm_head"]
+
+        def should_exclude(name: str) -> bool:
+            return any(pat in name for pat in exclude_patterns)
+
+        def replace_recursive(module: nn.Module, name: str = ""):
+            for child_name, child_module in module.named_children():
+                full_name = f"{name}.{child_name}" if name else child_name
+
+                if isinstance(child_module, nn.Linear) and not should_exclude(full_name):
+                    # Apply A-shift ONLY to layers that receive SiLU outputs (down_proj)
+                    layer_ashift = ashift and LlamaADCConverter.is_after_silu(full_name)
+                    # A-shift requires asymmetric quantization, others use symmetric
+                    layer_signed_activations = not layer_ashift
+
+                    adc_layer = TiledLinearADC(
+                        in_features=child_module.in_features,
+                        out_features=child_module.out_features,
+                        bias=(child_module.bias is not None),
+                        bx=bx,
+                        bw=bw,
+                        ba=ba,
+                        k=k,
+                        ashift=layer_ashift,
+                        signed_activations=layer_signed_activations,
+                        mvm_limit=mvm_limit,
+                        use_kurtosis_loss=use_kurtosis_loss,
+                        kurtosis_weight=kurtosis_weight,
+                        target_kurtosis=target_kurtosis,
+                    )
+                    # Load weights from original layer
+                    adc_layer.load_weights(child_module)
+
+                    quant_type = "A-shift (asymmetric)" if layer_ashift else "symmetric"
+                    logger.info(f"Replaced {full_name} with TiledLinearADC ({quant_type}, bx={bx}, bw={bw}, ba={ba}, k={k})")
+
+                    setattr(module, child_name, adc_layer)
+                else:
+                    replace_recursive(child_module, full_name)
+
+        replace_recursive(model)
+        return model
+
+    @staticmethod
+    def count_adc_layers(model: nn.Module) -> dict:
+        """Count ADC and regular linear layers in the model."""
+        counts = {"adc_linear": 0, "regular_linear": 0, "total_params": 0}
+        for _, module in model.named_modules():
+            if isinstance(module, TiledLinearADC):
+                counts["adc_linear"] += 1
+            elif isinstance(module, nn.Linear):
+                counts["regular_linear"] += 1
+            if hasattr(module, "parameters"):
+                counts["total_params"] += sum(p.numel() for p in module.parameters())
+        return counts
 
 
 def append_current_date_to_path(path_base: str) -> str:
@@ -479,14 +574,17 @@ class ADCCalibrator:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="PTQ for ADC-based BERT QA")
+    parser = argparse.ArgumentParser(description="PTQ for ADC-based LLaMA models")
     
-    # Model paths
-    parser.add_argument("--qat_checkpoint_dir", type=str, required=True,
-                       help="Path to QAT checkpoint (will be converted to ADC)")
-    parser.add_argument("--output_dir", type=str, default="./outputs_adc_ptq",
+    # Model settings
+    parser.add_argument("--model_name", type=str, default="meta-llama/Llama-3.2-1B",
+                       help="HuggingFace model name (e.g., meta-llama/Llama-3.2-1B, meta-llama/Llama-3.2-3B, meta-llama/Llama-3.1-8B)")
+    parser.add_argument("--output_dir", type=str, default="./outputs_llama_adc_ptq",
                        help="Where to save calibrated model")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--torch_dtype", type=str, default="float16",
+                       choices=["float16", "bfloat16", "float32"],
+                       help="Model dtype for loading")
     
     # ADC settings
     parser.add_argument("--bx", type=int, default=8, help="Activation bits")
@@ -495,25 +593,27 @@ def main():
     parser.add_argument("--k", type=int, default=4, help="Hardware parameter")
     parser.add_argument("--ashift", action="store_true",
                        help="Enable A-shift quantization strategy: "
-                            "asymmetric (unsigned) quantization + A-shift for GeLU outputs. "
+                            "asymmetric (unsigned) quantization + A-shift for SiLU outputs (down_proj). "
                             "If False, uses symmetric (signed) quantization for all activations.")
     parser.add_argument("--mvm_limit", type=int, default=256)
     
     # Calibration settings
     parser.add_argument("--calibration_method", type=str, default="percentile",
                        choices=["minmax", "percentile", "mse"],
-                       help="Calibration method for ADC delta")
+                       help="Calibration method for quantizer scales")
     parser.add_argument("--num_calibration_batches", type=int, default=100,
                        help="Number of batches for calibration")
-    parser.add_argument("--calibration_batch_size", type=int, default=8)
+    parser.add_argument("--calibration_batch_size", type=int, default=4)
     
     # Evaluation settings
-    parser.add_argument("--eval_batch_size", type=int, default=32)
-    parser.add_argument("--max_length", type=int, default=384)
-    parser.add_argument("--doc_stride", type=int, default=128)
+    parser.add_argument("--eval_batch_size", type=int, default=4)
+    parser.add_argument("--max_length", type=int, default=512,
+                       help="Maximum sequence length for tokenization")
+    parser.add_argument("--max_eval_batches", type=int, default=100,
+                       help="Maximum batches for perplexity evaluation")
     
     # WandB settings
-    parser.add_argument("--wandb_project", type=str, default="bert-adc-ptq",
+    parser.add_argument("--wandb_project", type=str, default="llama-adc-ptq",
                        help="WandB project name")
     parser.add_argument("--wandb_run_name", type=str, default=None,
                        help="WandB run name (auto-generated if not provided)")
@@ -524,41 +624,44 @@ def main():
     parser.add_argument("--disable_visualizations", action="store_true",
                        help="Disable ADC visualizations")
     parser.add_argument("--visualize_layers", type=str, nargs="+",
-                       default=["layer.0.attention.output.dense", "layer.5.intermediate.dense", "layer.11.output.dense"],
+                       default=["layers.0.self_attn.q_proj", "layers.0.mlp.down_proj", "layers.15.mlp.gate_proj"],
                        help="Layer patterns to visualize")
     
     args = parser.parse_args()
     set_seed(args.seed)
     
-    # Note: signed_activations is now set PER-LAYER in BertADCConverter
-    # based on whether the layer comes after GeLU
+    # Log quantization strategy
     logger.info(f"Quantization strategy: ashift={args.ashift}")
     if args.ashift:
-        logger.info("  → Asymmetric (unsigned) + A-shift for layers AFTER GeLU (e.g., layer.X.output.dense)")
+        logger.info("  → Asymmetric (unsigned) + A-shift for layers AFTER SiLU (down_proj)")
         logger.info("  → Symmetric (signed) for all OTHER activations")
     else:
         logger.info("  → Symmetric (signed) quantization for ALL activations")
     
     # Initialize WandB
     use_wandb = WANDB_AVAILABLE and not args.disable_wandb
+    model_short_name = args.model_name.split("/")[-1]
     if use_wandb:
-        run_name = args.wandb_run_name or f"ptq_bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}_{args.calibration_method}"
+        run_name = args.wandb_run_name or f"ptq_{model_short_name}_bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}_{args.calibration_method}"
         wandb.init(
             project=args.wandb_project,
             name=run_name,
             config={
+                "model_name": args.model_name,
                 "bx": args.bx,
                 "bw": args.bw,
                 "ba": args.ba,
                 "k": args.k,
                 "ashift": args.ashift,
-                "ashift_mode": "per_layer_gelu" if args.ashift else "none",
-                "quantization_note": "A-shift on layer.X.output.dense only" if args.ashift else "Symmetric for all",
+                "ashift_mode": "per_layer_silu" if args.ashift else "none",
+                "quantization_note": "A-shift on down_proj only" if args.ashift else "Symmetric for all",
                 "mvm_limit": args.mvm_limit,
                 "calibration_method": args.calibration_method,
                 "num_calibration_batches": args.num_calibration_batches,
                 "calibration_batch_size": args.calibration_batch_size,
                 "eval_batch_size": args.eval_batch_size,
+                "max_length": args.max_length,
+                "torch_dtype": args.torch_dtype,
                 "seed": args.seed,
             }
         )
@@ -566,40 +669,63 @@ def main():
     else:
         logger.info("WandB logging disabled")
     
-    # Load checkpoint
-    logger.info(f"Loading QAT checkpoint from: {args.qat_checkpoint_dir}")
-    checkpoint_dir = find_last_checkpoint_dir(args.qat_checkpoint_dir)
+    # Load LLaMA model
+    logger.info(f"Loading LLaMA model: {args.model_name}")
     
     # Add current date to output directory
     args.output_dir = append_current_date_to_path(args.output_dir)
     
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir, use_fast=True)
-    tokenizer.padding_side = "right"
+    # Determine dtype
+    dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}
+    torch_dtype = dtype_map.get(args.torch_dtype, torch.float16)
     
-    model = load_qa_model_robust(checkpoint_dir)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"  # LLaMA uses left padding for generation
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
     
-    # Convert to ADC with analytical delta (will be calibrated)
-    logger.info("Converting to ADC QAT layers...")
-    model = BertADCConverter.replace_linear_with_adc_qat(
+    # Load model - use device_map for large models
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model_name,
+        torch_dtype=torch_dtype,
+        device_map="auto" if torch.cuda.is_available() else None,
+        trust_remote_code=True,
+    )
+    
+    # Get the actual device the model is on
+    if hasattr(model, 'device'):
+        device = model.device
+    elif hasattr(model, 'hf_device_map'):
+        # For device_map="auto", get the first device
+        device = next(iter(model.hf_device_map.values())) if model.hf_device_map else device
+    
+    logger.info(f"Model loaded with dtype={torch_dtype}, device={device}")
+    
+    # Convert to ADC layers
+    logger.info("Converting to ADC layers...")
+    model = LlamaADCConverter.replace_linear_with_adc(
         model,
         bx=args.bx,
         bw=args.bw,
         ba=args.ba,
         k=args.k,
         ashift=args.ashift,
-        exclude_patterns=["embeddings", "pooler", "qa_outputs"],
+        exclude_patterns=["embed_tokens", "lm_head"],
         mvm_limit=args.mvm_limit,
-        # PTQ: no kurtosis loss during calibration (not training)
+        # PTQ: no kurtosis loss during calibration
         use_kurtosis_loss=False,
         kurtosis_weight=0.0,
         target_kurtosis=1.8,
     )
-    model = model.to(device)
     
-    stats = BertADCConverter.count_adc_qat_layers(model)
-    logger.info(f"Model: {stats['adc_qat_linear']} ADC layers, {stats['total_params']:,} params")
+    # Move model to device if not already there
+    if not hasattr(model, 'hf_device_map'):
+        model = model.to(device)
+    
+    stats = LlamaADCConverter.count_adc_layers(model)
+    logger.info(f"Model: {stats['adc_linear']} ADC layers, {stats['regular_linear']} regular Linear, {stats['total_params']:,} params")
     
     # Show model structure with ADC hooks
     model_structure_text = show_model_with_adc_hooks(model, args.visualize_layers)
@@ -614,18 +740,37 @@ def main():
     if not args.disable_visualizations:
         logger.info("Preparing sample input for visualizations...")
     
-    # Load calibration data
-    logger.info("Loading SQuAD dataset for calibration...")
-    raw = load_dataset("squad")
+    # Load calibration data - WikiText-2 for language modeling
+    logger.info("Loading WikiText-2 dataset for calibration...")
+    raw = load_dataset("wikitext", "wikitext-2-raw-v1")
+    
+    # Tokenize function for causal LM
+    def tokenize_function(examples):
+        # Filter out empty texts
+        texts = [t for t in examples["text"] if t.strip()]
+        if not texts:
+            return {"input_ids": [], "attention_mask": []}
+        
+        tokenized = tokenizer(
+            texts,
+            truncation=True,
+            max_length=args.max_length,
+            padding="max_length",
+            return_tensors=None,
+        )
+        return tokenized
     
     # Use train split for calibration
-    calibration_dataset = raw["train"].select(range(min(1000, len(raw["train"]))))
+    calibration_dataset = raw["train"].filter(lambda x: len(x["text"].strip()) > 50)
+    calibration_dataset = calibration_dataset.select(range(min(2000, len(calibration_dataset))))
     calibration_dataset = calibration_dataset.map(
-        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
+        tokenize_function,
         batched=True,
-        remove_columns=calibration_dataset.column_names,
-        desc="Preparing calibration data",
+        remove_columns=["text"],
+        desc="Tokenizing calibration data",
     )
+    # Filter out empty examples
+    calibration_dataset = calibration_dataset.filter(lambda x: len(x["input_ids"]) > 0)
     
     # Get sample for visualization
     if not args.disable_visualizations and len(calibration_dataset) > 0:
@@ -633,18 +778,14 @@ def main():
             'input_ids': torch.tensor([calibration_dataset[0]['input_ids']]).to(device),
             'attention_mask': torch.tensor([calibration_dataset[0]['attention_mask']]).to(device),
         }
-        if 'token_type_ids' in calibration_dataset[0]:
-            sample_input['token_type_ids'] = torch.tensor([calibration_dataset[0]['token_type_ids']]).to(device)
         logger.info(f"Sample input prepared for visualization (shape: {sample_input['input_ids'].shape})")
     
-    # Custom collator to only take model inputs
+    # Custom collator for causal LM
     def calibration_collator(features):
         batch = {
             "input_ids": torch.tensor([f["input_ids"] for f in features]),
             "attention_mask": torch.tensor([f["attention_mask"] for f in features]),
         }
-        if "token_type_ids" in features[0]:
-            batch["token_type_ids"] = torch.tensor([f["token_type_ids"] for f in features])
         return batch
     
     calibration_loader = DataLoader(
@@ -725,145 +866,93 @@ def main():
                 wandb.log({f"viz_after/{name}": wandb.Image(img_path)})
             logger.info(f"✅ Uploaded {len(viz_after)} AFTER visualizations to WandB")
     
-    # Evaluate
+    # Evaluate perplexity
     logger.info("="*80)
-    logger.info("STEP 2: EVALUATION")
+    logger.info("STEP 2: PERPLEXITY EVALUATION")
     logger.info("="*80)
     
-    eval_examples = raw["validation"]
-    eval_dataset_full = eval_examples.map(
-        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
+    # Prepare validation dataset
+    eval_dataset = raw["validation"].filter(lambda x: len(x["text"].strip()) > 50)
+    eval_dataset = eval_dataset.map(
+        tokenize_function,
         batched=True,
-        remove_columns=eval_examples.column_names,
-        desc="Preparing validation data",
+        remove_columns=["text"],
+        desc="Tokenizing validation data",
     )
+    eval_dataset = eval_dataset.filter(lambda x: len(x["input_ids"]) > 0)
     
-    # Custom collator for evaluation (only model inputs)
+    # Custom collator for evaluation
     def eval_collator(features):
         batch = {
             "input_ids": torch.tensor([f["input_ids"] for f in features]),
             "attention_mask": torch.tensor([f["attention_mask"] for f in features]),
         }
-        if "token_type_ids" in features[0]:
-            batch["token_type_ids"] = torch.tensor([f["token_type_ids"] for f in features])
         return batch
     
     eval_loader = DataLoader(
-        eval_dataset_full,
+        eval_dataset,
         batch_size=args.eval_batch_size,
         shuffle=False,
         collate_fn=eval_collator,
     )
     
-    logger.info("Running evaluation...")
+    logger.info(f"Running perplexity evaluation on {len(eval_dataset)} samples...")
     model.eval()
     
-    all_start_logits = []
-    all_end_logits = []
+    total_loss = 0.0
+    total_tokens = 0
+    num_batches = 0
     
     with torch.no_grad():
-        for batch in tqdm(eval_loader, desc="Evaluating"):
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
-                    for k, v in batch.items()}
+        for batch in tqdm(eval_loader, desc="Evaluating", total=min(args.max_eval_batches, len(eval_loader))):
+            if num_batches >= args.max_eval_batches:
+                break
             
-            outputs = model(**batch)
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
             
-            all_start_logits.append(outputs.start_logits.cpu().numpy())
-            all_end_logits.append(outputs.end_logits.cpu().numpy())
+            # For causal LM, labels = input_ids (shifted internally by the model)
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=input_ids,
+            )
+            
+            # Count non-padding tokens
+            num_tokens = attention_mask.sum().item()
+            total_loss += outputs.loss.item() * num_tokens
+            total_tokens += num_tokens
+            num_batches += 1
     
-    # Concatenate predictions
-    all_start_logits = np.concatenate(all_start_logits, axis=0)
-    all_end_logits = np.concatenate(all_end_logits, axis=0)
+    # Compute perplexity
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
+    perplexity = math.exp(avg_loss) if avg_loss < 100 else float('inf')
     
-    # Post-process predictions (use full dataset with all metadata)
-    formatted_predictions = postprocess_qa_predictions(
-        examples=eval_examples,
-        features=eval_dataset_full,
-        predictions=(all_start_logits, all_end_logits),
-    )
-    
-    # Compute metrics
-    squad_metric = evaluate.load("squad")
-    references = [{"id": ex_id, "answers": ans} 
-                 for ex_id, ans in zip(eval_examples["id"], eval_examples["answers"])]
-    predictions_for_metric = [{"id": k, "prediction_text": v} 
-                              for k, v in formatted_predictions.items()]
-    
-    eval_metrics = squad_metric.compute(
-        predictions=predictions_for_metric,
-        references=references
-    )
+    eval_metrics = {
+        "perplexity": perplexity,
+        "avg_loss": avg_loss,
+        "total_tokens": total_tokens,
+        "num_batches": num_batches,
+    }
     
     logger.info("="*80)
     logger.info("RESULTS")
     logger.info("="*80)
-    logger.info(f"F1 Score:      {eval_metrics['f1']:.2f}")
-    logger.info(f"Exact Match:   {eval_metrics['exact_match']:.2f}")
+    logger.info(f"Perplexity:    {perplexity:.2f}")
+    logger.info(f"Avg Loss:      {avg_loss:.4f}")
+    logger.info(f"Total Tokens:  {total_tokens:,}")
     
-    # Compute train F1/EM on a subset for comparison
-    logger.info("Computing train F1/EM on subset (1000 examples)...")
-    train_eval_size = min(1000, len(raw["train"]))
-    train_eval_examples = raw["train"].select(range(train_eval_size))
-    train_eval_dataset = train_eval_examples.map(
-        lambda x: prepare_validation_features(x, tokenizer, args.max_length, args.doc_stride),
-        batched=True,
-        remove_columns=train_eval_examples.column_names,
-        desc="Preparing train eval subset",
-    )
-    
-    train_loader = DataLoader(
-        train_eval_dataset,
-        batch_size=args.eval_batch_size,
-        shuffle=False,
-        collate_fn=eval_collator,
-    )
-    
-    train_start_logits = []
-    train_end_logits = []
-    
-    with torch.no_grad():
-        for batch in tqdm(train_loader, desc="Evaluating train"):
-            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v 
-                    for k, v in batch.items()}
-            outputs = model(**batch)
-            train_start_logits.append(outputs.start_logits.cpu().numpy())
-            train_end_logits.append(outputs.end_logits.cpu().numpy())
-    
-    train_start_logits = np.concatenate(train_start_logits, axis=0)
-    train_end_logits = np.concatenate(train_end_logits, axis=0)
-    
-    train_predictions = postprocess_qa_predictions(
-        examples=train_eval_examples,
-        features=train_eval_dataset,
-        predictions=(train_start_logits, train_end_logits),
-    )
-    
-    train_references = [{"id": ex_id, "answers": ans} 
-                       for ex_id, ans in zip(train_eval_examples["id"], train_eval_examples["answers"])]
-    train_preds_for_metric = [{"id": k, "prediction_text": v} 
-                              for k, v in train_predictions.items()]
-    
-    train_metrics = squad_metric.compute(
-        predictions=train_preds_for_metric,
-        references=train_references
-    )
-    
-    logger.info(f"Train F1: {train_metrics['f1']:.2f}, EM: {train_metrics['exact_match']:.2f}")
-    
-    # Log all metrics to wandb (use eval/* namespace for consistency)
+    # Log all metrics to wandb
     if use_wandb:
         wandb.log({
-            "eval/dev_f1": eval_metrics['f1'],
-            "eval/dev_exact_match": eval_metrics['exact_match'],
-            "eval/train_f1": train_metrics['f1'],
-            "eval/train_exact_match": train_metrics['exact_match'],
+            "eval/perplexity": perplexity,
+            "eval/avg_loss": avg_loss,
+            "eval/total_tokens": total_tokens,
         })
         
-        # Summary statistics (no tables, just simple metrics)
-        wandb.run.summary["dev_f1"] = eval_metrics['f1']
-        wandb.run.summary["dev_exact_match"] = eval_metrics['exact_match']
-        wandb.run.summary["train_f1"] = train_metrics['f1']
-        wandb.run.summary["train_exact_match"] = train_metrics['exact_match']
+        # Summary statistics
+        wandb.run.summary["perplexity"] = perplexity
+        wandb.run.summary["avg_loss"] = avg_loss
         wandb.run.summary["num_calibrated_layers"] = len(optimal_params)
     
     # Save calibrated model
@@ -876,15 +965,16 @@ def main():
     # Save calibration info
     with open(os.path.join(args.output_dir, "calibration_info.txt"), "w") as f:
         f.write("="*80 + "\n")
-        f.write("ADC POST-TRAINING QUANTIZATION (PTQ) CALIBRATION RESULTS\n")
+        f.write("LLaMA ADC POST-TRAINING QUANTIZATION (PTQ) RESULTS\n")
         f.write("="*80 + "\n\n")
+        f.write(f"Model: {args.model_name}\n")
         f.write(f"Calibration method: {args.calibration_method}\n")
         f.write(f"Calibration batches: {args.num_calibration_batches}\n")
         f.write(f"ADC hardware config: bx={args.bx}, bw={args.bw}, ba={args.ba}, k={args.k}\n")
         f.write(f"A-shift: {args.ashift}\n")
         if args.ashift:
-            f.write(f"Quantization strategy: Per-layer (A-shift for GeLU outputs only)\n")
-            f.write(f"  - Layers after GeLU (layer.X.output.dense): Asymmetric + A-shift\n")
+            f.write(f"Quantization strategy: Per-layer (A-shift for SiLU outputs only)\n")
+            f.write(f"  - Layers after SiLU (down_proj): Asymmetric + A-shift\n")
             f.write(f"  - All other layers: Symmetric (signed)\n")
         else:
             f.write(f"Quantization strategy: Symmetric (signed) for all activations\n")
@@ -893,8 +983,8 @@ def main():
         f.write("      We calibrate activation/weight SCALES to optimally use the fixed ADC range.\n")
         f.write(f"\n")
         f.write(f"Results:\n")
-        f.write(f"  F1:          {eval_metrics['f1']:.2f}\n")
-        f.write(f"  Exact Match: {eval_metrics['exact_match']:.2f}\n")
+        f.write(f"  Perplexity:  {eval_metrics['perplexity']:.2f}\n")
+        f.write(f"  Avg Loss:    {eval_metrics['avg_loss']:.4f}\n")
         f.write(f"\n")
         f.write(f"Calibrated layers: {len(optimal_params)}\n")
         f.write(f"\n")
@@ -914,7 +1004,7 @@ def main():
     logger.info("PTQ COMPLETE!")
     logger.info("="*80)
     logger.info(f"Calibrated model saved to: {args.output_dir}")
-    logger.info(f"F1: {eval_metrics['f1']:.2f}, EM: {eval_metrics['exact_match']:.2f}")
+    logger.info(f"Perplexity: {eval_metrics['perplexity']:.2f}")
     
     if viz_before or viz_after:
         logger.info(f"📊 Visualizations:")
