@@ -722,9 +722,10 @@ def main():
         target_kurtosis=1.8,
     )
     
-    # Move model to device if not already there
-    if not hasattr(model, 'hf_device_map'):
-        model = model.to(device)
+    # Move entire model to device to ensure newly created ADC quantizers are on GPU
+    # (The conversion creates new LearnableQuantizer parameters that default to CPU)
+    model = model.to(device)
+    logger.info(f"Model moved to {device}")
     
     stats = LlamaADCConverter.count_adc_layers(model)
     logger.info(f"Model: {stats['adc_linear']} ADC layers, {stats['regular_linear']} regular Linear, {stats['total_params']:,} params")
