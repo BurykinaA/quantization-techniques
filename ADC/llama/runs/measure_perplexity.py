@@ -71,10 +71,14 @@ def compute_perplexity(model, dataloader, device, max_batches: int = None, desc:
             attention_mask = batch["attention_mask"].to(device)
             
             # For causal LM, labels = input_ids (shifted internally by the model)
+            # IMPORTANT: Set labels to -100 for padding positions to ignore them in loss
+            labels = input_ids.clone()
+            labels[attention_mask == 0] = -100
+            
             outputs = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                labels=input_ids,
+                labels=labels,
             )
             
             # Count non-padding tokens
