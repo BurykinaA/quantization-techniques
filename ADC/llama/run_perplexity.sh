@@ -30,7 +30,7 @@ DATASET_SPLIT="validation"       # Dataset split: validation or test (PTQ uses v
 # WandB Settings (leave empty to disable)
 # ============================================================
 WANDB_PROJECT="llama-fp"                 # Set to enable WandB logging, e.g., "llama-perplexity"
-WANDB_RUN_NAME="fp_${MODEL_SHORT_NAME}"                # Auto-generated if empty
+WANDB_RUN_NAME="fp_${MODEL_NAME}"                # Auto-generated if empty
 
 # Seed for reproducibility
 SEED=42
