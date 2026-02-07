@@ -1,6 +1,7 @@
 from matplotlib import pyplot as plt
 import numpy as np
 import torch
+from ADC.quantized_layers import BlockedConv2dADC, LinearADC
 
 def draw_layer_stats(stats, layer_name, batch_size=1):
     fig, ax = plt.subplots(2, 4, figsize=(20, 10))
@@ -10,7 +11,7 @@ def draw_layer_stats(stats, layer_name, batch_size=1):
     #names = [["w", "x", "y_for_adc", "out_gth"], ["wq", "xq", "yq_adc", "out"]]
     names = [["w", "x", "y_for_adc", "out_gth"], ["wq", "xq", 'yq_adc', "out"]]
     delta = data['delta'][0]
-    delta2 = delta * (2 ** 7 - 1)
+    delta2 = delta * (2 ** 8 - 1)
     for i in range(2):
         for j in range(4):
             #print(names[i][j])
@@ -21,9 +22,10 @@ def draw_layer_stats(stats, layer_name, batch_size=1):
             height = ax[i][j].hist(samples, bins=50)[0].max()
             ax[i][j].set_title(names[i][j] + (" (for one block)" if names[i][j][0] == 'y' else ""))
             if (names[i][j] == 'y_for_adc'):
-                ax[i][j].plot([-delta, -delta], [0, height], color='r', linestyle='--')
+                #ax[i][j].plot([-delta, -delta], [0, height], color='r', linestyle='--')
+                ax[i][j].plot([0, 0], [0, height], color='r', linestyle='--')
                 ax[i][j].plot([delta, delta], [0, height], color='r', linestyle='--')
-                ax[i][j].plot([-delta2, -delta2], [0, height], color='g', linestyle='--')
+                #ax[i][j].plot([-delta2, -delta2], [0, height], color='g', linestyle='--')
                 ax[i][j].plot([delta2, delta2], [0, height], color='g', linestyle='--')
     fig.suptitle(layer_name)
 

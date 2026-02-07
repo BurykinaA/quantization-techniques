@@ -4,6 +4,8 @@ from torch import nn # For criterion
 from tqdm import tqdm
 import wandb
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 def calibrate_model(model, calib_loader, device, portion=0.1):
     model.train()  # Enable train mode so observers collect stats
     print("Calibrating quantizers...")

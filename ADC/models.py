@@ -194,7 +194,7 @@ class ResNetCIFAR(nn.Module):
         return x
 
 class ResNetCIFAR_ADC(nn.Module):
-    def __init__(self, block, layers, num_classes=10, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None, conv_type=Conv2dADC):
+    def __init__(self, block, layers, num_classes=10, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None, conv_type=Conv2dADC, small=True):
         super(ResNetCIFAR_ADC, self).__init__()
         self.in_channels = 64
         self.bx = bx
@@ -204,12 +204,16 @@ class ResNetCIFAR_ADC(nn.Module):
         self.ashift=ashift
         self.logger = logger
         self.conv_type = conv_type
+        self.small = small
 
         # CIFAR: input 3x32x32 → 64x32x32
-
-        
-        self.conv1 = conv_type(3, 64, kernel_size=3, stride=1,
-                                padding=1, bias=False, bx=8, bw=8, ba=8, k=self.k, ashift=ashift, logger=self.logger, name="conv1")
+        # ImageNET: input 3x224x224 → 64x112x112
+        if (self.small):
+            self.conv1 = conv_type(3, 64, kernel_size=3, stride=1,
+                                    padding=1, bias=False, bx=8, bw=8, ba=8, k=self.k, ashift=ashift, logger=self.logger, name="conv1")
+        else:
+            self.conv1 = conv_type(3, 64, kernel_size=7, stride=2,
+                                    padding=3, bias=False, bx=8, bw=8, ba=8, k=self.k, ashift=ashift, logger=self.logger, name="conv1")
         self.conv1.disable_adc()
         
         # First layer is kept in original precision
@@ -290,5 +294,5 @@ def resnet18_cifar(num_classes=10):
     return ResNetCIFAR(BasicBlock, [2, 2, 2, 2], num_classes=num_classes)
 
 
-def resnet18_cifar_adc(num_classes=10, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None, conv_type=Conv2dADC):
-    return ResNetCIFAR_ADC(BasicBlockADC, [2, 2, 2, 2], num_classes=num_classes, bx=bx, bw=bw, ba=ba, k=k, ashift=ashift, logger=logger, conv_type=conv_type)
+def resnet18_cifar_adc(num_classes=10, bx=8, bw=8, ba=8, k=4, ashift=False, logger=None, conv_type=Conv2dADC, small=True):
+    return ResNetCIFAR_ADC(BasicBlockADC, [2, 2, 2, 2], num_classes=num_classes, bx=bx, bw=bw, ba=ba, k=k, ashift=ashift, logger=logger, conv_type=conv_type, small=small)

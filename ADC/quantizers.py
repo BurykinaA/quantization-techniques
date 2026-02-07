@@ -424,11 +424,14 @@ class LearnableQuantizerPerTensor(nn.Module):
         return xdq
 
 class ADCQuantizer(nn.Module):
-    def __init__(self, M, bx, bw, ba = 8, k = 4, info="", logger=None, ste_func=ste_floor):
+    def __init__(self, M, bx, bw, ba = 8, k = 4, info="", logger=None, ste_func=ste_floor, noise_std=0):
         super().__init__()
         # delta calculation seems to assume symmetric quantization for weights (2**(bw-1)-1)
         # and affine for activations (2**bx - 1)
-        self.delta = 2 * M * (2 ** bx - 1) * (2 ** (bw - 1) - 1) / ((2 ** ba) * k)
+        #self.delta = 2 * M * (2 ** bx - 1) * (2 ** (bw - 1) - 1) / ((2 ** ba) * k)
+        
+        # Positive weights and activations
+        self.delta = M * (2 ** bx - 1) * (2 ** bw - 1) / ((2 ** ba) * k)
         self.M = M
         self.bx = bx
         self.bw = bw
@@ -437,11 +440,15 @@ class ADCQuantizer(nn.Module):
         self.info = info
         self.logger = logger
         self.ste_func = ste_func
+        self.noise_std = 0
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        
         xq = x / self.delta
-        mnval = -2 ** (self.ba - 1)
-        mxval = 2 ** (self.ba - 1) - 1
+        mnval = 0
+        mxval = 2 ** self.ba - 1
+        # mnval = -2 ** (self.ba - 1)
+        # mxval = 2 ** (self.ba - 1) - 1
         if (self.logger):
             cl1 = (xq < mnval).sum().float().item()
             cl2 = (xq > mxval).sum().float().item()

@@ -42,7 +42,7 @@ class BlockedConv2dADC(nn.Conv2d):
         #self.x_quantizer = AffineQuantizerPerTensor(bx, "histogram")
         #self.w_quantizer = SymmetricQuantizerPerTensor(bw, "histogram")
         self.x_quantizer = LearnableQuantizerPerTensor(self.bx, "histogram", symmetric=False)
-        self.w_quantizer = LearnableQuantizerPerTensor(self.bw, "histogram", symmetric=True)
+        self.w_quantizer = LearnableQuantizerPerTensor(self.bw, "histogram", symmetric=False)
         self.ashift=ashift
         self.C = 2 ** (bx - 1)
         self.logger = logger
@@ -82,7 +82,7 @@ class BlockedConv2dADC(nn.Conv2d):
         yq_adc = [self.adc_quantizer(y) for y in y_for_adc]
         if (self.logger and self.logger.enabled):
             self.logger.log_data(self, [y_for_adc, yq_adc], ["y_for_adc", "yq_adc"])
-        out = [self.dequantize(yq_adc[i], w_splits[i], w_orig_splits[i]) for i in range(len(yq_adc))] # (N, O)_i
+        out = [self.dequantize(yq_adc[i], w_splits[i], w_orig_splits[i], x_splits[i]) for i in range(len(yq_adc))] # (N, O)_i
         return sum(out)
 
     def _unfold_conv(self, w, input):
@@ -105,19 +105,26 @@ class BlockedConv2dADC(nn.Conv2d):
     
         return out 
 
-    def dequantize(self, yq, wq, w_orig):
+    def dequantize(self, yq, wq, w_orig, xq):
+        #print(yq.shape, wq.shape, xq.shape)
         # yq: out x H_out x W_out
         # self.weight: out x in x H_out x W_out
         
         # Important!!!!!!!
         y = yq * self.adc_quantizer.delta
         if (self.ashift):
-            y = y + self.C * wq.sum(0)
+            y = y + self.C * (wq + self.w_quantizer.zero_point).sum(0)
             #y = y + self.C * self.x_quantizer.scale * self.w_quantizer.scale * wq.sum(axis=0)
         #print(y.shape, w_orig.shape)
         #print(w_orig.sum(axis=-1).shape)
         #out = y - self.x_quantizer.zero_point / self.w_quantizer.scale * w_orig.sum(axis=0)
-        out = y - self.x_quantizer.zero_point * wq.sum(axis=0)
+
+        # TODO we don't need to add self.w_quantizer.zero_point here?
+        out = y - self.x_quantizer.zero_point * (wq + self.w_quantizer.zero_point).sum(axis=0)
+        #print("wq after sum:", wq.sum(axis=0).shape)
+        #print("Out:", out.shape)
+        #print("Xq after sum:", xq.sum(axis=-1).shape)
+        out = out - self.w_quantizer.zero_point * xq.sum(axis=-1).unsqueeze(-1)
         out = out * self.x_quantizer.scale * self.w_quantizer.scale
         return out
     
