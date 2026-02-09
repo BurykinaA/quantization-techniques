@@ -10,6 +10,7 @@ Key features:
 - Uses sliding window with configurable stride
 - No padding - pure continuous text evaluation
 - Supports both WikiText-2 and C4
+- Optional activation/weight distribution visualization (for outlier analysis)
 
 Usage:
     # Basic usage (WikiText-2)
@@ -21,6 +22,9 @@ Usage:
     # Evaluate on C4
     python measure_perplexity.py --model_name "meta-llama/Llama-3.2-1B" --dataset c4
     
+    # With visualization (outlier analysis)
+    python measure_perplexity.py --model_name "meta-llama/Llama-3.2-1B" --visualize
+    
     # With WandB logging
     python measure_perplexity.py --model_name "meta-llama/Llama-3.2-1B" --wandb_project "llama-ppl"
 """
@@ -28,8 +32,14 @@ Usage:
 import argparse
 import math
 import logging
+import os
+import re
+from math import ceil
+from datetime import datetime
+from collections import defaultdict
 
 import torch
+import torch.nn as nn
 from tqdm import tqdm
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, set_seed
@@ -45,6 +55,211 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# Visualization Functions (for outlier analysis)
+# =============================================================================
+
+@torch.no_grad()
+def visualize_activations_and_weights(
+    model,
+    input_ids: torch.Tensor,
+    layer_idxs: list[int] = None,
+    save_path: str = None,
+    device: str = "cuda",
+    collect_outputs_for: list[str] = None,
+):
+    """
+    Collect and plot activation/weight distributions for specified layers.
+    
+    This is useful for:
+    - Finding outlier channels (like in SmoothQuant, AWQ papers)
+    - Understanding activation ranges before quantization
+    - Debugging quantization issues
+    
+    Args:
+        model: LLaMA model
+        input_ids: Input token IDs [batch, seq_len]
+        layer_idxs: Which decoder layers to visualize (default: [0, 1, 5, 10, 15, 20, 25, 30, 31])
+        save_path: Directory to save plots
+        device: Device to run on
+        collect_outputs_for: Layer names to collect outputs (default: ["k", "v"])
+    
+    Returns:
+        dict: Collected statistics
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    
+    # Determine number of layers in model
+    num_layers = len(model.model.layers)
+    
+    # Default layer indices (adapt to model size)
+    if layer_idxs is None:
+        if num_layers <= 16:
+            layer_idxs = [0, 1, 2, 4, 8, 12, num_layers - 2, num_layers - 1]
+        elif num_layers <= 32:
+            layer_idxs = [0, 1, 5, 10, 15, 20, 25, num_layers - 2, num_layers - 1]
+        else:
+            layer_idxs = [0, 1, 5, 10, 15, 20, 25, 30, 31]
+    
+    # Filter layer_idxs to valid range
+    layer_idxs = [i for i in layer_idxs if i < num_layers]
+    
+    if collect_outputs_for is None:
+        collect_outputs_for = ["k", "v"]
+    
+    if save_path is None:
+        now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        model_name = getattr(model.config, '_name_or_path', 'model').split('/')[-1]
+        save_path = f"viz_{model_name}_{now}"
+    
+    logger.info(f"Visualizing layers: {layer_idxs}")
+    logger.info(f"Saving to: {save_path}")
+    
+    # Move inputs to device
+    input_ids = input_ids.to(device)
+    
+    # Storage for collected data
+    results = {}
+    
+    def generate_hook(name, collect_input=True, collect_output=False, collect_weight=True):
+        def hook(module, inp, out):
+            x = inp[0]
+            if collect_input:
+                results[name + "_input"] = x.detach().cpu()
+            if collect_output:
+                results[name + "_output"] = out.detach().cpu()
+            if collect_weight:
+                results[name + "_weight"] = module.weight.detach().cpu()
+        return hook
+    
+    # Register hooks
+    layers = model.model.layers
+    hooks = []
+    
+    for i in layer_idxs:
+        layer = layers[i]
+        self_attn = layer.self_attn
+        ffn = layer.mlp
+        
+        # Get projection layers
+        projections = {
+            "q": self_attn.q_proj,
+            "k": self_attn.k_proj,
+            "v": self_attn.v_proj,
+            "o": self_attn.o_proj,
+            "gate": ffn.gate_proj,
+            "up": ffn.up_proj,
+            "down": ffn.down_proj,
+        }
+        
+        for name, module in projections.items():
+            hook_name = f"layer{i}_{name}"
+            collect_output = name in collect_outputs_for
+            hook = module.register_forward_hook(
+                generate_hook(hook_name, collect_input=True, collect_output=collect_output, collect_weight=True)
+            )
+            hooks.append(hook)
+    
+    # Run forward pass
+    logger.info("Running forward pass to collect activations...")
+    model.eval()
+    with torch.no_grad():
+        model(input_ids)
+    
+    # Remove hooks
+    for hook in hooks:
+        hook.remove()
+    
+    # Organize results by layer
+    results_by_layer = defaultdict(dict)
+    for k, v in results.items():
+        match = re.search(r"layer(\d+)", k)
+        if match:
+            layer_idx = int(match.group(1))
+            results_by_layer[layer_idx][k] = v
+    
+    # Plot distributions
+    logger.info("Generating plots...")
+    os.makedirs(save_path, exist_ok=True)
+    
+    for layer_idx in tqdm(sorted(results_by_layer.keys()), desc="Plotting layers"):
+        layer_data = results_by_layer[layer_idx]
+        
+        num_plots = len(layer_data)
+        ncols = 1
+        nrows = ceil(num_plots / ncols)
+        
+        fig, axes = plt.subplots(nrows, ncols, figsize=(ncols * 10, nrows * 4))
+        if nrows == 1:
+            axes = [axes]
+        else:
+            axes = axes.reshape(-1)
+        
+        for ax, (name, tensor) in zip(axes, layer_data.items()):
+            # Prepare data
+            if "weight" in name:
+                # Weights: [out_features, in_features] -> transpose for per-channel analysis
+                value = tensor.T.float()
+            else:
+                # Activations: [batch, seq, hidden] -> flatten batch and seq
+                value = tensor.flatten(0, -2).float()
+            
+            # Move to GPU for faster quantile computation
+            value = value.cuda()
+            
+            # Compute percentiles along the token/sample dimension (dim=0)
+            pmax = torch.amax(value, dim=0).cpu().numpy()
+            p9999 = torch.quantile(value, 0.9999, dim=0).cpu().numpy()
+            p99 = torch.quantile(value, 0.99, dim=0).cpu().numpy()
+            p75 = torch.quantile(value, 0.75, dim=0).cpu().numpy()
+            p25 = torch.quantile(value, 0.25, dim=0).cpu().numpy()
+            p01 = torch.quantile(value, 0.01, dim=0).cpu().numpy()
+            p0001 = torch.quantile(value, 0.0001, dim=0).cpu().numpy()
+            pmin = torch.amin(value, dim=0).cpu().numpy()
+            
+            # Plot
+            x_axis = range(len(pmin))
+            
+            ax.plot(x_axis, pmin, color='blue', label='Min/Max', linewidth=0.3)
+            ax.plot(x_axis, pmax, color='blue', linewidth=0.3)
+            ax.plot(x_axis, p0001, color='red', label='0.01%/99.99%', linewidth=0.3)
+            ax.plot(x_axis, p9999, color='red', linewidth=0.3)
+            ax.plot(x_axis, p01, color='purple', label='1%/99%', linewidth=0.3)
+            ax.plot(x_axis, p99, color='purple', linewidth=0.3)
+            ax.plot(x_axis, p25, color='orange', label='25%/75%', linewidth=0.3)
+            ax.plot(x_axis, p75, color='orange', linewidth=0.3)
+            
+            ax.set_title(name)
+            ax.set_xlabel("Hidden dimension index")
+            ax.set_ylabel("Value")
+            ax.legend(loc="upper right", fontsize=8)
+            ax.grid(True, alpha=0.3)
+        
+        # Hide unused axes
+        for ax in axes[len(layer_data):]:
+            ax.set_visible(False)
+        
+        fig.suptitle(f"Layer {layer_idx} - Activation/Weight Distributions", fontsize=14)
+        fig.tight_layout(rect=[0, 0.03, 1, 0.95])
+        
+        fig_path = os.path.join(save_path, f"layer_{layer_idx}.png")
+        fig.savefig(fig_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+    
+    logger.info(f"Saved {len(results_by_layer)} layer plots to {save_path}")
+    
+    return {
+        "save_path": save_path,
+        "num_layers_visualized": len(results_by_layer),
+        "layer_indices": list(results_by_layer.keys()),
+    }
+
+
+# =============================================================================
+# Perplexity Computation
+# =============================================================================
 
 def compute_perplexity_sliding_window(
     model, 
@@ -136,6 +351,10 @@ def compute_perplexity_sliding_window(
     }
 
 
+# =============================================================================
+# Dataset Loading
+# =============================================================================
+
 def load_and_tokenize_dataset(dataset_name: str, split: str, tokenizer, max_samples: int = None):
     """
     Load and tokenize a dataset, concatenating all text.
@@ -183,6 +402,10 @@ def load_and_tokenize_dataset(dataset_name: str, split: str, tokenizer, max_samp
     return encodings
 
 
+# =============================================================================
+# Main
+# =============================================================================
+
 def main():
     parser = argparse.ArgumentParser(
         description="Measure LLaMA perplexity using standard sliding window approach"
@@ -211,6 +434,18 @@ def main():
                        help="Context window size (should match model's context length)")
     parser.add_argument("--stride", type=int, default=None,
                        help="Stride for sliding window (default: max_length // 2)")
+    
+    # Visualization settings
+    parser.add_argument("--visualize", action="store_true",
+                       help="Enable activation/weight distribution visualization")
+    parser.add_argument("--viz_save_path", type=str, default=None,
+                       help="Directory to save visualization plots (auto-generated if not provided)")
+    parser.add_argument("--viz_layers", type=int, nargs="+", default=None,
+                       help="Layer indices to visualize (default: auto-select based on model size)")
+    parser.add_argument("--viz_num_samples", type=int, default=10,
+                       help="Number of samples to use for visualization")
+    parser.add_argument("--viz_seq_length", type=int, default=2048,
+                       help="Sequence length for visualization samples")
     
     # WandB settings
     parser.add_argument("--wandb_project", type=str, default=None,
@@ -247,6 +482,7 @@ def main():
                 "dataset_split": args.dataset_split,
                 "max_length": args.max_length,
                 "stride": args.stride,
+                "visualize": args.visualize,
                 "seed": args.seed,
             }
         )
@@ -302,6 +538,50 @@ def main():
     )
     
     # =========================================================================
+    # Visualization (if enabled)
+    # =========================================================================
+    viz_info = None
+    if args.visualize:
+        logger.info("="*80)
+        logger.info("VISUALIZATION: Activation/Weight Distributions")
+        logger.info("="*80)
+        
+        # Prepare input samples for visualization
+        input_ids = encodings["input_ids"]
+        total_tokens = input_ids.size(1)
+        
+        # Extract samples for visualization
+        num_samples = min(args.viz_num_samples, total_tokens // args.viz_seq_length)
+        if num_samples < 1:
+            num_samples = 1
+            viz_seq_len = total_tokens
+        else:
+            viz_seq_len = args.viz_seq_length
+        
+        # Take evenly spaced samples
+        viz_input_ids = input_ids[0, :num_samples * viz_seq_len].reshape(num_samples, viz_seq_len)
+        
+        logger.info(f"Using {num_samples} samples of length {viz_seq_len} for visualization")
+        
+        viz_info = visualize_activations_and_weights(
+            model,
+            viz_input_ids,
+            layer_idxs=args.viz_layers,
+            save_path=args.viz_save_path,
+            device=device,
+        )
+        
+        # Upload to WandB if enabled
+        if use_wandb and viz_info:
+            import glob
+            viz_path = viz_info["save_path"]
+            png_files = sorted(glob.glob(os.path.join(viz_path, "*.png")))
+            for png_file in png_files:
+                layer_name = os.path.basename(png_file).replace(".png", "")
+                wandb.log({f"viz/{layer_name}": wandb.Image(png_file)})
+            logger.info(f"Uploaded {len(png_files)} visualization plots to WandB")
+    
+    # =========================================================================
     # Compute Perplexity
     # =========================================================================
     logger.info("="*80)
@@ -333,6 +613,9 @@ def main():
     logger.info(f"Avg Loss:        {metrics['avg_loss']:.4f}")
     logger.info(f"Total Tokens:    {metrics['total_tokens']:,}")
     logger.info(f"Num Windows:     {metrics['num_windows']}")
+    if viz_info:
+        logger.info(f"")
+        logger.info(f"Visualizations:  {viz_info['save_path']}")
     logger.info("="*80)
     
     # Log to WandB
@@ -350,6 +633,9 @@ def main():
         wandb.run.summary["total_params"] = total_params
         wandb.run.summary["max_length"] = metrics['max_length']
         wandb.run.summary["stride"] = metrics['stride']
+        if viz_info:
+            wandb.run.summary["viz_path"] = viz_info['save_path']
+            wandb.run.summary["viz_num_layers"] = viz_info['num_layers_visualized']
         
         wandb.finish()
         logger.info("Results logged to WandB")

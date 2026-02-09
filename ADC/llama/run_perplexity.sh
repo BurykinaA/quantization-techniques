@@ -7,6 +7,8 @@
 # - Use sliding window with overlap
 # - No padding
 #
+# Optional: Activation/weight distribution visualization for outlier analysis
+#
 # Supports: meta-llama/Llama-3.1-8B, meta-llama/Llama-3.2-3B, meta-llama/Llama-3.2-1B
 
 # ============================================================
@@ -37,6 +39,18 @@ MAX_LENGTH=2048                  # Context window size (2048 is standard for pap
                                  # LLaMA-3 supports up to 8192, but 2048 is common
 STRIDE=""                        # Sliding window stride (empty = max_length // 2)
                                  # Non-overlapping: set STRIDE=$MAX_LENGTH
+
+# ============================================================
+# Visualization Settings (Outlier Analysis)
+# ============================================================
+# Enable to generate activation/weight distribution plots
+# Useful for finding outlier channels (like in SmoothQuant, AWQ papers)
+VISUALIZE=false                  # Set to true to enable visualization
+VIZ_SAVE_PATH=""                 # Auto-generated if empty (viz_<model>_<timestamp>)
+VIZ_LAYERS=""                    # Layer indices to visualize (empty = auto-select)
+                                 # Example: "0 1 5 10 15 20 25 30 31"
+VIZ_NUM_SAMPLES=10               # Number of samples for visualization
+VIZ_SEQ_LENGTH=2048              # Sequence length for visualization
 
 # ============================================================
 # WandB Settings (leave empty to disable)
@@ -70,6 +84,20 @@ if [ "$DATASET" = "c4" ]; then
     echo "  Max samples:     $MAX_SAMPLES"
 fi
 echo ""
+echo "Visualization:"
+if [ "$VISUALIZE" = true ]; then
+    echo "  Enabled:         yes"
+    echo "  Samples:         $VIZ_NUM_SAMPLES"
+    echo "  Seq length:      $VIZ_SEQ_LENGTH"
+    if [ -n "$VIZ_LAYERS" ]; then
+        echo "  Layers:          $VIZ_LAYERS"
+    else
+        echo "  Layers:          auto-select"
+    fi
+else
+    echo "  Enabled:         no"
+fi
+echo ""
 if [ -n "$WANDB_PROJECT" ]; then
     echo "WandB:             $WANDB_PROJECT"
 else
@@ -96,6 +124,21 @@ fi
 
 if [ "$DATASET" = "c4" ]; then
     CMD="$CMD --max_samples $MAX_SAMPLES"
+fi
+
+# Visualization options
+if [ "$VISUALIZE" = true ]; then
+    CMD="$CMD --visualize"
+    CMD="$CMD --viz_num_samples $VIZ_NUM_SAMPLES"
+    CMD="$CMD --viz_seq_length $VIZ_SEQ_LENGTH"
+    
+    if [ -n "$VIZ_SAVE_PATH" ]; then
+        CMD="$CMD --viz_save_path \"$VIZ_SAVE_PATH\""
+    fi
+    
+    if [ -n "$VIZ_LAYERS" ]; then
+        CMD="$CMD --viz_layers $VIZ_LAYERS"
+    fi
 fi
 
 if [ -n "$WANDB_PROJECT" ]; then

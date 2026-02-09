@@ -27,6 +27,11 @@ WIKITEXT_SPLIT="test"            # Standard for papers
 C4_SPLIT="test"                  # Use test split (same as papers)
 C4_MAX_SAMPLES=10000                # No limit - use full validation split
 
+# Visualization Settings
+VISUALIZE=false                  # Set to true to enable visualization
+VIZ_NUM_SAMPLES=10               # Number of samples for visualization
+VIZ_SEQ_LENGTH=2048              # Sequence length for visualization
+
 # WandB Settings
 WANDB_PROJECT="llama-fp-benchmark"  # All runs go to this project
 
@@ -61,6 +66,11 @@ echo "Datasets:  ${DATASETS[*]}"
 echo "WandB:     $WANDB_PROJECT"
 echo "Context:   $MAX_LENGTH tokens"
 echo "Dtype:     $TORCH_DTYPE"
+if [ "$VISUALIZE" = true ]; then
+    echo "Visualize: enabled"
+else
+    echo "Visualize: disabled"
+fi
 echo "========================================================"
 echo ""
 
@@ -113,6 +123,12 @@ for MODEL_NAME in "${MODELS[@]}"; do
         # Add max_samples for C4 (only if limit is set)
         if [ "$DATASET" = "c4" ] && [ -n "$C4_MAX_SAMPLES" ]; then
             CMD="$CMD --max_samples $C4_MAX_SAMPLES"
+        fi
+        
+        # Add visualization options
+        if [ "$VISUALIZE" = true ]; then
+            VIZ_PATH="viz_${MODEL_SHORT}_${DATASET}"
+            CMD="$CMD --visualize --viz_save_path \"$VIZ_PATH\" --viz_num_samples $VIZ_NUM_SAMPLES --viz_seq_length $VIZ_SEQ_LENGTH"
         fi
         
         # Run
