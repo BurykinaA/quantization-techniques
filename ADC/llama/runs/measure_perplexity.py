@@ -125,15 +125,29 @@ def visualize_activations_and_weights(
     
     def generate_hook(name, collect_input=True, collect_output=False, collect_weight=True):
         def hook(module, inp, out):
-            x = inp[0]
-            if collect_input:
-                results[name + "_input"] = x.detach().cpu()
+            # Handle different input formats
+            if len(inp) > 0:
+                x = inp[0]
+            else:
+                # Some modules receive inputs as kwargs, skip input collection
+                x = None
+            
+            if collect_input and x is not None:
+                # Handle case where input might be a tuple
+                if isinstance(x, tuple):
+                    x = x[0]
+                if hasattr(x, 'detach'):
+                    results[name + "_input"] = x.detach().cpu()
+            
             if collect_output:
                 # Handle tuple outputs (like from attention)
+                out_tensor = out
                 if isinstance(out, tuple):
-                    out = out[0]
-                results[name + "_output"] = out.detach().cpu()
-            if collect_weight and hasattr(module, 'weight'):
+                    out_tensor = out[0]
+                if hasattr(out_tensor, 'detach'):
+                    results[name + "_output"] = out_tensor.detach().cpu()
+            
+            if collect_weight and hasattr(module, 'weight') and module.weight is not None:
                 results[name + "_weight"] = module.weight.detach().cpu()
         return hook
     
@@ -146,17 +160,21 @@ def visualize_activations_and_weights(
         self_attn = layer.self_attn
         ffn = layer.mlp
         
-        # Hook for MHSA input (input to entire self-attention block)
-        hook = self_attn.register_forward_hook(
-            generate_hook(f"layer{i}_MHSA", collect_input=True, collect_output=False, collect_weight=False)
-        )
-        hooks.append(hook)
+        # Hook for MHSA input via input_layernorm (input to entire self-attention block)
+        # In LLaMA: hidden_states = input_layernorm(hidden_states) -> self_attn(hidden_states)
+        if hasattr(layer, 'input_layernorm'):
+            hook = layer.input_layernorm.register_forward_hook(
+                generate_hook(f"layer{i}_MHSA", collect_input=True, collect_output=False, collect_weight=False)
+            )
+            hooks.append(hook)
         
-        # Hook for FFN input (input to entire MLP block)
-        hook = ffn.register_forward_hook(
-            generate_hook(f"layer{i}_FFN", collect_input=True, collect_output=False, collect_weight=False)
-        )
-        hooks.append(hook)
+        # Hook for FFN input via post_attention_layernorm (input to MLP block)
+        # In LLaMA: hidden_states = post_attention_layernorm(hidden_states) -> mlp(hidden_states)
+        if hasattr(layer, 'post_attention_layernorm'):
+            hook = layer.post_attention_layernorm.register_forward_hook(
+                generate_hook(f"layer{i}_FFN", collect_input=True, collect_output=False, collect_weight=False)
+            )
+            hooks.append(hook)
         
         # Get projection layers
         projections = {
