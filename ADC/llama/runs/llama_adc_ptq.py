@@ -463,7 +463,13 @@ class ADCCalibrator:
         self.bx = bx
         self.bw = bw
         self.stats = {}
+        # Store attention_mask during calibration to filter padding
+        self.current_attention_mask = None
         # Note: signed_activations is now detected per-layer from each quantizer
+        
+    def set_attention_mask(self, attention_mask: torch.Tensor):
+        """Set the current attention mask for filtering padding in hooks"""
+        self.current_attention_mask = attention_mask
         
     def register_hooks(self):
         """Register forward hooks to collect activation statistics"""
@@ -487,9 +493,37 @@ class ADCCalibrator:
                 
                 # Collect activation stats
                 x = input[0].detach()
-                self.stats[name]['act_min'].append(x.min().item())
-                self.stats[name]['act_max'].append(x.max().item())
-                self.stats[name]['act_absmax'].append(x.abs().max().item())
+                
+                # IMPORTANT: Filter out padding tokens using attention_mask
+                # This prevents padding from "poisoning" the calibration statistics
+                if self.current_attention_mask is not None:
+                    mask = self.current_attention_mask.to(x.device)
+                    # x shape: [batch, seq, hidden]
+                    # mask shape: [batch, seq]
+                    if mask.dim() == 2 and x.dim() == 3:
+                        # Expand mask to match x dimensions
+                        mask_expanded = mask.unsqueeze(-1).expand_as(x)
+                        # Only use values where mask == 1 (non-padding)
+                        x_filtered = x[mask_expanded.bool()].view(-1)
+                        if x_filtered.numel() > 0:
+                            self.stats[name]['act_min'].append(x_filtered.min().item())
+                            self.stats[name]['act_max'].append(x_filtered.max().item())
+                            self.stats[name]['act_absmax'].append(x_filtered.abs().max().item())
+                        else:
+                            # Fallback if all masked
+                            self.stats[name]['act_min'].append(x.min().item())
+                            self.stats[name]['act_max'].append(x.max().item())
+                            self.stats[name]['act_absmax'].append(x.abs().max().item())
+                    else:
+                        # Shape mismatch, use full tensor
+                        self.stats[name]['act_min'].append(x.min().item())
+                        self.stats[name]['act_max'].append(x.max().item())
+                        self.stats[name]['act_absmax'].append(x.abs().max().item())
+                else:
+                    # No mask available, use full tensor (fallback)
+                    self.stats[name]['act_min'].append(x.min().item())
+                    self.stats[name]['act_max'].append(x.max().item())
+                    self.stats[name]['act_absmax'].append(x.abs().max().item())
                 
                 # Collect weight stats
                 w = module.weight.detach()
@@ -594,6 +628,7 @@ class ADCCalibrator:
     def calibrate(self, dataloader, num_batches: int = 100):
         """Run calibration on dataloader"""
         logger.info(f"Running calibration on {num_batches} batches...")
+        logger.info("NOTE: Using attention_mask to filter out padding tokens during calibration")
         
         self.model.eval()
         hooks = self.register_hooks()
@@ -606,6 +641,12 @@ class ADCCalibrator:
                 # Move batch to device
                 batch = {k: v.to(self.model.device) if isinstance(v, torch.Tensor) else v 
                         for k, v in batch.items()}
+                
+                # IMPORTANT: Set attention_mask for hooks to filter padding
+                if 'attention_mask' in batch:
+                    self.set_attention_mask(batch['attention_mask'])
+                else:
+                    self.set_attention_mask(None)
                 
                 # Forward pass
                 try:
@@ -1550,6 +1591,9 @@ def _generate_3d_quantization_error_plots(
     layers_to_viz = layers_to_viz[:3]
     logger.info(f"Generating 3D plots for {len(layers_to_viz)} layers")
     
+    # Get attention_mask to filter padding in visualization
+    attention_mask = sample_input.get('attention_mask', None)
+    
     # Capture activation data
     captured_activations = {}
     
@@ -1572,6 +1616,7 @@ def _generate_3d_quantization_error_plots(
                 captured_activations[layer_name] = {
                     'x_original': x.detach().cpu(),
                     'x_quantized': x_q.detach().cpu(),
+                    'attention_mask': attention_mask.detach().cpu() if attention_mask is not None else None,
                 }
         return hook
     
@@ -1614,14 +1659,30 @@ def _generate_3d_quantization_error_plots(
             if layer_name in captured_activations:
                 x_orig = captured_activations[layer_name]['x_original'].float()
                 x_quant = captured_activations[layer_name]['x_quantized'].float()
+                act_mask = captured_activations[layer_name].get('attention_mask', None)
                 
-                # Take first sample, first position for 2D visualization
+                # Take first sample for 2D visualization
                 if x_orig.dim() == 3:
                     x_orig_2d = x_orig[0]  # [seq, hidden]
                     x_quant_2d = x_quant[0]
+                    # Get mask for first sample if available
+                    if act_mask is not None and act_mask.dim() >= 1:
+                        sample_mask = act_mask[0] if act_mask.dim() == 2 else act_mask
+                    else:
+                        sample_mask = None
                 else:
                     x_orig_2d = x_orig
                     x_quant_2d = x_quant
+                    sample_mask = None
+                
+                # Filter out padding positions for cleaner visualization
+                if sample_mask is not None:
+                    # Find non-padding positions (mask == 1)
+                    valid_positions = sample_mask.bool()
+                    if valid_positions.sum() > 0:
+                        x_orig_2d = x_orig_2d[valid_positions]  # [valid_seq, hidden]
+                        x_quant_2d = x_quant_2d[valid_positions]
+                        logger.info(f"  Filtered activations: {valid_positions.sum().item()}/{len(sample_mask)} non-padding positions")
                 
                 x_error = torch.abs(x_orig_2d - x_quant_2d)
                 x_mean_abs = torch.abs(x_orig_2d).mean()
