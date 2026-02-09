@@ -38,6 +38,7 @@ from math import ceil
 from datetime import datetime
 from collections import defaultdict
 
+import numpy as np
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -89,7 +90,6 @@ def visualize_activations_and_weights(
         dict: Collected statistics
     """
     import matplotlib.pyplot as plt
-    import numpy as np
     
     # Determine number of layers in model
     num_layers = len(model.model.layers)
@@ -282,6 +282,187 @@ def visualize_activations_and_weights(
         plt.close(fig)
     
     logger.info(f"Saved {len(results_by_layer)} layer plots to {save_path}")
+    
+    # =========================================================================
+    # Generate Figure 4 style plots (2D distribution + inter-channel variance)
+    # =========================================================================
+    logger.info("Generating Figure 4 style plots (2D distribution + variance analysis)...")
+    
+    # Collect all weights and activations for aggregate analysis
+    all_weight_stats = []  # (mean, std) per channel for all weight tensors
+    all_activation_stats = []  # (mean, std) per channel for all activation tensors
+    
+    weight_variances_by_layer = {}  # layer -> per-channel variance
+    activation_variances_by_layer = {}  # layer -> per-channel variance
+    
+    for layer_idx, layer_data in results_by_layer.items():
+        layer_weight_vars = []
+        layer_activation_vars = []
+        
+        for name, tensor in layer_data.items():
+            if "weight" in name:
+                # Weights: [out_features, in_features] -> per output channel stats
+                value = tensor.float()
+                # Per-channel (output) mean and std
+                channel_means = value.mean(dim=1).numpy()
+                channel_stds = value.std(dim=1).numpy()
+                channel_vars = value.var(dim=1).numpy()
+                
+                for m, s in zip(channel_means, channel_stds):
+                    all_weight_stats.append((m, s))
+                layer_weight_vars.extend(channel_vars)
+                
+            elif "input" in name:
+                # Activations: [batch, seq, hidden] -> per hidden dim stats
+                value = tensor.flatten(0, -2).float()  # [tokens, hidden]
+                # Per-channel (hidden dim) mean and std
+                channel_means = value.mean(dim=0).numpy()
+                channel_stds = value.std(dim=0).numpy()
+                channel_vars = value.var(dim=0).numpy()
+                
+                for m, s in zip(channel_means, channel_stds):
+                    all_activation_stats.append((m, s))
+                layer_activation_vars.extend(channel_vars)
+        
+        if layer_weight_vars:
+            weight_variances_by_layer[layer_idx] = np.array(layer_weight_vars)
+        if layer_activation_vars:
+            activation_variances_by_layer[layer_idx] = np.array(layer_activation_vars)
+    
+    # Convert to numpy arrays and generate Figure 4 plots
+    if all_weight_stats and all_activation_stats:
+        weight_stats = np.array(all_weight_stats)
+        activation_stats = np.array(all_activation_stats)
+        
+        # =====================================================================
+        # Figure 4(a): 2D Distribution Plot (Mean vs Std)
+        # =====================================================================
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # Subsample for visualization if too many points
+        max_points = 5000
+        if len(weight_stats) > max_points:
+            idx = np.random.choice(len(weight_stats), max_points, replace=False)
+            weight_stats_plot = weight_stats[idx]
+        else:
+            weight_stats_plot = weight_stats
+            
+        if len(activation_stats) > max_points:
+            idx = np.random.choice(len(activation_stats), max_points, replace=False)
+            activation_stats_plot = activation_stats[idx]
+        else:
+            activation_stats_plot = activation_stats
+        
+        # Weight distribution
+        ax = axes[0]
+        ax.scatter(weight_stats_plot[:, 0], weight_stats_plot[:, 1], 
+                   alpha=0.3, s=5, c='blue', label='Weights')
+        # Mark mean
+        weight_mean = weight_stats.mean(axis=0)
+        ax.scatter([weight_mean[0]], [weight_mean[1]], 
+                   c='red', s=100, marker='o', edgecolors='black', linewidths=2,
+                   label=f'Mean ({weight_mean[0]:.3f}, {weight_mean[1]:.3f})', zorder=10)
+        ax.set_xlabel('Channel Mean', fontsize=12)
+        ax.set_ylabel('Channel Std', fontsize=12)
+        ax.set_title('Weight Distribution (per channel)', fontsize=14)
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+        
+        # Activation distribution
+        ax = axes[1]
+        ax.scatter(activation_stats_plot[:, 0], activation_stats_plot[:, 1], 
+                   alpha=0.3, s=5, c='green', label='Activations')
+        # Mark mean
+        activation_mean = activation_stats.mean(axis=0)
+        ax.scatter([activation_mean[0]], [activation_mean[1]], 
+                   c='red', s=100, marker='o', edgecolors='black', linewidths=2,
+                   label=f'Mean ({activation_mean[0]:.3f}, {activation_mean[1]:.3f})', zorder=10)
+        ax.set_xlabel('Channel Mean', fontsize=12)
+        ax.set_ylabel('Channel Std', fontsize=12)
+        ax.set_title('Activation Distribution (per channel)', fontsize=14)
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+        
+        fig.suptitle('Figure 4(a): Weight and Activation Distributions in 2D Space', fontsize=14)
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+        fig.savefig(os.path.join(save_path, 'fig4a_2d_distribution.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        
+        # =====================================================================
+        # Figure 4(b): Inter-channel Variance Comparison
+        # =====================================================================
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        
+        # Per-layer variance comparison
+        layer_indices = sorted(set(weight_variances_by_layer.keys()) & set(activation_variances_by_layer.keys()))
+        
+        if layer_indices:
+            # Compute mean variance per layer
+            weight_mean_vars = [weight_variances_by_layer[i].mean() for i in layer_indices]
+            activation_mean_vars = [activation_variances_by_layer[i].mean() for i in layer_indices]
+            
+            # Compute std of variance (inter-channel disparity)
+            weight_var_stds = [weight_variances_by_layer[i].std() for i in layer_indices]
+            activation_var_stds = [activation_variances_by_layer[i].std() for i in layer_indices]
+            
+            ax = axes[0]
+            x = np.arange(len(layer_indices))
+            width = 0.35
+            ax.bar(x - width/2, weight_mean_vars, width, label='Weights', color='blue', alpha=0.7)
+            ax.bar(x + width/2, activation_mean_vars, width, label='Activations', color='green', alpha=0.7)
+            ax.set_xlabel('Layer Index', fontsize=12)
+            ax.set_ylabel('Mean Channel Variance', fontsize=12)
+            ax.set_title('Mean Inter-channel Variance per Layer', fontsize=14)
+            ax.set_xticks(x)
+            ax.set_xticklabels([str(i) for i in layer_indices])
+            ax.legend()
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            ax = axes[1]
+            ax.bar(x - width/2, weight_var_stds, width, label='Weights', color='blue', alpha=0.7)
+            ax.bar(x + width/2, activation_var_stds, width, label='Activations', color='green', alpha=0.7)
+            ax.set_xlabel('Layer Index', fontsize=12)
+            ax.set_ylabel('Std of Channel Variance', fontsize=12)
+            ax.set_title('Inter-channel Variance Disparity per Layer', fontsize=14)
+            ax.set_xticks(x)
+            ax.set_xticklabels([str(i) for i in layer_indices])
+            ax.legend()
+            ax.grid(True, alpha=0.3, axis='y')
+        
+        fig.suptitle('Figure 4(b): Inter-channel Variance Disparities', fontsize=14)
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+        fig.savefig(os.path.join(save_path, 'fig4b_variance_disparity.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        
+        # =====================================================================
+        # Additional: Combined scatter plot (weights vs activations)
+        # =====================================================================
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        ax.scatter(weight_stats_plot[:, 0], weight_stats_plot[:, 1], 
+                   alpha=0.3, s=5, c='blue', label='Weights')
+        ax.scatter(activation_stats_plot[:, 0], activation_stats_plot[:, 1], 
+                   alpha=0.3, s=5, c='green', label='Activations')
+        
+        # Mark means
+        ax.scatter([weight_mean[0]], [weight_mean[1]], 
+                   c='red', s=150, marker='o', edgecolors='black', linewidths=2,
+                   label=f'Weight Mean', zorder=10)
+        ax.scatter([activation_mean[0]], [activation_mean[1]], 
+                   c='orange', s=150, marker='s', edgecolors='black', linewidths=2,
+                   label=f'Activation Mean', zorder=10)
+        
+        ax.set_xlabel('Channel Mean', fontsize=12)
+        ax.set_ylabel('Channel Std', fontsize=12)
+        ax.set_title('Weight vs Activation Distribution (Mean-Std per channel)', fontsize=14)
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+        
+        fig.tight_layout()
+        fig.savefig(os.path.join(save_path, 'fig4_combined_distribution.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        
+        logger.info(f"Saved Figure 4 style plots to {save_path}")
     
     return {
         "save_path": save_path,
