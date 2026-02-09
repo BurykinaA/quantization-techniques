@@ -1078,11 +1078,18 @@ def main():
     
     # Visualize AFTER calibration
     viz_after = None
+    viz_3d = None
     if sample_input is not None and not args.disable_visualizations:
         viz_after = _generate_adc_visualizations(
             model, sample_input, args.visualize_layers,
             title_prefix="AFTER Calibration",
             output_subdir=os.path.join(args.output_dir, "viz_after")
+        )
+        
+        # Generate 3D quantization error plots
+        viz_3d = _generate_3d_quantization_error_plots(
+            model, sample_input, args.visualize_layers,
+            output_subdir=os.path.join(args.output_dir, "viz_3d_error")
         )
     
     # Log per-layer calibration stats to wandb
@@ -1110,6 +1117,10 @@ def main():
             for name, img_path in viz_after.items():
                 wandb.log({f"viz_after/{name}": wandb.Image(img_path)})
             logger.info(f"✅ Uploaded {len(viz_after)} AFTER visualizations to WandB")
+        if viz_3d:
+            for name, img_path in viz_3d.items():
+                wandb.log({f"viz_3d_error/{name}": wandb.Image(img_path)})
+            logger.info(f"✅ Uploaded {len(viz_3d)} 3D error visualizations to WandB")
     
     # =========================================================================
     # STEP 2: Evaluate perplexity on specified datasets (Sliding Window)
@@ -1489,6 +1500,239 @@ def _plot_adc_pipeline(data: Dict, layer_name: str, title_prefix: str, filepath:
     plt.close(fig)
     
     return filepath
+
+
+def _generate_3d_quantization_error_plots(
+    model, 
+    sample_input, 
+    layer_patterns: list[str],
+    output_subdir: str = "./viz_3d",
+    max_size: int = 128,  # Downsample large matrices for visualization
+):
+    """
+    Generate 3D surface plots showing quantization error for weights and activations.
+    
+    Similar to Figure in FlatQuant paper showing relative quantization error.
+    Relative error = MAE(original, quantized) / mean(|original|)
+    
+    Args:
+        model: The quantized model
+        sample_input: Input for forward pass
+        layer_patterns: Patterns to match layer names
+        output_subdir: Directory to save plots
+        max_size: Maximum size for visualization (downsample if larger)
+    
+    Returns:
+        Dict[str, str]: Mapping of plot_name -> image_path
+    """
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D
+    import numpy as np
+    
+    os.makedirs(output_subdir, exist_ok=True)
+    logger.info(f"Generating 3D quantization error plots...")
+    
+    # Find ADC layers to visualize
+    layers_to_viz = []
+    for name, module in model.named_modules():
+        if isinstance(module, QATLinearADC):
+            if any(pattern in name for pattern in layer_patterns):
+                layers_to_viz.append((name, module))
+        elif isinstance(module, TiledLinearADC) and len(module.tiles) > 0:
+            if any(pattern in name for pattern in layer_patterns):
+                layers_to_viz.append((name + ".tiles.0", module.tiles[0]))
+    
+    if not layers_to_viz:
+        logger.warning(f"No ADC layers found for 3D plots")
+        return {}
+    
+    # Limit to first 3 layers for clarity
+    layers_to_viz = layers_to_viz[:3]
+    logger.info(f"Generating 3D plots for {len(layers_to_viz)} layers")
+    
+    # Capture activation data
+    captured_activations = {}
+    
+    def make_activation_hook(layer_name):
+        def hook(module, input, output):
+            with torch.no_grad():
+                x = input[0]
+                
+                # Get quantizer
+                act_q = module.activation_quantizer
+                s_x = act_q.scale.to(x.device)
+                
+                # Quantize
+                if act_q.symmetric:
+                    x_q = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax) * s_x
+                else:
+                    zp_x = act_q.zero_point.to(x.device)
+                    x_q = (torch.clamp(torch.round(x / s_x + zp_x), 0, act_q.qmax) - zp_x) * s_x
+                
+                captured_activations[layer_name] = {
+                    'x_original': x.detach().cpu(),
+                    'x_quantized': x_q.detach().cpu(),
+                }
+        return hook
+    
+    # Attach hooks
+    hooks = []
+    for name, module in layers_to_viz:
+        hook = module.register_forward_hook(make_activation_hook(name))
+        hooks.append(hook)
+    
+    # Run forward pass
+    model.eval()
+    with torch.no_grad():
+        _ = model(**sample_input)
+    
+    # Remove hooks
+    for hook in hooks:
+        hook.remove()
+    
+    result_paths = {}
+    
+    for layer_name, module in layers_to_viz:
+        try:
+            clean_name = layer_name.replace(".", "_").replace("/", "_")
+            
+            # Get weight data
+            w_q = module.weight_quantizer
+            w_original = module.weight.detach().cpu().float()
+            s_w = w_q.scale.detach().cpu().float()
+            
+            # Quantize weights
+            s_w_b = s_w.view(-1, 1)
+            w_quantized = torch.clamp(torch.round(w_original / s_w_b), w_q.qmin, w_q.qmax) * s_w_b
+            
+            # Compute weight error
+            w_error = torch.abs(w_original - w_quantized)
+            w_mean_abs = torch.abs(w_original).mean()
+            w_relative_error = w_error / (w_mean_abs + 1e-8)
+            
+            # Get activation data
+            if layer_name in captured_activations:
+                x_orig = captured_activations[layer_name]['x_original'].float()
+                x_quant = captured_activations[layer_name]['x_quantized'].float()
+                
+                # Take first sample, first position for 2D visualization
+                if x_orig.dim() == 3:
+                    x_orig_2d = x_orig[0]  # [seq, hidden]
+                    x_quant_2d = x_quant[0]
+                else:
+                    x_orig_2d = x_orig
+                    x_quant_2d = x_quant
+                
+                x_error = torch.abs(x_orig_2d - x_quant_2d)
+                x_mean_abs = torch.abs(x_orig_2d).mean()
+                x_relative_error = x_error / (x_mean_abs + 1e-8)
+            else:
+                x_relative_error = None
+            
+            # Create figure with 2 rows: weights and activations
+            fig = plt.figure(figsize=(18, 12))
+            
+            # =====================================================
+            # Row 1: Weight 3D plots
+            # =====================================================
+            
+            # Downsample for visualization
+            h, w = w_relative_error.shape
+            step_h = max(1, h // max_size)
+            step_w = max(1, w // max_size)
+            w_err_viz = w_relative_error[::step_h, ::step_w].numpy()
+            w_orig_viz = w_original[::step_h, ::step_w].numpy()
+            
+            # Create meshgrid
+            Y_w = np.arange(w_err_viz.shape[0])
+            X_w = np.arange(w_err_viz.shape[1])
+            X_w, Y_w = np.meshgrid(X_w, Y_w)
+            
+            # Weight original values 3D
+            ax1 = fig.add_subplot(2, 3, 1, projection='3d')
+            surf1 = ax1.plot_surface(X_w, Y_w, w_orig_viz, cmap='coolwarm', alpha=0.8)
+            ax1.set_title(f'Weight Values\n{layer_name}', fontsize=10)
+            ax1.set_xlabel('In features')
+            ax1.set_ylabel('Out features')
+            ax1.set_zlabel('Value')
+            fig.colorbar(surf1, ax=ax1, shrink=0.5, aspect=10)
+            
+            # Weight relative error 3D
+            ax2 = fig.add_subplot(2, 3, 2, projection='3d')
+            surf2 = ax2.plot_surface(X_w, Y_w, w_err_viz, cmap='hot', alpha=0.8)
+            ax2.set_title(f'Weight Relative Error\nMean: {w_relative_error.mean():.4f}', fontsize=10)
+            ax2.set_xlabel('In features')
+            ax2.set_ylabel('Out features')
+            ax2.set_zlabel('Rel. Error')
+            fig.colorbar(surf2, ax=ax2, shrink=0.5, aspect=10)
+            
+            # Weight error heatmap (2D view)
+            ax3 = fig.add_subplot(2, 3, 3)
+            im3 = ax3.imshow(w_err_viz, cmap='hot', aspect='auto')
+            ax3.set_title('Weight Error Heatmap')
+            ax3.set_xlabel('In features')
+            ax3.set_ylabel('Out features')
+            fig.colorbar(im3, ax=ax3, shrink=0.8)
+            
+            # =====================================================
+            # Row 2: Activation 3D plots (if available)
+            # =====================================================
+            
+            if x_relative_error is not None:
+                # Downsample
+                h_a, w_a = x_relative_error.shape
+                step_h_a = max(1, h_a // max_size)
+                step_w_a = max(1, w_a // max_size)
+                x_err_viz = x_relative_error[::step_h_a, ::step_w_a].numpy()
+                x_orig_viz = x_orig_2d[::step_h_a, ::step_w_a].numpy()
+                
+                Y_a = np.arange(x_err_viz.shape[0])
+                X_a = np.arange(x_err_viz.shape[1])
+                X_a, Y_a = np.meshgrid(X_a, Y_a)
+                
+                # Activation original values 3D
+                ax4 = fig.add_subplot(2, 3, 4, projection='3d')
+                surf4 = ax4.plot_surface(X_a, Y_a, x_orig_viz, cmap='coolwarm', alpha=0.8)
+                ax4.set_title('Activation Values', fontsize=10)
+                ax4.set_xlabel('Hidden dim')
+                ax4.set_ylabel('Sequence pos')
+                ax4.set_zlabel('Value')
+                fig.colorbar(surf4, ax=ax4, shrink=0.5, aspect=10)
+                
+                # Activation relative error 3D
+                ax5 = fig.add_subplot(2, 3, 5, projection='3d')
+                surf5 = ax5.plot_surface(X_a, Y_a, x_err_viz, cmap='hot', alpha=0.8)
+                ax5.set_title(f'Activation Relative Error\nMean: {x_relative_error.mean():.4f}', fontsize=10)
+                ax5.set_xlabel('Hidden dim')
+                ax5.set_ylabel('Sequence pos')
+                ax5.set_zlabel('Rel. Error')
+                fig.colorbar(surf5, ax=ax5, shrink=0.5, aspect=10)
+                
+                # Activation error heatmap
+                ax6 = fig.add_subplot(2, 3, 6)
+                im6 = ax6.imshow(x_err_viz, cmap='hot', aspect='auto')
+                ax6.set_title('Activation Error Heatmap')
+                ax6.set_xlabel('Hidden dim')
+                ax6.set_ylabel('Sequence pos')
+                fig.colorbar(im6, ax=ax6, shrink=0.8)
+            
+            fig.suptitle(f'3D Quantization Error Visualization\n{layer_name}', fontsize=14, fontweight='bold')
+            plt.tight_layout(rect=[0, 0, 1, 0.95])
+            
+            filepath = os.path.join(output_subdir, f"{clean_name}_3d_error.png")
+            fig.savefig(filepath, dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            
+            result_paths[f"{clean_name}_3d"] = filepath
+            logger.info(f"  ✓ 3D plot: {layer_name}")
+            
+        except Exception as e:
+            logger.error(f"  ✗ 3D plot {layer_name}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    logger.info(f"Generated {len(result_paths)} 3D plots in {output_subdir}")
+    return result_paths
 
 
 if __name__ == "__main__":
