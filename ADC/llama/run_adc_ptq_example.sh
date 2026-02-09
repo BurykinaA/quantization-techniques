@@ -1,5 +1,7 @@
 #!/bin/bash
 # ADC Post-Training Quantization (PTQ) for LLaMA models
+# Uses standard sliding window perplexity evaluation (same as GPTQ, AWQ, FlatQuant papers)
+#
 # Supports: meta-llama/Llama-3.1-8B, meta-llama/Llama-3.2-3B, meta-llama/Llama-3.2-1B
 
 # ============================================================
@@ -31,13 +33,32 @@ MVM_LIMIT=256     # Memory vector multiplication limit for tiling
 CALIBRATION_METHOD="percentile"  # Options: minmax, percentile, mse
 NUM_CALIBRATION_BATCHES=128      # Number of batches for calibration
 CALIBRATION_BATCH_SIZE=4         # Batch size during calibration (reduce if OOM)
+CALIBRATION_MAX_LENGTH=512       # Sequence length for calibration (shorter is faster)
 
 # ============================================================
-# Evaluation Settings
+# Dataset Settings
 # ============================================================
-EVAL_BATCH_SIZE=4                # Batch size for perplexity evaluation
-MAX_LENGTH=512                   # Maximum sequence length
-MAX_EVAL_BATCHES=100             # Maximum batches for evaluation
+CALIBRATION_DATASET="wikitext2"  # Dataset for calibration: wikitext2 or c4
+EVAL_DATASETS="wikitext2"        # Datasets for evaluation (space-separated): wikitext2 c4
+                                 # Examples:
+                                 #   "wikitext2"           - evaluate on WikiText-2 only
+                                 #   "c4"                  - evaluate on C4 only
+                                 #   "wikitext2 c4"        - evaluate on both
+
+# ============================================================
+# Evaluation Settings (Sliding Window - Standard for Papers)
+# ============================================================
+# This uses the same methodology as GPTQ, AWQ, FlatQuant:
+# - Concatenate all text into one long sequence
+# - Use sliding window with overlap
+# - No padding
+MAX_LENGTH=2048                  # Context window for perplexity evaluation
+                                 # 2048 is standard for papers (LLaMA supports 4096+)
+STRIDE=""                        # Sliding window stride (empty = max_length // 2)
+                                 # Non-overlapping: set STRIDE=$MAX_LENGTH
+EVAL_SPLIT="test"                # Split for evaluation: train, validation, test
+                                 # Papers typically use "test" for final results
+MAX_EVAL_SAMPLES=1000            # Max samples for C4 (ignored for WikiText-2)
 
 # ============================================================
 # Model Loading Settings
@@ -70,20 +91,27 @@ echo ""
 echo "Quantization Strategy:"
 echo "  A-shift:         $ASHIFT"
 if [ "$ASHIFT" = true ]; then
-    echo "  → Asymmetric (unsigned) + A-shift for SiLU outputs (down_proj)"
+    echo "  -> Asymmetric (unsigned) + A-shift for SiLU outputs (down_proj)"
 else
-    echo "  → Symmetric (signed) for all activations"
+    echo "  -> Symmetric (signed) for all activations"
 fi
 echo ""
 echo "Calibration:"
 echo "  Method:          $CALIBRATION_METHOD"
+echo "  Dataset:         $CALIBRATION_DATASET"
 echo "  Batches:         $NUM_CALIBRATION_BATCHES"
 echo "  Batch size:      $CALIBRATION_BATCH_SIZE"
+echo "  Max length:      $CALIBRATION_MAX_LENGTH"
 echo ""
-echo "Evaluation:"
-echo "  Max batches:     $MAX_EVAL_BATCHES"
-echo "  Batch size:      $EVAL_BATCH_SIZE"
-echo "  Max length:      $MAX_LENGTH"
+echo "Evaluation (Sliding Window):"
+echo "  Datasets:        $EVAL_DATASETS"
+echo "  Split:           $EVAL_SPLIT"
+echo "  Context window:  $MAX_LENGTH"
+if [ -n "$STRIDE" ]; then
+    echo "  Stride:          $STRIDE"
+else
+    echo "  Stride:          $((MAX_LENGTH / 2)) (default: half context)"
+fi
 echo "========================================"
 echo ""
 
@@ -97,15 +125,23 @@ CMD="python ADC/llama/runs/llama_adc_ptq.py \
     --k $K \
     --mvm_limit $MVM_LIMIT \
     --calibration_method $CALIBRATION_METHOD \
+    --calibration_dataset $CALIBRATION_DATASET \
+    --eval_datasets $EVAL_DATASETS \
     --num_calibration_batches $NUM_CALIBRATION_BATCHES \
     --calibration_batch_size $CALIBRATION_BATCH_SIZE \
-    --eval_batch_size $EVAL_BATCH_SIZE \
+    --calibration_max_length $CALIBRATION_MAX_LENGTH \
     --max_length $MAX_LENGTH \
-    --max_eval_batches $MAX_EVAL_BATCHES \
+    --eval_split $EVAL_SPLIT \
+    --max_eval_samples $MAX_EVAL_SAMPLES \
     --torch_dtype $TORCH_DTYPE \
     --seed $SEED \
     --wandb_project \"$WANDB_PROJECT\" \
     --wandb_run_name \"$WANDB_RUN_NAME\""
+
+# Add optional stride
+if [ -n "$STRIDE" ]; then
+    CMD="$CMD --stride $STRIDE"
+fi
 
 # Add optional flags
 if [ "$ASHIFT" = true ]; then
@@ -122,27 +158,27 @@ EXIT_CODE=$?
 echo ""
 echo "========================================"
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "✓ PTQ Complete!"
+    echo "PTQ Complete!"
     echo "========================================"
     echo ""
-    echo "📁 Results saved to: $OUTPUT_DIR"
+    echo "Results saved to: $OUTPUT_DIR"
     echo ""
     echo "Files created:"
     echo "  - model.safetensors    (Calibrated model)"
     echo "  - config.json"
     echo "  - calibration_info.txt (Calibration details & perplexity)"
     echo ""
-    echo "🔗 WandB: https://wandb.ai/your-username/$WANDB_PROJECT"
+    echo "WandB: https://wandb.ai/your-username/$WANDB_PROJECT"
     echo ""
     echo "To use the calibrated model:"
     echo "  from transformers import AutoModelForCausalLM"
     echo "  model = AutoModelForCausalLM.from_pretrained(\"$OUTPUT_DIR\")"
 else
-    echo "✗ PTQ Failed with exit code $EXIT_CODE"
+    echo "PTQ Failed with exit code $EXIT_CODE"
     echo "========================================"
     echo ""
     echo "Common issues:"
-    echo "  - OOM: Reduce CALIBRATION_BATCH_SIZE or EVAL_BATCH_SIZE"
+    echo "  - OOM: Reduce MAX_LENGTH or CALIBRATION_BATCH_SIZE"
     echo "  - Auth: Run 'huggingface-cli login' for gated models"
     echo "  - CUDA: Check GPU availability with 'nvidia-smi'"
 fi

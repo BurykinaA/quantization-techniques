@@ -219,6 +219,241 @@ def show_model_with_adc_hooks(model, visualize_patterns):
     return output_text
 
 
+def load_dataset_by_name(dataset_name: str, split: str = "train"):
+    """
+    Load a dataset by name.
+    
+    Args:
+        dataset_name: "wikitext2" or "c4"
+        split: "train", "validation", or "test"
+    
+    Returns:
+        HuggingFace dataset
+    """
+    if dataset_name == "wikitext2":
+        raw = load_dataset("wikitext", "wikitext-2-raw-v1")
+        return raw[split]
+    elif dataset_name == "c4":
+        # C4 is large, use streaming for calibration or load a subset
+        if split == "train":
+            # For calibration, load a subset of C4
+            raw = load_dataset("allenai/c4", "en", split="train", streaming=True)
+            # Take first N samples for calibration
+            return raw
+        else:
+            # For validation, use the validation split
+            raw = load_dataset("allenai/c4", "en", split="validation", streaming=True)
+            return raw
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}. Supported: wikitext2, c4")
+
+
+def load_and_tokenize_for_sliding_window(
+    dataset_name: str, 
+    split: str, 
+    tokenizer, 
+    max_samples: int = 1000
+):
+    """
+    Load and tokenize a dataset into one long sequence for sliding window evaluation.
+    This is the standard approach used in papers like GPTQ, AWQ, FlatQuant.
+    
+    Args:
+        dataset_name: "wikitext2" or "c4"
+        split: "train", "validation", or "test"
+        tokenizer: Tokenizer to use
+        max_samples: Maximum samples for C4 (ignored for WikiText-2)
+    
+    Returns:
+        dict with 'input_ids' tensor of shape [1, total_tokens]
+    """
+    logger.info(f"Loading {dataset_name} ({split} split) for sliding window evaluation...")
+    
+    if dataset_name == "wikitext2":
+        raw = load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+        # Concatenate all text
+        text = "\n\n".join([t for t in raw["text"] if t.strip()])
+    elif dataset_name == "c4":
+        # C4 is huge, use streaming and limit samples
+        raw = load_dataset("allenai/c4", "en", split=split, streaming=True)
+        texts = []
+        for i, example in enumerate(raw):
+            if max_samples and i >= max_samples:
+                break
+            if example["text"].strip():
+                texts.append(example["text"])
+        text = "\n\n".join(texts)
+        logger.info(f"Loaded {len(texts)} samples from C4")
+    else:
+        raise ValueError(f"Unknown dataset: {dataset_name}")
+    
+    logger.info(f"Total text length: {len(text):,} characters")
+    
+    # Tokenize the entire text as one sequence
+    encodings = tokenizer(
+        text,
+        return_tensors="pt",
+        add_special_tokens=False,  # Don't add BOS/EOS between concatenated texts
+    )
+    
+    logger.info(f"Total tokens: {encodings['input_ids'].size(1):,}")
+    
+    return encodings
+
+
+def compute_perplexity_sliding_window(
+    model, 
+    encodings, 
+    device,
+    max_length: int = 2048,
+    stride: int = None,
+    desc: str = "Evaluating"
+):
+    """
+    Compute perplexity using sliding window approach (standard for papers).
+    
+    This is the proper way to evaluate perplexity on language models:
+    1. Concatenate all text into one long sequence
+    2. Use sliding window with stride
+    3. Only count loss on the "new" tokens (stride portion) to avoid double counting
+    
+    Args:
+        model: The language model
+        encodings: Tokenized text (dict with 'input_ids' tensor of shape [1, seq_len])
+        device: Device to run on
+        max_length: Context window size (should match model's context length)
+        stride: How many tokens to advance each step (default: max_length // 2)
+        desc: Description for progress bar
+    
+    Returns:
+        dict with perplexity, avg_loss, total_tokens, num_windows
+    """
+    if stride is None:
+        stride = max_length // 2  # 50% overlap is common
+    
+    model.eval()
+    
+    input_ids = encodings["input_ids"]
+    seq_len = input_ids.size(1)
+    
+    logger.info(f"  Total tokens in corpus: {seq_len:,}")
+    logger.info(f"  Context window: {max_length}, Stride: {stride}")
+    
+    nlls = []  # Negative log likelihoods
+    total_tokens = 0
+    
+    # Calculate number of windows
+    num_windows = max(1, (seq_len - max_length) // stride + 1)
+    
+    prev_end_loc = 0
+    with torch.no_grad():
+        for begin_loc in tqdm(range(0, seq_len, stride), desc=desc, total=num_windows):
+            end_loc = min(begin_loc + max_length, seq_len)
+            
+            # Get the window
+            input_ids_window = input_ids[:, begin_loc:end_loc].to(device)
+            
+            # Target length: only count loss on the "new" tokens
+            # This avoids double-counting when using overlapping windows
+            target_len = end_loc - prev_end_loc
+            
+            # Create labels: -100 for tokens we've already counted
+            labels = input_ids_window.clone()
+            labels[:, :-target_len] = -100  # Mask already-counted tokens
+            
+            outputs = model(
+                input_ids=input_ids_window,
+                labels=labels,
+            )
+            
+            # Accumulate the loss weighted by number of target tokens
+            neg_log_likelihood = outputs.loss * target_len
+            nlls.append(neg_log_likelihood.item())
+            total_tokens += target_len
+            
+            prev_end_loc = end_loc
+            
+            # Stop if we've processed the whole sequence
+            if end_loc >= seq_len:
+                break
+    
+    # Compute average loss and perplexity
+    avg_loss = sum(nlls) / total_tokens
+    perplexity = math.exp(avg_loss)
+    
+    return {
+        "perplexity": perplexity,
+        "avg_loss": avg_loss,
+        "total_tokens": total_tokens,
+        "num_windows": len(nlls),
+        "max_length": max_length,
+        "stride": stride,
+    }
+
+
+def prepare_dataset_for_lm(dataset, tokenizer, max_length: int, max_samples: int = None, 
+                           min_text_length: int = 50, streaming: bool = False):
+    """
+    Prepare a dataset for language modeling evaluation.
+    
+    Args:
+        dataset: HuggingFace dataset
+        tokenizer: Tokenizer
+        max_length: Maximum sequence length
+        max_samples: Maximum number of samples to use (None = all)
+        min_text_length: Minimum text length to keep
+        streaming: Whether the dataset is streaming
+    
+    Returns:
+        Processed dataset ready for DataLoader
+    """
+    def tokenize_function(examples):
+        texts = [t for t in examples["text"] if t.strip() and len(t.strip()) > min_text_length]
+        if not texts:
+            return {"input_ids": [], "attention_mask": []}
+        tokenized = tokenizer(
+            texts,
+            truncation=True,
+            max_length=max_length,
+            padding="max_length",
+            return_tensors=None,
+        )
+        return tokenized
+    
+    if streaming:
+        # For streaming datasets (C4), collect samples first
+        samples = []
+        for i, example in enumerate(dataset):
+            if max_samples and i >= max_samples:
+                break
+            if len(example["text"].strip()) > min_text_length:
+                samples.append(example)
+        
+        # Convert to regular dataset
+        from datasets import Dataset
+        dataset = Dataset.from_list(samples)
+    else:
+        # Filter short texts
+        dataset = dataset.filter(lambda x: len(x["text"].strip()) > min_text_length)
+        
+        # Limit samples if specified
+        if max_samples and len(dataset) > max_samples:
+            dataset = dataset.select(range(max_samples))
+    
+    # Tokenize
+    dataset = dataset.map(
+        tokenize_function,
+        batched=True,
+        remove_columns=dataset.column_names,
+        desc="Tokenizing",
+    )
+    
+    # Filter empty examples
+    dataset = dataset.filter(lambda x: len(x["input_ids"]) > 0)
+    
+    return dataset
+
+
 class ADCCalibrator:
     """Calibrates ADC quantizers using activation statistics"""
     
@@ -607,12 +842,27 @@ def main():
                        help="Number of batches for calibration")
     parser.add_argument("--calibration_batch_size", type=int, default=4)
     
-    # Evaluation settings
-    parser.add_argument("--eval_batch_size", type=int, default=4)
-    parser.add_argument("--max_length", type=int, default=512,
-                       help="Maximum sequence length for tokenization")
-    parser.add_argument("--max_eval_batches", type=int, default=100,
-                       help="Maximum batches for perplexity evaluation")
+    # Dataset settings
+    parser.add_argument("--calibration_dataset", type=str, default="wikitext2",
+                       choices=["wikitext2", "c4"],
+                       help="Dataset to use for calibration (wikitext2 or c4)")
+    parser.add_argument("--eval_datasets", type=str, nargs="+", default=["wikitext2"],
+                       choices=["wikitext2", "c4"],
+                       help="Datasets to evaluate on (can specify multiple: wikitext2 c4)")
+    
+    # Evaluation settings (Sliding Window - standard for papers)
+    parser.add_argument("--max_length", type=int, default=2048,
+                       help="Context window size for perplexity evaluation (2048 is standard for papers)")
+    parser.add_argument("--stride", type=int, default=None,
+                       help="Stride for sliding window evaluation (default: max_length // 2)")
+    parser.add_argument("--eval_split", type=str, default="test",
+                       choices=["train", "validation", "test"],
+                       help="Split to use for evaluation (test is standard for papers)")
+    parser.add_argument("--max_eval_samples", type=int, default=1000,
+                       help="Maximum samples for C4 evaluation (ignored for WikiText-2)")
+    # Keep calibration batch size for calibration phase
+    parser.add_argument("--calibration_max_length", type=int, default=512,
+                       help="Max sequence length for calibration (can be shorter than eval)")
     
     # WandB settings
     parser.add_argument("--wandb_project", type=str, default="llama-adc-ptq",
@@ -659,10 +909,15 @@ def main():
                 "quantization_note": "A-shift on down_proj only" if args.ashift else "Symmetric for all",
                 "mvm_limit": args.mvm_limit,
                 "calibration_method": args.calibration_method,
+                "calibration_dataset": args.calibration_dataset,
+                "eval_datasets": args.eval_datasets,
                 "num_calibration_batches": args.num_calibration_batches,
                 "calibration_batch_size": args.calibration_batch_size,
-                "eval_batch_size": args.eval_batch_size,
-                "max_length": args.max_length,
+                "calibration_max_length": args.calibration_max_length,
+                "eval_max_length": args.max_length,
+                "eval_stride": args.stride,
+                "eval_split": args.eval_split,
+                "perplexity_method": "sliding_window",
                 "torch_dtype": args.torch_dtype,
                 "seed": args.seed,
             }
@@ -743,37 +998,24 @@ def main():
     if not args.disable_visualizations:
         logger.info("Preparing sample input for visualizations...")
     
-    # Load calibration data - WikiText-2 for language modeling
-    logger.info("Loading WikiText-2 dataset for calibration...")
-    raw = load_dataset("wikitext", "wikitext-2-raw-v1")
+    # =========================================================================
+    # Load calibration dataset
+    # =========================================================================
+    logger.info(f"Loading {args.calibration_dataset.upper()} dataset for calibration...")
     
-    # Tokenize function for causal LM
-    def tokenize_function(examples):
-        # Filter out empty texts
-        texts = [t for t in examples["text"] if t.strip()]
-        if not texts:
-            return {"input_ids": [], "attention_mask": []}
-        
-        tokenized = tokenizer(
-            texts,
-            truncation=True,
-            max_length=args.max_length,
-            padding="max_length",
-            return_tensors=None,
-        )
-        return tokenized
+    is_streaming = (args.calibration_dataset == "c4")
+    calib_raw = load_dataset_by_name(args.calibration_dataset, split="train")
     
-    # Use train split for calibration
-    calibration_dataset = raw["train"].filter(lambda x: len(x["text"].strip()) > 50)
-    calibration_dataset = calibration_dataset.select(range(min(2000, len(calibration_dataset))))
-    calibration_dataset = calibration_dataset.map(
-        tokenize_function,
-        batched=True,
-        remove_columns=["text"],
-        desc="Tokenizing calibration data",
+    calibration_dataset = prepare_dataset_for_lm(
+        calib_raw, 
+        tokenizer, 
+        max_length=args.calibration_max_length,  # Use shorter sequences for calibration
+        max_samples=2000,
+        min_text_length=50,
+        streaming=is_streaming
     )
-    # Filter out empty examples
-    calibration_dataset = calibration_dataset.filter(lambda x: len(x["input_ids"]) > 0)
+    
+    logger.info(f"Calibration dataset: {len(calibration_dataset)} samples from {args.calibration_dataset}")
     
     # Get sample for visualization
     if not args.disable_visualizations and len(calibration_dataset) > 0:
@@ -869,94 +1111,83 @@ def main():
                 wandb.log({f"viz_after/{name}": wandb.Image(img_path)})
             logger.info(f"✅ Uploaded {len(viz_after)} AFTER visualizations to WandB")
     
-    # Evaluate perplexity
+    # =========================================================================
+    # STEP 2: Evaluate perplexity on specified datasets (Sliding Window)
+    # =========================================================================
     logger.info("="*80)
-    logger.info("STEP 2: PERPLEXITY EVALUATION")
+    logger.info("STEP 2: PERPLEXITY EVALUATION (Sliding Window)")
     logger.info("="*80)
+    logger.info(f"Evaluating on datasets: {args.eval_datasets}")
+    logger.info(f"Method: Sliding window (standard for papers like GPTQ, AWQ, FlatQuant)")
+    logger.info(f"Context window: {args.max_length}, Stride: {args.stride or args.max_length // 2}")
+    logger.info(f"Evaluation split: {args.eval_split}")
     
-    # Prepare validation dataset
-    eval_dataset = raw["validation"].filter(lambda x: len(x["text"].strip()) > 50)
-    eval_dataset = eval_dataset.map(
-        tokenize_function,
-        batched=True,
-        remove_columns=["text"],
-        desc="Tokenizing validation data",
-    )
-    eval_dataset = eval_dataset.filter(lambda x: len(x["input_ids"]) > 0)
+    # Get model's max context length for safety check
+    model_max_length = getattr(model.config, 'max_position_embeddings', 4096)
+    if args.max_length > model_max_length:
+        logger.warning(f"max_length ({args.max_length}) > model's max ({model_max_length}), using {model_max_length}")
+        args.max_length = model_max_length
     
-    # Custom collator for evaluation
-    def eval_collator(features):
-        batch = {
-            "input_ids": torch.tensor([f["input_ids"] for f in features]),
-            "attention_mask": torch.tensor([f["attention_mask"] for f in features]),
-        }
-        return batch
-    
-    eval_loader = DataLoader(
-        eval_dataset,
-        batch_size=args.eval_batch_size,
-        shuffle=False,
-        collate_fn=eval_collator,
-    )
-    
-    logger.info(f"Running perplexity evaluation on {len(eval_dataset)} samples...")
+    # Store results for all datasets
+    all_eval_metrics = {}
     model.eval()
     
-    total_loss = 0.0
-    total_tokens = 0
-    num_batches = 0
+    for eval_dataset_name in args.eval_datasets:
+        logger.info("-"*40)
+        logger.info(f"Evaluating on {eval_dataset_name.upper()} ({args.eval_split} split)...")
+        
+        # Load and tokenize as one concatenated sequence (standard for papers)
+        encodings = load_and_tokenize_for_sliding_window(
+            eval_dataset_name,
+            args.eval_split,
+            tokenizer,
+            max_samples=args.max_eval_samples if eval_dataset_name == "c4" else None
+        )
+        
+        # Compute perplexity using sliding window
+        metrics = compute_perplexity_sliding_window(
+            model,
+            encodings,
+            device,
+            max_length=args.max_length,
+            stride=args.stride,
+            desc=f"Eval {eval_dataset_name}"
+        )
+        
+        all_eval_metrics[eval_dataset_name] = metrics
+        
+        logger.info(f"  {eval_dataset_name.upper()} Perplexity: {metrics['perplexity']:.4f}")
     
-    with torch.no_grad():
-        for batch in tqdm(eval_loader, desc="Evaluating", total=min(args.max_eval_batches, len(eval_loader))):
-            if num_batches >= args.max_eval_batches:
-                break
-            
-            input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
-            
-            # For causal LM, labels = input_ids (shifted internally by the model)
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=input_ids,
-            )
-            
-            # Count non-padding tokens
-            num_tokens = attention_mask.sum().item()
-            total_loss += outputs.loss.item() * num_tokens
-            total_tokens += num_tokens
-            num_batches += 1
+    # For backward compatibility, use first dataset's metrics as primary
+    eval_metrics = all_eval_metrics[args.eval_datasets[0]]
+    perplexity = eval_metrics["perplexity"]
+    avg_loss = eval_metrics["avg_loss"]
     
-    # Compute perplexity
-    avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
-    perplexity = math.exp(avg_loss) if avg_loss < 100 else float('inf')
-    
-    eval_metrics = {
-        "perplexity": perplexity,
-        "avg_loss": avg_loss,
-        "total_tokens": total_tokens,
-        "num_batches": num_batches,
-    }
-    
+    # Print summary
     logger.info("="*80)
-    logger.info("RESULTS")
+    logger.info("RESULTS SUMMARY (Sliding Window Perplexity)")
     logger.info("="*80)
-    logger.info(f"Perplexity:    {perplexity:.2f}")
-    logger.info(f"Avg Loss:      {avg_loss:.4f}")
-    logger.info(f"Total Tokens:  {total_tokens:,}")
+    logger.info(f"Context window: {args.max_length}, Stride: {args.stride or args.max_length // 2}")
+    for ds_name, metrics in all_eval_metrics.items():
+        logger.info(f"{ds_name.upper():12s} Perplexity: {metrics['perplexity']:.4f}  (Loss: {metrics['avg_loss']:.4f}, Tokens: {metrics['total_tokens']:,}, Windows: {metrics['num_windows']})")
     
     # Log all metrics to wandb
     if use_wandb:
-        wandb.log({
-            "eval/perplexity": perplexity,
-            "eval/avg_loss": avg_loss,
-            "eval/total_tokens": total_tokens,
-        })
+        for ds_name, metrics in all_eval_metrics.items():
+            wandb.log({
+                f"eval/{ds_name}/perplexity": metrics["perplexity"],
+                f"eval/{ds_name}/avg_loss": metrics["avg_loss"],
+                f"eval/{ds_name}/total_tokens": metrics["total_tokens"],
+                f"eval/{ds_name}/num_windows": metrics["num_windows"],
+            })
+            wandb.run.summary[f"{ds_name}_perplexity"] = metrics["perplexity"]
+            wandb.run.summary[f"{ds_name}_avg_loss"] = metrics["avg_loss"]
         
-        # Summary statistics
-        wandb.run.summary["perplexity"] = perplexity
-        wandb.run.summary["avg_loss"] = avg_loss
         wandb.run.summary["num_calibrated_layers"] = len(optimal_params)
+        wandb.run.summary["calibration_dataset"] = args.calibration_dataset
+        wandb.run.summary["eval_datasets"] = ",".join(args.eval_datasets)
+        wandb.run.summary["eval_max_length"] = args.max_length
+        wandb.run.summary["eval_stride"] = args.stride or args.max_length // 2
     
     # Save calibrated model
     logger.info(f"Saving calibrated model to: {args.output_dir}")

@@ -1,12 +1,16 @@
 #!/bin/bash
 # ==============================================================================
-# Measure LLaMA Perplexity on WikiText-2 / C4
+# Measure LLaMA Perplexity (Standard Sliding Window Method)
 # ==============================================================================
-# Use this script to measure baseline (full precision) perplexity before PTQ.
+# Uses the same methodology as papers like GPTQ, AWQ, FlatQuant:
+# - Concatenate all text into one long sequence
+# - Use sliding window with overlap
+# - No padding
+#
 # Supports: meta-llama/Llama-3.1-8B, meta-llama/Llama-3.2-3B, meta-llama/Llama-3.2-1B
 
 # ============================================================
-# MODEL CONFIGURATION - Change this to use different models
+# MODEL CONFIGURATION
 # ============================================================
 MODEL_NAME="meta-llama/Llama-3.2-1B"  # Options:
                                        # - meta-llama/Llama-3.2-1B (smallest, fastest)
@@ -19,18 +23,26 @@ MODEL_NAME="meta-llama/Llama-3.2-1B"  # Options:
 TORCH_DTYPE="float16"            # Options: float16, bfloat16, float32
 
 # ============================================================
-# Evaluation Settings
+# Dataset Settings
 # ============================================================
-EVAL_BATCH_SIZE=4                # Batch size for perplexity evaluation
-MAX_LENGTH=512                   # Maximum sequence length
-MAX_EVAL_BATCHES=100              # Maximum batches for evaluation (empty = all)
-DATASET_SPLIT="validation"       # Dataset split: validation or test (PTQ uses validation)
+DATASET="wikitext2"              # Options: wikitext2, c4
+DATASET_SPLIT="test"             # Options: train, validation, test
+                                 # Standard papers use "test" for final evaluation
+MAX_SAMPLES=1000                 # Only for C4 (which is huge), ignored for WikiText-2
+
+# ============================================================
+# Evaluation Settings (Sliding Window)
+# ============================================================
+MAX_LENGTH=2048                  # Context window size (2048 is standard for papers)
+                                 # LLaMA-3 supports up to 8192, but 2048 is common
+STRIDE=""                        # Sliding window stride (empty = max_length // 2)
+                                 # Non-overlapping: set STRIDE=$MAX_LENGTH
 
 # ============================================================
 # WandB Settings (leave empty to disable)
 # ============================================================
-WANDB_PROJECT="llama-fp"                 # Set to enable WandB logging, e.g., "llama-perplexity"
-WANDB_RUN_NAME="fp_${MODEL_NAME}"                # Auto-generated if empty
+WANDB_PROJECT="llama-fp"         # Set to enable WandB logging
+WANDB_RUN_NAME=""                # Auto-generated if empty
 
 # Seed for reproducibility
 SEED=42
@@ -41,19 +53,21 @@ SEED=42
 MODEL_SHORT_NAME=$(echo $MODEL_NAME | sed 's/.*\///')
 
 echo "========================================"
-echo "LLaMA Perplexity Measurement"
+echo "LLaMA Perplexity (Sliding Window)"
 echo "========================================"
 echo "Model:             $MODEL_NAME"
 echo "Dtype:             $TORCH_DTYPE"
 echo ""
 echo "Evaluation:"
-echo "  Dataset:         WikiText-2 ($DATASET_SPLIT)"
-echo "  Batch size:      $EVAL_BATCH_SIZE"
-echo "  Max length:      $MAX_LENGTH"
-if [ -n "$MAX_EVAL_BATCHES" ]; then
-    echo "  Max batches:     $MAX_EVAL_BATCHES"
+echo "  Dataset:         $DATASET ($DATASET_SPLIT)"
+echo "  Context window:  $MAX_LENGTH"
+if [ -n "$STRIDE" ]; then
+    echo "  Stride:          $STRIDE"
 else
-    echo "  Max batches:     all"
+    echo "  Stride:          $((MAX_LENGTH / 2)) (default: half context)"
+fi
+if [ "$DATASET" = "c4" ]; then
+    echo "  Max samples:     $MAX_SAMPLES"
 fi
 echo ""
 if [ -n "$WANDB_PROJECT" ]; then
@@ -70,14 +84,18 @@ echo ""
 CMD="python ADC/llama/runs/measure_perplexity.py \
     --model_name \"$MODEL_NAME\" \
     --torch_dtype $TORCH_DTYPE \
-    --eval_batch_size $EVAL_BATCH_SIZE \
-    --max_length $MAX_LENGTH \
+    --dataset $DATASET \
     --dataset_split $DATASET_SPLIT \
+    --max_length $MAX_LENGTH \
     --seed $SEED"
 
 # Add optional arguments
-if [ -n "$MAX_EVAL_BATCHES" ]; then
-    CMD="$CMD --max_eval_batches $MAX_EVAL_BATCHES"
+if [ -n "$STRIDE" ]; then
+    CMD="$CMD --stride $STRIDE"
+fi
+
+if [ "$DATASET" = "c4" ]; then
+    CMD="$CMD --max_samples $MAX_SAMPLES"
 fi
 
 if [ -n "$WANDB_PROJECT" ]; then
@@ -100,18 +118,18 @@ EXIT_CODE=$?
 echo ""
 echo "========================================"
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "✓ Perplexity measurement complete!"
+    echo "Perplexity measurement complete!"
     echo "========================================"
     if [ -n "$WANDB_PROJECT" ]; then
         echo ""
-        echo "🔗 WandB: https://wandb.ai/your-username/$WANDB_PROJECT"
+        echo "WandB: https://wandb.ai/your-username/$WANDB_PROJECT"
     fi
 else
-    echo "✗ Failed with exit code $EXIT_CODE"
+    echo "Failed with exit code $EXIT_CODE"
     echo "========================================"
     echo ""
     echo "Common issues:"
-    echo "  - OOM: Reduce EVAL_BATCH_SIZE"
+    echo "  - OOM: Reduce MAX_LENGTH (try 1024 or 512)"
     echo "  - Auth: Run 'huggingface-cli login' for gated models"
     echo "  - CUDA: Check GPU availability with 'nvidia-smi'"
 fi
