@@ -24,8 +24,8 @@ STRIDE=""                        # Empty = max_length // 2 (50% overlap)
 
 # Dataset settings
 WIKITEXT_SPLIT="test"            # Standard for papers
-C4_SPLIT="validation"            # C4 test split is huge, use validation
-C4_MAX_SAMPLES=1000              # Limit C4 samples
+C4_SPLIT="test"                  # Use test split (same as papers)
+C4_MAX_SAMPLES=10000                # No limit - use full validation split
 
 # WandB Settings
 WANDB_PROJECT="llama-fp-benchmark"  # All runs go to this project
@@ -110,8 +110,8 @@ for MODEL_NAME in "${MODELS[@]}"; do
             CMD="$CMD --stride $STRIDE"
         fi
         
-        # Add max_samples for C4
-        if [ "$DATASET" = "c4" ]; then
+        # Add max_samples for C4 (only if limit is set)
+        if [ "$DATASET" = "c4" ] && [ -n "$C4_MAX_SAMPLES" ]; then
             CMD="$CMD --max_samples $C4_MAX_SAMPLES"
         fi
         
