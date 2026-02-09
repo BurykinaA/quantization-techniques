@@ -129,8 +129,11 @@ def visualize_activations_and_weights(
             if collect_input:
                 results[name + "_input"] = x.detach().cpu()
             if collect_output:
+                # Handle tuple outputs (like from attention)
+                if isinstance(out, tuple):
+                    out = out[0]
                 results[name + "_output"] = out.detach().cpu()
-            if collect_weight:
+            if collect_weight and hasattr(module, 'weight'):
                 results[name + "_weight"] = module.weight.detach().cpu()
         return hook
     
@@ -142,6 +145,18 @@ def visualize_activations_and_weights(
         layer = layers[i]
         self_attn = layer.self_attn
         ffn = layer.mlp
+        
+        # Hook for MHSA input (input to entire self-attention block)
+        hook = self_attn.register_forward_hook(
+            generate_hook(f"layer{i}_MHSA", collect_input=True, collect_output=False, collect_weight=False)
+        )
+        hooks.append(hook)
+        
+        # Hook for FFN input (input to entire MLP block)
+        hook = ffn.register_forward_hook(
+            generate_hook(f"layer{i}_FFN", collect_input=True, collect_output=False, collect_weight=False)
+        )
+        hooks.append(hook)
         
         # Get projection layers
         projections = {
