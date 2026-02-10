@@ -300,132 +300,137 @@ def visualize_activations_and_weights(
             "layer_indices": list(results_by_layer.keys()),
         }
     
-    # Collect weight and activation values for 2D distribution
-    # For weights: flatten all weight values (not per-channel stats, actual values)
-    # For activations: flatten all activation values
-    all_weights_flat = []
-    all_activations_flat = []
+    # Collect per-channel statistics for 2D distribution (Mean vs Std like FlatQuant Figure 4)
+    # For weights: each point = (mean, std) of one output channel
+    # For activations: each point = (mean, std) of one hidden dimension
+    all_weight_channel_means = []
+    all_weight_channel_stds = []
+    all_activation_channel_means = []
+    all_activation_channel_stds = []
     
-    # Collect per-channel variances for bar chart
-    all_weight_channel_vars = []
-    all_activation_channel_vars = []
+    # Collect per-channel variances for bar chart (per layer separately)
+    weight_vars_by_layer = {}  # layer_idx -> list of variances
+    activation_vars_by_layer = {}
     
     for layer_idx, layer_data in results_by_layer.items():
+        if layer_idx not in weight_vars_by_layer:
+            weight_vars_by_layer[layer_idx] = []
+            activation_vars_by_layer[layer_idx] = []
+        
         for name, tensor in layer_data.items():
             if "weight" in name:
                 # Weights: [out_features, in_features]
                 value = tensor.float().numpy()
-                # Sample some values for 2D plot (otherwise too many points)
-                flat = value.flatten()
-                if len(flat) > 10000:
-                    idx = np.random.choice(len(flat), 10000, replace=False)
-                    flat = flat[idx]
-                all_weights_flat.extend(flat)
                 
-                # Per-channel variance (along input features for each output channel)
+                # Per-channel stats (along input features for each output channel)
+                channel_means = np.mean(value, axis=1)
+                channel_stds = np.std(value, axis=1)
                 channel_vars = np.var(value, axis=1)
-                all_weight_channel_vars.extend(channel_vars)
+                
+                all_weight_channel_means.extend(channel_means)
+                all_weight_channel_stds.extend(channel_stds)
+                weight_vars_by_layer[layer_idx].extend(channel_vars)
                 
             elif "input" in name:
                 # Activations: [batch, seq, hidden] -> flatten to [tokens, hidden]
                 value = tensor.flatten(0, -2).float().numpy()
-                # Sample some values for 2D plot
-                flat = value.flatten()
-                if len(flat) > 10000:
-                    idx = np.random.choice(len(flat), 10000, replace=False)
-                    flat = flat[idx]
-                all_activations_flat.extend(flat)
                 
-                # Per-channel variance (along tokens for each hidden dim)
+                # Per-channel stats (along tokens for each hidden dim)
+                channel_means = np.mean(value, axis=0)
+                channel_stds = np.std(value, axis=0)
                 channel_vars = np.var(value, axis=0)
-                all_activation_channel_vars.extend(channel_vars)
+                
+                all_activation_channel_means.extend(channel_means)
+                all_activation_channel_stds.extend(channel_stds)
+                activation_vars_by_layer[layer_idx].extend(channel_vars)
     
-    all_weights_flat = np.array(all_weights_flat)
-    all_activations_flat = np.array(all_activations_flat)
-    all_weight_channel_vars = np.array(all_weight_channel_vars)
-    all_activation_channel_vars = np.array(all_activation_channel_vars)
+    all_weight_channel_means = np.array(all_weight_channel_means)
+    all_weight_channel_stds = np.array(all_weight_channel_stds)
+    all_activation_channel_means = np.array(all_activation_channel_means)
+    all_activation_channel_stds = np.array(all_activation_channel_stds)
     
-    if len(all_weights_flat) > 0 and len(all_activations_flat) > 0:
+    if len(all_weight_channel_means) > 0 and len(all_activation_channel_means) > 0:
         
         # =====================================================================
-        # Figure 4(a): 2D KDE Distribution with inset 1D plot
+        # Figure 4(a): 2D KDE Distribution (Mean vs Std per channel)
+        # Like FlatQuant Figure 4: each point = one channel's (mean, std)
         # =====================================================================
-        def plot_2d_kde_distribution(ax, data, cmap_name, title, mean_color='red'):
-            """Plot 2D KDE with inset 1D distribution"""
-            # Create 2D data by projecting onto two axes
-            # Use actual values and a second dimension as a slight noise/different projection
-            np.random.seed(42)
-            n = len(data)
-            # Create 2D projection: dim1 = value, dim2 = value + small noise
-            data_2d = np.column_stack([
-                data,
-                data + np.random.normal(0, np.std(data) * 0.1, n)
-            ])
+        def plot_2d_kde_distribution(ax, means, stds, cmap_name, title, mean_color='red'):
+            """Plot 2D KDE of per-channel statistics (Mean vs Std)"""
+            # Subsample if too many points
+            max_points = 5000
+            if len(means) > max_points:
+                idx = np.random.choice(len(means), max_points, replace=False)
+                means = means[idx]
+                stds = stds[idx]
             
-            # 2D KDE Plot
+            # 2D KDE Plot: X = channel mean, Y = channel std
             try:
-                sns.kdeplot(x=data_2d[:, 0], y=data_2d[:, 1], ax=ax, 
+                sns.kdeplot(x=means, y=stds, ax=ax, 
                            fill=True, cmap=cmap_name, thresh=0.05, levels=15)
             except Exception:
                 # Fallback to scatter if KDE fails
-                ax.scatter(data_2d[:, 0], data_2d[:, 1], alpha=0.1, s=1, c='blue')
+                ax.scatter(means, stds, alpha=0.3, s=5, c='blue')
             
-            # Mean point (red dot)
-            mean_x, mean_y = np.mean(data_2d[:, 0]), np.mean(data_2d[:, 1])
-            ax.scatter([mean_x], [mean_y], color=mean_color, s=50, 
-                      edgecolors='black', linewidths=1.5, zorder=10, label='Mean')
+            # Mean of all channels (red dot)
+            global_mean = np.mean(means)
+            global_std_mean = np.mean(stds)
+            ax.scatter([global_mean], [global_std_mean], color=mean_color, s=80, 
+                      edgecolors='black', linewidths=2, zorder=10, label='Global Mean')
             
             # Formatting
             ax.set_title(title, fontsize=12, fontweight='bold')
+            ax.set_xlabel('Channel Mean', fontsize=10)
+            ax.set_ylabel('Channel Std', fontsize=10)
             ax.grid(True, linestyle='--', alpha=0.5)
             ax.legend(loc='upper right', fontsize=8)
             
-            # Inset 1D distribution plot in bottom-left corner
+            # Inset 1D distribution of means in bottom-left corner
             try:
-                inset_ax = ax.inset_axes([0.05, 0.05, 0.35, 0.25])
-                sns.kdeplot(data, ax=inset_ax, color=plt.get_cmap(cmap_name)(0.6), fill=True)
-                inset_ax.axvline(np.mean(data), color=mean_color, linestyle='--', linewidth=1.5)
+                inset_ax = ax.inset_axes([0.05, 0.65, 0.35, 0.25])
+                sns.kdeplot(means, ax=inset_ax, color=plt.get_cmap(cmap_name)(0.6), fill=True)
+                inset_ax.axvline(global_mean, color=mean_color, linestyle='--', linewidth=1.5)
                 inset_ax.set_xlabel('')
                 inset_ax.set_ylabel('')
                 inset_ax.tick_params(labelsize=6)
-                inset_ax.set_title('1D Distribution', fontsize=7)
+                inset_ax.set_title('Mean Distribution', fontsize=7)
             except Exception:
-                pass  # Skip inset if it fails
+                pass
         
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
         
-        # Subsample for KDE if too many points
-        max_kde_points = 5000
-        weights_kde = all_weights_flat[:max_kde_points] if len(all_weights_flat) > max_kde_points else all_weights_flat
-        activations_kde = all_activations_flat[:max_kde_points] if len(all_activations_flat) > max_kde_points else all_activations_flat
+        plot_2d_kde_distribution(ax1, all_weight_channel_means, all_weight_channel_stds, 
+                                 'Blues', 'Distribution of Weight (per channel)')
+        plot_2d_kde_distribution(ax2, all_activation_channel_means, all_activation_channel_stds, 
+                                 'Greens', 'Distribution of Activation (per channel)')
         
-        plot_2d_kde_distribution(ax1, weights_kde, 'Blues', 'Distribution of Weight')
-        plot_2d_kde_distribution(ax2, activations_kde, 'Greens', 'Distribution of Activation')
-        
-        fig.suptitle('(a) Weight and Activation Distributions', fontsize=14, fontweight='bold')
+        fig.suptitle('(a) Per-Channel Statistics: Mean vs Std', fontsize=14, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         fig.savefig(os.path.join(save_path, 'fig4a_2d_kde_distribution.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)
         
         # =====================================================================
-        # Figure 4(b): Per-channel Variance Bar Charts with Gradient Colors
+        # Figure 4(b): Per-channel Variance Bar Charts (per layer)
+        # Show a few representative layers instead of concatenating all
         # =====================================================================
         def plot_variance_bar_chart(ax, channel_vars, title, cmap_name='coolwarm'):
-            """Plot per-channel variance with color gradient"""
+            """Plot per-channel variance with color gradient based on variance value"""
             n_channels = len(channel_vars)
             channels = np.arange(n_channels)
             
-            # Create color gradient based on channel index
-            norm = Normalize(vmin=0, vmax=n_channels)
+            # Create color gradient based on variance VALUE (not index)
+            # This highlights high-variance channels
+            var_min, var_max = np.min(channel_vars), np.max(channel_vars)
+            norm = Normalize(vmin=var_min, vmax=var_max)
             cmap = plt.get_cmap(cmap_name)
-            colors = [cmap(norm(i)) for i in channels]
+            colors = [cmap(norm(v)) for v in channel_vars]
             
             # Plot bars
             ax.bar(channels, channel_vars, color=colors, width=1.0, edgecolor='none')
             
             # Formatting
-            ax.set_title(title, fontsize=12, fontweight='bold')
-            ax.set_xlabel('Channel', fontsize=10)
+            ax.set_title(title, fontsize=11, fontweight='bold')
+            ax.set_xlabel('Channel Index', fontsize=10)
             ax.set_ylabel('Variance', fontsize=10)
             ax.set_xlim(0, n_channels)
             ax.grid(True, axis='y', linestyle='--', alpha=0.5)
@@ -434,21 +439,39 @@ def visualize_activations_and_weights(
             sm = ScalarMappable(cmap=cmap, norm=norm)
             sm.set_array([])
             cbar = plt.colorbar(sm, ax=ax, shrink=0.8)
-            cbar.set_label('Channel Index', fontsize=8)
+            cbar.set_label('Variance', fontsize=8)
         
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8))
+        # Select representative layers (first, middle, last from visualized set)
+        sorted_layers = sorted(weight_vars_by_layer.keys())
+        if len(sorted_layers) >= 3:
+            representative_layers = [sorted_layers[0], sorted_layers[len(sorted_layers)//2], sorted_layers[-1]]
+        else:
+            representative_layers = sorted_layers
         
-        # Limit channels for visualization
-        max_channels = 4096
-        weight_vars_plot = all_weight_channel_vars[:max_channels]
-        activation_vars_plot = all_activation_channel_vars[:max_channels]
+        # Create multi-panel figure: 2 rows (weights, activations) x N layers
+        n_layers_to_show = len(representative_layers)
+        fig, axes = plt.subplots(2, n_layers_to_show, figsize=(5 * n_layers_to_show, 8))
         
-        plot_variance_bar_chart(ax1, weight_vars_plot, 
-                               'The variance difference of Weight on different channels')
-        plot_variance_bar_chart(ax2, activation_vars_plot, 
-                               'The variance difference of Activation on different channels')
+        if n_layers_to_show == 1:
+            axes = axes.reshape(2, 1)
         
-        fig.suptitle('(b) Inter-channel Variance Disparities', fontsize=14, fontweight='bold')
+        for col_idx, layer_idx in enumerate(representative_layers):
+            # Weight variance for this layer
+            w_vars = np.array(weight_vars_by_layer.get(layer_idx, []))
+            if len(w_vars) > 0:
+                # Take first 4096 channels (one projection layer)
+                w_vars_plot = w_vars[:min(4096, len(w_vars))]
+                plot_variance_bar_chart(axes[0, col_idx], w_vars_plot, 
+                                       f'Weight Variance - Layer {layer_idx}')
+            
+            # Activation variance for this layer
+            a_vars = np.array(activation_vars_by_layer.get(layer_idx, []))
+            if len(a_vars) > 0:
+                a_vars_plot = a_vars[:min(4096, len(a_vars))]
+                plot_variance_bar_chart(axes[1, col_idx], a_vars_plot, 
+                                       f'Activation Variance - Layer {layer_idx}')
+        
+        fig.suptitle('(b) Inter-channel Variance Disparities (by Layer)', fontsize=14, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         fig.savefig(os.path.join(save_path, 'fig4b_variance_bar_charts.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)

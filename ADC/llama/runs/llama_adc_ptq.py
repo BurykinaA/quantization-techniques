@@ -1058,13 +1058,37 @@ def main():
     
     logger.info(f"Calibration dataset: {len(calibration_dataset)} samples from {args.calibration_dataset}")
     
-    # Get sample for visualization
+    # Get sample for visualization - try to find one WITH padding for better demonstration
     if not args.disable_visualizations and len(calibration_dataset) > 0:
+        # Look for a sample that has some padding (attention_mask contains 0s)
+        viz_sample_idx = 0
+        sample_with_padding_found = False
+        
+        for idx in range(min(100, len(calibration_dataset))):  # Check first 100 samples
+            mask = calibration_dataset[idx]['attention_mask']
+            n_valid = sum(mask) if isinstance(mask, list) else mask.sum().item()
+            n_total = len(mask)
+            if n_valid < n_total:  # Has padding
+                viz_sample_idx = idx
+                sample_with_padding_found = True
+                logger.info(f"Found sample with padding at idx={idx}: {n_valid}/{n_total} valid tokens")
+                break
+        
+        if not sample_with_padding_found:
+            logger.info("No sample with padding found in first 100 - all texts fill max_length")
+            logger.info("Using first sample (no padding to filter)")
+        
         sample_input = {
-            'input_ids': torch.tensor([calibration_dataset[0]['input_ids']]).to(device),
-            'attention_mask': torch.tensor([calibration_dataset[0]['attention_mask']]).to(device),
+            'input_ids': torch.tensor([calibration_dataset[viz_sample_idx]['input_ids']]).to(device),
+            'attention_mask': torch.tensor([calibration_dataset[viz_sample_idx]['attention_mask']]).to(device),
         }
-        logger.info(f"Sample input prepared for visualization (shape: {sample_input['input_ids'].shape})")
+        
+        # Log sample info
+        mask = sample_input['attention_mask']
+        n_valid = mask.sum().item()
+        n_total = mask.numel()
+        logger.info(f"Visualization sample: idx={viz_sample_idx}, shape={sample_input['input_ids'].shape}, "
+                   f"valid_tokens={n_valid}/{n_total}")
     
     # Custom collator for causal LM
     def calibration_collator(features):
@@ -1594,6 +1618,20 @@ def _generate_3d_quantization_error_plots(
     # Get attention_mask to filter padding in visualization
     attention_mask = sample_input.get('attention_mask', None)
     
+    # DEBUG: Log attention mask info
+    if attention_mask is not None:
+        mask_sum = attention_mask.sum().item()
+        mask_total = attention_mask.numel()
+        logger.info(f"3D Viz: attention_mask shape={attention_mask.shape}, "
+                   f"non-padding={mask_sum}/{mask_total} ({100*mask_sum/mask_total:.1f}%)")
+        # Show first 20 values to see if padding is at start (left-padding)
+        if attention_mask.dim() == 2:
+            first_sample_mask = attention_mask[0]
+            logger.info(f"3D Viz: First 20 mask values: {first_sample_mask[:20].tolist()}")
+            logger.info(f"3D Viz: Last 20 mask values: {first_sample_mask[-20:].tolist()}")
+    else:
+        logger.warning("3D Viz: No attention_mask found in sample_input!")
+    
     # Capture activation data
     captured_activations = {}
     
@@ -1679,10 +1717,17 @@ def _generate_3d_quantization_error_plots(
                 if sample_mask is not None:
                     # Find non-padding positions (mask == 1)
                     valid_positions = sample_mask.bool()
-                    if valid_positions.sum() > 0:
+                    n_valid = valid_positions.sum().item()
+                    n_total = len(sample_mask)
+                    
+                    if n_valid == n_total:
+                        logger.info(f"  No padding in sample (all {n_total} positions are valid)")
+                    elif n_valid > 0:
                         x_orig_2d = x_orig_2d[valid_positions]  # [valid_seq, hidden]
                         x_quant_2d = x_quant_2d[valid_positions]
-                        logger.info(f"  Filtered activations: {valid_positions.sum().item()}/{len(sample_mask)} non-padding positions")
+                        logger.info(f"  Filtered activations: {n_valid}/{n_total} non-padding positions")
+                    else:
+                        logger.warning(f"  All positions are padding! Using full tensor.")
                 
                 x_error = torch.abs(x_orig_2d - x_quant_2d)
                 x_mean_abs = torch.abs(x_orig_2d).mean()
