@@ -300,22 +300,15 @@ def visualize_activations_and_weights(
             "layer_indices": list(results_by_layer.keys()),
         }
     
-    # Collect per-channel statistics for 2D distribution (Mean vs Std like FlatQuant Figure 4)
-    # For weights: each point = (mean, std) of one output channel
-    # For activations: each point = (mean, std) of one hidden dimension
-    all_weight_channel_means = []
-    all_weight_channel_stds = []
-    all_activation_channel_means = []
-    all_activation_channel_stds = []
-    
-    # Collect per-channel variances for bar chart (per layer separately)
-    weight_vars_by_layer = {}  # layer_idx -> list of variances
-    activation_vars_by_layer = {}
+    # Collect per-channel statistics PER LAYER (for both 2D KDE and variance charts)
+    # Each layer has its own distribution characteristics
+    weight_stats_by_layer = {}  # layer_idx -> {'means': [], 'stds': [], 'vars': []}
+    activation_stats_by_layer = {}
     
     for layer_idx, layer_data in results_by_layer.items():
-        if layer_idx not in weight_vars_by_layer:
-            weight_vars_by_layer[layer_idx] = []
-            activation_vars_by_layer[layer_idx] = []
+        if layer_idx not in weight_stats_by_layer:
+            weight_stats_by_layer[layer_idx] = {'means': [], 'stds': [], 'vars': []}
+            activation_stats_by_layer[layer_idx] = {'means': [], 'stds': [], 'vars': []}
         
         for name, tensor in layer_data.items():
             if "weight" in name:
@@ -327,9 +320,9 @@ def visualize_activations_and_weights(
                 channel_stds = np.std(value, axis=1)
                 channel_vars = np.var(value, axis=1)
                 
-                all_weight_channel_means.extend(channel_means)
-                all_weight_channel_stds.extend(channel_stds)
-                weight_vars_by_layer[layer_idx].extend(channel_vars)
+                weight_stats_by_layer[layer_idx]['means'].extend(channel_means)
+                weight_stats_by_layer[layer_idx]['stds'].extend(channel_stds)
+                weight_stats_by_layer[layer_idx]['vars'].extend(channel_vars)
                 
             elif "input" in name:
                 # Activations: [batch, seq, hidden] -> flatten to [tokens, hidden]
@@ -340,25 +333,27 @@ def visualize_activations_and_weights(
                 channel_stds = np.std(value, axis=0)
                 channel_vars = np.var(value, axis=0)
                 
-                all_activation_channel_means.extend(channel_means)
-                all_activation_channel_stds.extend(channel_stds)
-                activation_vars_by_layer[layer_idx].extend(channel_vars)
+                activation_stats_by_layer[layer_idx]['means'].extend(channel_means)
+                activation_stats_by_layer[layer_idx]['stds'].extend(channel_stds)
+                activation_stats_by_layer[layer_idx]['vars'].extend(channel_vars)
     
-    all_weight_channel_means = np.array(all_weight_channel_means)
-    all_weight_channel_stds = np.array(all_weight_channel_stds)
-    all_activation_channel_means = np.array(all_activation_channel_means)
-    all_activation_channel_stds = np.array(all_activation_channel_stds)
-    
-    if len(all_weight_channel_means) > 0 and len(all_activation_channel_means) > 0:
+    if len(weight_stats_by_layer) > 0 and len(activation_stats_by_layer) > 0:
         
         # =====================================================================
-        # Figure 4(a): 2D KDE Distribution (Mean vs Std per channel)
-        # Like FlatQuant Figure 4: each point = one channel's (mean, std)
+        # Figure 4(a): 2D KDE Distribution (Mean vs Std) - PER LAYER
+        # Each layer has its own distribution characteristics
         # =====================================================================
         def plot_2d_kde_distribution(ax, means, stds, cmap_name, title, mean_color='red'):
             """Plot 2D KDE of per-channel statistics (Mean vs Std)"""
+            means = np.array(means)
+            stds = np.array(stds)
+            
+            if len(means) == 0:
+                ax.set_title(f"{title}\n(no data)")
+                return
+            
             # Subsample if too many points
-            max_points = 5000
+            max_points = 3000
             if len(means) > max_points:
                 idx = np.random.choice(len(means), max_points, replace=False)
                 means = means[idx]
@@ -376,52 +371,65 @@ def visualize_activations_and_weights(
             global_mean = np.mean(means)
             global_std_mean = np.mean(stds)
             ax.scatter([global_mean], [global_std_mean], color=mean_color, s=80, 
-                      edgecolors='black', linewidths=2, zorder=10, label='Global Mean')
+                      edgecolors='black', linewidths=2, zorder=10, label='Mean')
             
             # Formatting
-            ax.set_title(title, fontsize=12, fontweight='bold')
-            ax.set_xlabel('Channel Mean', fontsize=10)
-            ax.set_ylabel('Channel Std', fontsize=10)
+            ax.set_title(title, fontsize=10, fontweight='bold')
+            ax.set_xlabel('Channel Mean', fontsize=9)
+            ax.set_ylabel('Channel Std', fontsize=9)
             ax.grid(True, linestyle='--', alpha=0.5)
-            ax.legend(loc='upper right', fontsize=8)
+            ax.legend(loc='upper right', fontsize=7)
+        
+        # Select representative layers
+        sorted_layers = sorted(weight_stats_by_layer.keys())
+        if len(sorted_layers) >= 3:
+            representative_layers = [sorted_layers[0], sorted_layers[len(sorted_layers)//2], sorted_layers[-1]]
+        else:
+            representative_layers = sorted_layers
+        
+        n_layers_to_show = len(representative_layers)
+        
+        # Create figure: 2 rows (weights, activations) x N layers
+        fig, axes = plt.subplots(2, n_layers_to_show, figsize=(5 * n_layers_to_show, 8))
+        
+        if n_layers_to_show == 1:
+            axes = axes.reshape(2, 1)
+        
+        for col_idx, layer_idx in enumerate(representative_layers):
+            # Weight 2D KDE for this layer
+            w_means = weight_stats_by_layer[layer_idx]['means']
+            w_stds = weight_stats_by_layer[layer_idx]['stds']
+            plot_2d_kde_distribution(axes[0, col_idx], w_means, w_stds, 
+                                    'Blues', f'Weight - Layer {layer_idx}')
             
-            # Inset 1D distribution of means in bottom-left corner
-            try:
-                inset_ax = ax.inset_axes([0.05, 0.65, 0.35, 0.25])
-                sns.kdeplot(means, ax=inset_ax, color=plt.get_cmap(cmap_name)(0.6), fill=True)
-                inset_ax.axvline(global_mean, color=mean_color, linestyle='--', linewidth=1.5)
-                inset_ax.set_xlabel('')
-                inset_ax.set_ylabel('')
-                inset_ax.tick_params(labelsize=6)
-                inset_ax.set_title('Mean Distribution', fontsize=7)
-            except Exception:
-                pass
+            # Activation 2D KDE for this layer
+            a_means = activation_stats_by_layer[layer_idx]['means']
+            a_stds = activation_stats_by_layer[layer_idx]['stds']
+            plot_2d_kde_distribution(axes[1, col_idx], a_means, a_stds, 
+                                    'Greens', f'Activation - Layer {layer_idx}')
         
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-        
-        plot_2d_kde_distribution(ax1, all_weight_channel_means, all_weight_channel_stds, 
-                                 'Blues', 'Distribution of Weight (per channel)')
-        plot_2d_kde_distribution(ax2, all_activation_channel_means, all_activation_channel_stds, 
-                                 'Greens', 'Distribution of Activation (per channel)')
-        
-        fig.suptitle('(a) Per-Channel Statistics: Mean vs Std', fontsize=14, fontweight='bold')
+        fig.suptitle('(a) Per-Channel Statistics: Mean vs Std (by Layer)', fontsize=14, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         fig.savefig(os.path.join(save_path, 'fig4a_2d_kde_distribution.png'), dpi=150, bbox_inches='tight')
         plt.close(fig)
         
         # =====================================================================
         # Figure 4(b): Per-channel Variance Bar Charts (per layer)
-        # Show a few representative layers instead of concatenating all
+        # Y-axis scaled to max value for proper comparison across layers
         # =====================================================================
-        def plot_variance_bar_chart(ax, channel_vars, title, cmap_name='coolwarm'):
+        def plot_variance_bar_chart(ax, channel_vars, title, y_max=None, cmap_name='coolwarm'):
             """Plot per-channel variance with color gradient based on variance value"""
+            channel_vars = np.array(channel_vars)
+            if len(channel_vars) == 0:
+                ax.set_title(f"{title}\n(no data)")
+                return
+            
             n_channels = len(channel_vars)
             channels = np.arange(n_channels)
             
-            # Create color gradient based on variance VALUE (not index)
-            # This highlights high-variance channels
-            var_min, var_max = np.min(channel_vars), np.max(channel_vars)
-            norm = Normalize(vmin=var_min, vmax=var_max)
+            # Create color gradient based on variance VALUE
+            var_min, var_max_local = np.min(channel_vars), np.max(channel_vars)
+            norm = Normalize(vmin=var_min, vmax=var_max_local)
             cmap = plt.get_cmap(cmap_name)
             colors = [cmap(norm(v)) for v in channel_vars]
             
@@ -429,27 +437,34 @@ def visualize_activations_and_weights(
             ax.bar(channels, channel_vars, color=colors, width=1.0, edgecolor='none')
             
             # Formatting
-            ax.set_title(title, fontsize=11, fontweight='bold')
-            ax.set_xlabel('Channel Index', fontsize=10)
-            ax.set_ylabel('Variance', fontsize=10)
+            ax.set_title(title, fontsize=10, fontweight='bold')
+            ax.set_xlabel('Channel Index', fontsize=9)
+            ax.set_ylabel('Variance', fontsize=9)
             ax.set_xlim(0, n_channels)
+            
+            # Set Y-axis limit based on global max for consistent comparison
+            if y_max is not None:
+                ax.set_ylim(0, y_max * 1.05)  # 5% padding
+            
             ax.grid(True, axis='y', linestyle='--', alpha=0.5)
             
-            # Add colorbar
-            sm = ScalarMappable(cmap=cmap, norm=norm)
-            sm.set_array([])
-            cbar = plt.colorbar(sm, ax=ax, shrink=0.8)
-            cbar.set_label('Variance', fontsize=8)
+            # Add max value annotation
+            ax.text(0.98, 0.95, f'max={var_max_local:.2f}', 
+                   transform=ax.transAxes, fontsize=8, ha='right', va='top',
+                   bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
         
-        # Select representative layers (first, middle, last from visualized set)
-        sorted_layers = sorted(weight_vars_by_layer.keys())
-        if len(sorted_layers) >= 3:
-            representative_layers = [sorted_layers[0], sorted_layers[len(sorted_layers)//2], sorted_layers[-1]]
-        else:
-            representative_layers = sorted_layers
+        # Find global max variance for consistent Y-axis scaling
+        all_weight_vars = []
+        all_activation_vars = []
+        for layer_idx in weight_stats_by_layer:
+            all_weight_vars.extend(weight_stats_by_layer[layer_idx]['vars'])
+        for layer_idx in activation_stats_by_layer:
+            all_activation_vars.extend(activation_stats_by_layer[layer_idx]['vars'])
+        
+        weight_y_max = np.max(all_weight_vars) if all_weight_vars else 1.0
+        activation_y_max = np.max(all_activation_vars) if all_activation_vars else 1.0
         
         # Create multi-panel figure: 2 rows (weights, activations) x N layers
-        n_layers_to_show = len(representative_layers)
         fig, axes = plt.subplots(2, n_layers_to_show, figsize=(5 * n_layers_to_show, 8))
         
         if n_layers_to_show == 1:
@@ -457,19 +472,21 @@ def visualize_activations_and_weights(
         
         for col_idx, layer_idx in enumerate(representative_layers):
             # Weight variance for this layer
-            w_vars = np.array(weight_vars_by_layer.get(layer_idx, []))
+            w_vars = weight_stats_by_layer[layer_idx]['vars']
             if len(w_vars) > 0:
                 # Take first 4096 channels (one projection layer)
                 w_vars_plot = w_vars[:min(4096, len(w_vars))]
                 plot_variance_bar_chart(axes[0, col_idx], w_vars_plot, 
-                                       f'Weight Variance - Layer {layer_idx}')
+                                       f'Weight Variance - Layer {layer_idx}',
+                                       y_max=weight_y_max)
             
             # Activation variance for this layer
-            a_vars = np.array(activation_vars_by_layer.get(layer_idx, []))
+            a_vars = activation_stats_by_layer[layer_idx]['vars']
             if len(a_vars) > 0:
                 a_vars_plot = a_vars[:min(4096, len(a_vars))]
                 plot_variance_bar_chart(axes[1, col_idx], a_vars_plot, 
-                                       f'Activation Variance - Layer {layer_idx}')
+                                       f'Activation Variance - Layer {layer_idx}',
+                                       y_max=activation_y_max)
         
         fig.suptitle('(b) Inter-channel Variance Disparities (by Layer)', fontsize=14, fontweight='bold')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
