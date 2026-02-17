@@ -888,6 +888,116 @@ class ADCCalibrator:
         logger.info("NOTE: ADC delta values remain as hardware-defined constants")
 
 
+def diagnose_quantized_model(model, tokenizer, device, num_layers_to_print: int = 5):
+    """
+    Run diagnostics on the quantized model to verify calibration health.
+    
+    Checks:
+    1. Whether calibrated scales are reasonable (not default, not NaN/Inf)
+    2. Whether the model produces valid logits (no NaN/Inf, reasonable magnitude)
+    3. Prints a summary of per-layer scale statistics
+    """
+    logger.info("=" * 80)
+    logger.info("DIAGNOSTICS: Checking quantized model health")
+    logger.info("=" * 80)
+
+    # --- 1. Check quantizer scale statistics ---
+    act_scales = []
+    w_scales_mean = []
+    n_default_act = 0
+    n_default_w = 0
+    layer_info = []
+
+    for name, module in model.named_modules():
+        if isinstance(module, QATLinearADC):
+            aq = module.activation_quantizer
+            wq = module.weight_quantizer
+            a_s = aq.scale.detach().float()
+            w_s = wq.scale.detach().float()
+
+            a_val = a_s.item() if a_s.numel() == 1 else a_s.mean().item()
+            w_val = w_s.mean().item()
+            act_scales.append(a_val)
+            w_scales_mean.append(w_val)
+
+            if abs(a_val - 0.01) < 1e-6 or abs(a_val - 0.02) < 1e-6:
+                n_default_act += 1
+            if w_s.numel() == 1 and abs(w_val - 0.01) < 1e-6:
+                n_default_w += 1
+
+            layer_info.append((name, a_val, w_val, w_s.shape, module.delta,
+                               aq.symmetric, wq.per_channel))
+
+    total = len(layer_info)
+    logger.info(f"Total QATLinearADC layers: {total}")
+    logger.info(f"Layers with DEFAULT act scale (likely uncalibrated): {n_default_act}/{total}")
+    logger.info(f"Layers with DEFAULT w scale   (likely uncalibrated): {n_default_w}/{total}")
+
+    if act_scales:
+        logger.info(f"Activation scale range: [{min(act_scales):.6f}, {max(act_scales):.6f}]")
+    if w_scales_mean:
+        logger.info(f"Weight scale mean range: [{min(w_scales_mean):.6f}, {max(w_scales_mean):.6f}]")
+
+    # Print a few layers for inspection
+    for name, a_s, w_s, w_shape, delta, sym, pc in layer_info[:num_layers_to_print]:
+        logger.info(
+            f"  {name}: act_s={a_s:.6f} ({'sym' if sym else 'asym'}), "
+            f"w_s_mean={w_s:.6f} (shape={list(w_shape)}, pc={pc}), delta={delta:.2f}"
+        )
+
+    if n_default_act > 0 or n_default_w > 0:
+        logger.warning(
+            ">>> SOME LAYERS STILL HAVE DEFAULT SCALES! "
+            "Calibration probably did not reach these layers."
+        )
+
+    # --- 2. Run a quick forward pass and check logits ---
+    logger.info("Running diagnostic forward pass...")
+    text = "The quick brown fox jumps over the lazy dog. " * 5
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+
+    model.eval()
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs.logits
+
+    has_nan = logits.isnan().any().item()
+    has_inf = logits.isinf().any().item()
+    logit_min = logits.min().item()
+    logit_max = logits.max().item()
+    logit_std = logits.float().std().item()
+
+    logger.info(f"Logits shape: {list(logits.shape)}, dtype: {logits.dtype}")
+    logger.info(f"Logits range: [{logit_min:.2f}, {logit_max:.2f}], std: {logit_std:.2f}")
+    logger.info(f"Contains NaN: {has_nan}, Contains Inf: {has_inf}")
+
+    if has_nan or has_inf:
+        logger.error(">>> CRITICAL: Model produces NaN/Inf! Quantization is numerically broken.")
+    elif logit_std < 0.01:
+        logger.warning(">>> WARNING: Logit std is near zero -- model output is collapsed.")
+    elif logit_std > 1000:
+        logger.warning(">>> WARNING: Logit std is huge -- possible scale miscalibration.")
+    else:
+        logger.info("Logits look healthy (no NaN/Inf, reasonable std).")
+
+    # --- 3. Quick greedy-decode sanity check ---
+    pred_ids = logits[0, -1, :].argmax().item()
+    pred_token = tokenizer.decode([pred_ids])
+    logger.info(f"Next-token prediction for test sentence: '{pred_token}' (id={pred_ids})")
+
+    logger.info("=" * 80)
+    return {
+        "n_layers": total,
+        "n_default_act": n_default_act,
+        "n_default_w": n_default_w,
+        "has_nan": has_nan,
+        "has_inf": has_inf,
+        "logit_range": (logit_min, logit_max),
+        "logit_std": logit_std,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="PTQ for ADC-based LLaMA models")
     
@@ -959,6 +1069,8 @@ def main():
     # Visualization settings
     parser.add_argument("--disable_visualizations", action="store_true",
                        help="Disable ADC visualizations")
+    parser.add_argument("--check_baseline", action="store_true",
+                       help="Run FP16 baseline perplexity BEFORE ADC conversion (for debugging)")
     parser.add_argument("--visualize_layers", type=str, nargs="+",
                        default=["layers.0.self_attn.q_proj", "layers.0.mlp.down_proj", "layers.15.mlp.gate_proj"],
                        help="Layer patterns to visualize")
@@ -1058,6 +1170,29 @@ def main():
         device = next(iter(model.hf_device_map.values())) if model.hf_device_map else device
     
     logger.info(f"Model loaded with dtype={torch_dtype}, device={device}")
+    
+    # =========================================================================
+    # Optional: FP16 baseline perplexity check (before any quantization)
+    # =========================================================================
+    if args.check_baseline:
+        logger.info("=" * 80)
+        logger.info("BASELINE CHECK: FP16 perplexity (no quantization)")
+        logger.info("=" * 80)
+        baseline_enc = load_and_tokenize_for_sliding_window(
+            args.eval_datasets[0], args.eval_split, tokenizer,
+            max_samples=args.max_eval_samples if args.eval_datasets[0] == "c4" else None,
+        )
+        baseline_metrics = compute_perplexity_sliding_window(
+            model, baseline_enc, device,
+            max_length=args.max_length, stride=args.stride,
+            desc="Baseline FP16",
+        )
+        logger.info(f"FP16 BASELINE Perplexity: {baseline_metrics['perplexity']:.4f}  "
+                     f"(Loss: {baseline_metrics['avg_loss']:.4f})")
+        if use_wandb:
+            wandb.log({"baseline/perplexity": baseline_metrics["perplexity"],
+                        "baseline/avg_loss": baseline_metrics["avg_loss"]})
+        logger.info("=" * 80)
     
     # Convert to ADC layers
     logger.info("Converting to ADC layers...")
@@ -1176,6 +1311,16 @@ def main():
                 module.set_quantizer_mode('fixed')
     logger.info("✓ Quantizers set to 'fixed' mode after calibration")
     
+    # Run diagnostics on the calibrated model
+    diag = diagnose_quantized_model(model, tokenizer, device)
+    if diag["has_nan"] or diag["has_inf"]:
+        logger.error("ABORTING: Model produces NaN/Inf after calibration!")
+        if use_wandb:
+            wandb.finish(exit_code=1)
+        return
+    if diag["n_default_act"] > 0:
+        logger.warning(f"{diag['n_default_act']} layers have uncalibrated activation scales!")
+    
     # Visualize AFTER calibration
     viz_after = None
     if sample_input is not None and not args.disable_visualizations:
@@ -1211,22 +1356,65 @@ def main():
                 wandb.log({f"viz_after/{name}": wandb.Image(img_path)})
             logger.info(f"✅ Uploaded {len(viz_after)} AFTER visualizations to WandB")
     
-    # =========================================================================
-    # STEP 2: Evaluate perplexity on specified datasets (Sliding Window)
-    # =========================================================================
-    logger.info("="*80)
-    logger.info("STEP 2: PERPLEXITY EVALUATION (Sliding Window)")
-    logger.info("="*80)
-    logger.info(f"Evaluating on datasets: {args.eval_datasets}")
-    logger.info(f"Method: Sliding window (standard for papers like GPTQ, AWQ, FlatQuant)")
-    logger.info(f"Context window: {args.max_length}, Stride: {args.stride or args.max_length // 2}")
-    logger.info(f"Evaluation split: {args.eval_split}")
-    
     # Get model's max context length for safety check
     model_max_length = getattr(model.config, 'max_position_embeddings', 4096)
     if args.max_length > model_max_length:
         logger.warning(f"max_length ({args.max_length}) > model's max ({model_max_length}), using {model_max_length}")
         args.max_length = model_max_length
+    
+    # =========================================================================
+    # STEP 1.5: Diagnostic — quantized tiling WITHOUT ADC
+    # =========================================================================
+    logger.info("=" * 80)
+    logger.info("STEP 1.5: DIAGNOSTIC — Tiling + Quantization WITHOUT ADC")
+    logger.info("=" * 80)
+    logger.info("Bypassing ADC (floor/clamp) to isolate whether ADC causes the issue...")
+    
+    # Enable ADC bypass on every TiledLinearADC
+    for _, module in model.named_modules():
+        if isinstance(module, TiledLinearADC):
+            module.set_bypass_adc(True)
+    
+    model.eval()
+    
+    # Quick perplexity on first eval dataset
+    _diag_ds = args.eval_datasets[0]
+    _diag_enc = load_and_tokenize_for_sliding_window(
+        _diag_ds, args.eval_split, tokenizer,
+        max_samples=args.max_eval_samples if _diag_ds == "c4" else None,
+    )
+    _diag_metrics = compute_perplexity_sliding_window(
+        model, _diag_enc, device,
+        max_length=args.max_length, stride=args.stride,
+        desc="NoADC eval",
+    )
+    logger.info(
+        f"WITHOUT ADC → {_diag_ds.upper()} Perplexity: {_diag_metrics['perplexity']:.4f}  "
+        f"(Loss: {_diag_metrics['avg_loss']:.4f})"
+    )
+    if use_wandb:
+        wandb.log({
+            "diagnostic/no_adc_perplexity": _diag_metrics["perplexity"],
+            "diagnostic/no_adc_avg_loss": _diag_metrics["avg_loss"],
+        })
+    
+    # Restore ADC
+    for _, module in model.named_modules():
+        if isinstance(module, TiledLinearADC):
+            module.set_bypass_adc(False)
+    logger.info("ADC re-enabled for full evaluation.")
+    logger.info("=" * 80)
+    
+    # =========================================================================
+    # STEP 2: Evaluate perplexity on specified datasets (Sliding Window)
+    # =========================================================================
+    logger.info("="*80)
+    logger.info("STEP 2: PERPLEXITY EVALUATION (Sliding Window) — WITH ADC")
+    logger.info("="*80)
+    logger.info(f"Evaluating on datasets: {args.eval_datasets}")
+    logger.info(f"Method: Sliding window (standard for papers like GPTQ, AWQ, FlatQuant)")
+    logger.info(f"Context window: {args.max_length}, Stride: {args.stride or args.max_length // 2}")
+    logger.info(f"Evaluation split: {args.eval_split}")
     
     # Store results for all datasets
     all_eval_metrics = {}

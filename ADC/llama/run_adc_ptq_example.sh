@@ -18,10 +18,10 @@ OUTPUT_DIR="./ADC/llama/checkpoints/outputs_llama_adc_ptq"
 # ============================================================
 # ADC Hardware Configuration
 # ============================================================
-BX=4              # Activation bits (4-bit for aggressive quantization)
-BW=4              # Weight bits (4-bit for aggressive quantization)
+BX=8              # Activation bits (4-bit for aggressive quantization)
+BW=8              # Weight bits (4-bit for aggressive quantization)
 BA=8              # ADC bits
-K=4               # Hardware design parameter
+K=16               # Hardware design parameter
 ASHIFT=false      # A-shift quantization strategy:
                   #   false = symmetric/signed quantization (standard)
                   #   true  = asymmetric/unsigned + A-shift (optimal for SiLU outputs)
@@ -137,7 +137,8 @@ CMD="python ADC/llama/runs/llama_adc_ptq.py \
     --seed $SEED \
     --wandb_project \"$WANDB_PROJECT\" \
     --wandb_run_name \"$WANDB_RUN_NAME\" \
-    --disable_visualizations"
+    --disable_visualizations \
+    --check_baseline"
 
 # Add optional stride
 if [ -n "$STRIDE" ]; then

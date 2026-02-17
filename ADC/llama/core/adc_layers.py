@@ -300,6 +300,10 @@ class QATLinearADC(nn.Linear):
             self.C = 2 ** (bx - 1)
         else:
             self.C = 0
+        
+        # When True, skip ADC quantization (floor/clamp) in forward pass.
+        # Useful for diagnosing whether the ADC step itself causes issues.
+        self.bypass_adc = False
     
     def set_quantizer_mode(self, mode: str):
         """
@@ -379,18 +383,22 @@ class QATLinearADC(nn.Linear):
         w_quantized = code_w * s_w_b
 
         # 3) Integer MM in code domain
-        y_int = F.linear(code_x, code_w, bias=None) # добавить где надо настоящее превращение в инт
+        y_int = F.linear(code_x, code_w, bias=None)
 
-        delta = self.delta
-        na = self.na
-        pa = self.pa
+        if self.bypass_adc:
+            # Skip ADC: use y_int directly (still quantized activations & weights)
+            adc_output = y_int
+        else:
+            delta = self.delta
+            na = self.na
+            pa = self.pa
 
-        # Apply ADC quantization (Paper Equation 2: uses floor, not round)
-        y_adc_codes = floor_ste(y_int / delta)
-        y_adc_codes = torch.clamp(y_adc_codes, na, pa)
+            # Apply ADC quantization (Paper Equation 2: uses floor, not round)
+            y_adc_codes = floor_ste(y_int / delta)
+            y_adc_codes = torch.clamp(y_adc_codes, na, pa)
 
-        # Dequantize back to the scale used for quantization
-        adc_output = y_adc_codes * delta
+            # Dequantize back to the scale used for quantization
+            adc_output = y_adc_codes * delta
 
         # 4.5) Compute kurtosis loss for W-reshape (Paper Equation 6 & 7)
         # κ = E[((W - μ_W) / σ_W)^4], loss = (κ - target)^2
@@ -522,6 +530,11 @@ class TiledLinearADC(nn.Module):
                     target_kurtosis=target_kurtosis,
                 )
             )
+    
+    def set_bypass_adc(self, bypass: bool):
+        """Enable/disable ADC bypass for all tiles."""
+        for tile in self.tiles:
+            tile.bypass_adc = bypass
     
     def set_quantizer_mode(self, mode: str):
         """Set mode for all quantizers in all tiles"""
