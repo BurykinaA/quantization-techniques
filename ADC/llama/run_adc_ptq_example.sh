@@ -136,7 +136,8 @@ CMD="python ADC/llama/runs/llama_adc_ptq.py \
     --torch_dtype $TORCH_DTYPE \
     --seed $SEED \
     --wandb_project \"$WANDB_PROJECT\" \
-    --wandb_run_name \"$WANDB_RUN_NAME\""
+    --wandb_run_name \"$WANDB_RUN_NAME\" \
+    --disable_visualizations"
 
 # Add optional stride
 if [ -n "$STRIDE" ]; then
