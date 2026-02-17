@@ -13,7 +13,7 @@ import argparse
 import os
 import logging
 import math
-from typing import Optional, Dict
+from typing import Optional
 import numpy as np
 
 import torch
@@ -70,6 +70,7 @@ class LlamaADCConverter:
         ba: int = 8,
         k: int = 4,
         ashift: bool = False,
+        signed_activations: bool = None,
         exclude_patterns: Optional[list[str]] = None,
         mvm_limit: int = 256,
         use_kurtosis_loss: bool = False,
@@ -87,6 +88,10 @@ class LlamaADCConverter:
             k: Hardware design parameter for ADC.
             ashift: Enable A-shift for layers after SiLU. When True, down_proj
                     uses asymmetric quantization + A-shift, all others use symmetric.
+            signed_activations: If True, use symmetric (signed) activation quantization
+                    for all layers. If False, use asymmetric (unsigned) for all layers.
+                    If None (default), behaviour depends on ashift: A-shift layers get
+                    asymmetric, non-A-shift layers get symmetric.
             exclude_patterns: List of substrings of module names to exclude.
             mvm_limit: Memory vector multiplication limit for tiling.
         """
@@ -104,8 +109,14 @@ class LlamaADCConverter:
                 if isinstance(child_module, nn.Linear) and not should_exclude(full_name):
                     # Apply A-shift ONLY to layers that receive SiLU outputs (down_proj)
                     layer_ashift = ashift and LlamaADCConverter.is_after_silu(full_name)
-                    # A-shift requires asymmetric quantization, others use symmetric
-                    layer_signed_activations = not layer_ashift
+
+                    # Determine activation quantization mode
+                    if signed_activations is not None:
+                        # Explicit override from user
+                        layer_signed_activations = signed_activations
+                    else:
+                        # Legacy: A-shift layers use asymmetric, others symmetric
+                        layer_signed_activations = not layer_ashift
 
                     adc_layer = TiledLinearADC(
                         in_features=child_module.in_features,
@@ -463,16 +474,24 @@ class ADCCalibrator:
         self.bx = bx
         self.bw = bw
         self.stats = {}
-        # Note: signed_activations is now detected per-layer from each quantizer
+        # Attention mask for the current batch, set by the calibrate() method
+        # so that hooks can filter out padding positions
+        self._current_attention_mask = None
         
     def register_hooks(self):
-        """Register forward hooks to collect activation statistics"""
+        """Register forward hooks to collect activation statistics.
+        
+        IMPORTANT: Hooks use self._current_attention_mask to exclude padding
+        positions from activation statistics.  The mask is set before each
+        forward pass in calibrate().
+        """
         hooks = []
+        calibrator = self  # capture reference for inner function
         
         def make_hook(name):
             def hook(module, input, output):
-                if name not in self.stats:
-                    self.stats[name] = {
+                if name not in calibrator.stats:
+                    calibrator.stats[name] = {
                         'act_min': [],
                         'act_max': [],
                         'act_absmax': [],
@@ -482,52 +501,75 @@ class ADCCalibrator:
                         'y_int_min': [],
                         'y_int_max': [],
                         'y_int_absmax': [],
-                        'module': module,  # Store module reference to check quantizer settings
+                        'module': module,
                     }
                 
-                # Collect activation stats
+                # Collect activation stats -- filter out padding positions
                 x = input[0].detach()
-                self.stats[name]['act_min'].append(x.min().item())
-                self.stats[name]['act_max'].append(x.max().item())
-                self.stats[name]['act_absmax'].append(x.abs().max().item())
                 
-                # Collect weight stats
+                mask = calibrator._current_attention_mask
+                if mask is not None:
+                    # mask shape: [batch, seq_len], x shape: [batch, seq_len, dim]
+                    # or after tiling x might be [batch*seq_len, tile_dim]
+                    if x.ndim == 3 and mask.ndim == 2 and mask.shape[0] == x.shape[0] and mask.shape[1] == x.shape[1]:
+                        # Standard case: x is [batch, seq_len, dim]
+                        # Select only non-padding positions
+                        bool_mask = mask.bool()  # [batch, seq_len]
+                        x_valid = x[bool_mask]   # [N_valid, dim]
+                    elif x.ndim == 2 and mask.ndim == 2:
+                        # Tiled case: TiledLinearADC reshapes to [batch*seq_len, tile_dim]
+                        # Flatten mask to match
+                        flat_mask = mask.reshape(-1).bool()  # [batch*seq_len]
+                        if flat_mask.shape[0] == x.shape[0]:
+                            x_valid = x[flat_mask]
+                        else:
+                            # Shape mismatch -- fall back to using all values
+                            x_valid = x
+                    else:
+                        x_valid = x
+                else:
+                    x_valid = x
+                
+                if x_valid.numel() == 0:
+                    # Degenerate case: all positions masked -- skip this batch
+                    return
+                
+                calibrator.stats[name]['act_min'].append(x_valid.min().item())
+                calibrator.stats[name]['act_max'].append(x_valid.max().item())
+                calibrator.stats[name]['act_absmax'].append(x_valid.abs().max().item())
+                
+                # Collect weight stats (weights are not affected by attention mask)
                 w = module.weight.detach()
-                self.stats[name]['w_min'].append(w.min().item())
-                self.stats[name]['w_max'].append(w.max().item())
-                self.stats[name]['w_absmax'].append(w.abs().max().item())
+                calibrator.stats[name]['w_min'].append(w.min().item())
+                calibrator.stats[name]['w_max'].append(w.max().item())
+                calibrator.stats[name]['w_absmax'].append(w.abs().max().item())
                 
                 # Collect integer MM output (before ADC)
-                # Simulate quantization to get y_int
+                # Use only valid (non-padding) activations for y_int statistics too
                 with torch.no_grad():
                     act_q = module.activation_quantizer
-                    # Ensure scale is on the same device as input
-                    s_x = act_q.scale.to(x.device)
+                    s_x = act_q.scale.to(x_valid.device)
                     if act_q.symmetric:
-                        code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
+                        code_x = torch.clamp(torch.round(x_valid / s_x), act_q.qmin, act_q.qmax)
                     else:
-                        # Unsigned path: quantize to [0, 2^bx - 1] using zero_point offset
-                        zp_x = act_q.zero_point.to(x.device)
-                        code_x_temp = torch.clamp(torch.round(x / s_x + zp_x), 0, act_q.qmax)
+                        zp_x = act_q.zero_point.to(x_valid.device)
+                        code_x_temp = torch.clamp(torch.round(x_valid / s_x + zp_x), 0, act_q.qmax)
                         
                         if hasattr(module, 'ashift') and module.ashift:
-                            # A-shift: subtract fixed C instead of learned zp_x
                             code_x = code_x_temp - module.C
                         else:
-                            # Standard asymmetric: subtract learned zero_point to center
                             code_x = code_x_temp - zp_x
                     
                     w_q = module.weight_quantizer
-                    # Ensure scale is on the same device as weights
                     s_w_vec = w_q.scale.to(w.device)
                     s_w_b = s_w_vec.view(-1, 1)
                     code_w = torch.clamp(torch.round(w / s_w_b), w_q.qmin, w_q.qmax)
                     
                     y_int = torch.nn.functional.linear(code_x, code_w, bias=None)
                     
-                    self.stats[name]['y_int_min'].append(y_int.min().item())
-                    self.stats[name]['y_int_max'].append(y_int.max().item())
-                    self.stats[name]['y_int_absmax'].append(y_int.abs().max().item())
+                    calibrator.stats[name]['y_int_min'].append(y_int.min().item())
+                    calibrator.stats[name]['y_int_max'].append(y_int.max().item())
+                    calibrator.stats[name]['y_int_absmax'].append(y_int.abs().max().item())
             
             return hook
         
@@ -592,7 +634,12 @@ class ADCCalibrator:
         return hooks
     
     def calibrate(self, dataloader, num_batches: int = 100):
-        """Run calibration on dataloader"""
+        """Run calibration on dataloader.
+        
+        The attention_mask from each batch is stored in
+        self._current_attention_mask so that hooks can filter out
+        padding positions when collecting activation statistics.
+        """
         logger.info(f"Running calibration on {num_batches} batches...")
         
         self.model.eval()
@@ -607,12 +654,17 @@ class ADCCalibrator:
                 batch = {k: v.to(self.model.device) if isinstance(v, torch.Tensor) else v 
                         for k, v in batch.items()}
                 
+                # Store attention mask for hooks to use
+                self._current_attention_mask = batch.get("attention_mask", None)
+                
                 # Forward pass
                 try:
                     _ = self.model(**batch)
                 except Exception as e:
                     logger.warning(f"Error in batch {i}: {e}")
                     continue
+                finally:
+                    self._current_attention_mask = None
         
         # Remove hooks
         for hook in hooks:
@@ -620,15 +672,21 @@ class ADCCalibrator:
         
         logger.info(f"Collected stats for {len(self.stats)} layers")
     
-    def compute_optimal_params(self, log_to_wandb: bool = False) -> Dict[str, Dict]:
+    def compute_optimal_params(self, log_to_wandb: bool = False) -> dict[str, dict]:
         """
-        Compute optimal quantization SCALES (not delta!) from collected statistics.
+        Compute optimal quantization SCALES (and zero-points for asymmetric
+        activations) from collected statistics.
         
         Key insight: Delta is a hardware constant and cannot be changed.
         We calibrate activation/weight scales to optimally use the fixed ADC range.
         
-        Goal: Make y_int values fit well within the ADC dynamic range
-        given fixed delta and ADC range [-na, pa].
+        For symmetric quantization:
+            scale = absmax / (2^(n-1) - 1)
+            zero_point = 0
+        
+        For asymmetric quantization:
+            scale = (x_max - x_min) / (2^n - 1)
+            zero_point = clamp(round(-x_min / scale), 0, 2^n - 1)
         """
         optimal_params = {}
         
@@ -643,53 +701,69 @@ class ADCCalibrator:
             
             # Collect statistics
             act_absmax_arr = np.array(stats['act_absmax'])
+            act_min_arr = np.array(stats['act_min'])
+            act_max_arr = np.array(stats['act_max'])
             w_absmax_arr = np.array(stats['w_absmax'])
             y_int_absmax_arr = np.array(stats['y_int_absmax'])
             
-            # Use percentile to be robust against outliers
-            if self.method == "minmax":
-                act_absmax = act_absmax_arr.max()
-                w_absmax = w_absmax_arr.max()
-                y_int_target = y_int_absmax_arr.max()
-            elif self.method == "percentile":
-                act_absmax = np.percentile(act_absmax_arr, 99.9)
-                w_absmax = np.percentile(w_absmax_arr, 99.9)
-                y_int_target = np.percentile(y_int_absmax_arr, 99.9)
-            elif self.method == "mse":
-                act_absmax = self._find_mse_optimal_threshold(act_absmax_arr)
-                w_absmax = self._find_mse_optimal_threshold(w_absmax_arr)
-                y_int_target = self._find_mse_optimal_threshold(y_int_absmax_arr)
-            else:
-                act_absmax = act_absmax_arr.max()
-                w_absmax = w_absmax_arr.max()
-                y_int_target = y_int_absmax_arr.max()
-            
-            # Compute optimal scales
-            # Check if this layer uses symmetric (signed) or asymmetric (unsigned) quantization
-            # by inspecting the actual quantizer settings
+            # Check if this layer uses symmetric or asymmetric activation quantization
             module = stats.get('module')
             if module and hasattr(module, 'activation_quantizer'):
                 is_symmetric = module.activation_quantizer.symmetric
             else:
-                # Fallback: assume symmetric if can't determine
                 is_symmetric = True
             
-            # For symmetric quantization: scale = absmax / (2^(n-1) - 1)
-            # For asymmetric: scale = absmax / (2^n - 1)
+            # Robust range estimation
+            if self.method == "minmax":
+                act_absmax = act_absmax_arr.max()
+                act_min_val = act_min_arr.min()
+                act_max_val = act_max_arr.max()
+                w_absmax = w_absmax_arr.max()
+                y_int_target = y_int_absmax_arr.max()
+            elif self.method == "percentile":
+                act_absmax = np.percentile(act_absmax_arr, 99.9)
+                act_min_val = np.percentile(act_min_arr, 0.1)
+                act_max_val = np.percentile(act_max_arr, 99.9)
+                w_absmax = np.percentile(w_absmax_arr, 99.9)
+                y_int_target = np.percentile(y_int_absmax_arr, 99.9)
+            elif self.method == "mse":
+                act_absmax = self._find_mse_optimal_threshold(act_absmax_arr)
+                act_min_val = act_min_arr.min()
+                act_max_val = act_max_arr.max()
+                w_absmax = self._find_mse_optimal_threshold(w_absmax_arr)
+                y_int_target = self._find_mse_optimal_threshold(y_int_absmax_arr)
+            else:
+                act_absmax = act_absmax_arr.max()
+                act_min_val = act_min_arr.min()
+                act_max_val = act_max_arr.max()
+                w_absmax = w_absmax_arr.max()
+                y_int_target = y_int_absmax_arr.max()
+            
+            # Weights always use symmetric quantization
+            w_levels = 2 ** (self.bw - 1) - 1  # e.g., 127 for 8-bit
+            optimal_w_scale = max(w_absmax, 1e-8) / float(w_levels)
+            
+            # Activations: symmetric or asymmetric
             if is_symmetric:
                 act_levels = 2 ** (self.bx - 1) - 1  # e.g., 127 for 8-bit signed
+                optimal_act_scale = max(act_absmax, 1e-8) / float(act_levels)
+                optimal_act_zp = 0.0
             else:
-                act_levels = 2 ** self.bx - 1  # e.g., 255 for 8-bit unsigned
-            
-            w_levels = 2 ** (self.bw - 1) - 1  # Weights always symmetric, e.g., 127 for 8-bit
-            
-            optimal_act_scale = act_absmax / float(act_levels)
-            optimal_w_scale = w_absmax / float(w_levels)
+                # Asymmetric: scale = (max - min) / (2^n - 1)
+                act_range = max(act_max_val - act_min_val, 1e-8)
+                act_qmax = 2 ** self.bx - 1  # e.g., 255 for 8-bit unsigned
+                optimal_act_scale = act_range / float(act_qmax)
+                # zero_point = clamp(round(-min / scale), 0, qmax)
+                optimal_act_zp = float(np.clip(
+                    np.round(-act_min_val / optimal_act_scale), 0, act_qmax
+                ))
             
             optimal_params[name] = {
                 'act_scale': optimal_act_scale,
+                'act_zero_point': optimal_act_zp,
+                'act_symmetric': is_symmetric,
                 'w_scale': optimal_w_scale,
-                'y_int_target': y_int_target,  # For monitoring
+                'y_int_target': y_int_target,
             }
             
             all_act_scales.append(optimal_act_scale)
@@ -730,13 +804,14 @@ class ADCCalibrator:
         
         return best_threshold
     
-    def apply_calibration(self, optimal_params: Dict[str, Dict]):
+    def apply_calibration(self, optimal_params: dict[str, dict]):
         """
-        Apply calibrated SCALES to the model.
+        Apply calibrated SCALES (and zero-points for asymmetric activations)
+        to the model.
         
-        IMPORTANT: We do NOT change delta - it's a hardware constant!
-        We only calibrate activation and weight scales to optimally use
-        the fixed ADC range.
+        IMPORTANT: We do NOT change delta -- it's a hardware constant!
+        We only calibrate activation and weight scales (and zero-points)
+        to optimally use the fixed ADC range.
         """
         logger.info("Applying calibrated scales to model...")
         
@@ -749,62 +824,65 @@ class ADCCalibrator:
                 params = optimal_params[name]
                 
                 with torch.no_grad():
-                    # Update activation quantizer scale
+                    # Update activation quantizer scale + zero_point
                     if hasattr(module, 'activation_quantizer'):
-                        old_scale = module.activation_quantizer.scale.item()
-                        module.activation_quantizer.scale.copy_(
+                        act_q = module.activation_quantizer
+                        old_scale = act_q.scale.item()
+                        act_q.scale.copy_(
                             torch.tensor(params['act_scale'], dtype=torch.float32)
                         )
-                        module.activation_quantizer._scale_initialized = True
+                        act_q._scale_initialized = True
                         
-                        logger.info(f"{name} [ACT]: scale {old_scale:.6f} -> {params['act_scale']:.6f}")
+                        # Update zero_point for asymmetric quantization
+                        if not act_q.symmetric:
+                            old_zp = act_q.zero_point.item()
+                            act_q.zero_point.copy_(
+                                torch.tensor(params['act_zero_point'], dtype=torch.float32)
+                            )
+                            act_q._zp_initialized = True
+                            logger.info(
+                                f"{name} [ACT asym]: scale {old_scale:.6f} -> {params['act_scale']:.6f}, "
+                                f"zp {old_zp:.2f} -> {params['act_zero_point']:.2f}"
+                            )
+                        else:
+                            logger.info(f"{name} [ACT sym]: scale {old_scale:.6f} -> {params['act_scale']:.6f}")
                         updated_act += 1
                     
-                    # Update weight quantizer scale (per-channel)
+                    # Update weight quantizer scale (per-channel, always symmetric)
                     if hasattr(module, 'weight_quantizer'):
                         w_q = module.weight_quantizer
                         old_scale_mean = w_q.scale.mean().item() if w_q.scale.numel() > 0 else 0.01
                         
                         # For per-channel, compute scales from actual weights
                         if w_q.per_channel:
-                            # Compute per-channel scales directly from weights
                             weight = module.weight.detach()  # [out_features, in_features]
                             
                             if w_q.channel_dim == 0:
-                                # For each output channel, find absmax across input features
                                 per_channel_absmax = weight.abs().max(dim=1)[0]  # [out_features]
                             else:
-                                # For other channel dims
                                 weight_transposed = weight.transpose(w_q.channel_dim, 0)
                                 per_channel_absmax = weight_transposed.contiguous().view(weight_transposed.shape[0], -1).abs().max(dim=1)[0]
                             
-                            # Avoid division by zero
                             per_channel_absmax = torch.clamp(per_channel_absmax, min=1e-6)
                             
-                            # Compute per-channel scales for symmetric quantization
-                            # scale = absmax / (2^(n-1) - 1) = absmax / 127
-                            new_scales = per_channel_absmax / 127.0
+                            w_levels = 2 ** (self.bw - 1) - 1  # e.g. 127 for 8-bit
+                            new_scales = per_channel_absmax / float(w_levels)
                             
-                            # Update scales - resize if necessary
                             if w_q.scale.numel() != new_scales.numel():
-                                # Resize the scale parameter to match per-channel size
                                 w_q.scale.data = w_q.scale.data.new_zeros(new_scales.shape)
                             w_q.scale.data.copy_(new_scales)
                             w_q._scale_initialized = True
                         else:
-                            # Per-tensor: use scalar scale
                             w_q.scale.copy_(
                                 torch.tensor(params['w_scale'], dtype=torch.float32)
                             )
                             w_q._scale_initialized = True
                         
                         new_scale_mean = w_q.scale.mean().item()
-                        
-                        logger.info(f"{name} [W]: scale {old_scale_mean:.6f} -> {new_scale_mean:.6f}")
+                        logger.info(f"{name} [W sym]: scale {old_scale_mean:.6f} -> {new_scale_mean:.6f}")
                         updated_w += 1
                     
-                    # NOTE: ADC delta stays as analytical value - it's a hardware constant!
-                    # We just ensure that with calibrated scales, y_int fits well in ADC range
+                    # NOTE: ADC delta stays as analytical value -- it's a hardware constant!
         
         logger.info(f"Updated {updated_act} activation quantizers and {updated_w} weight quantizers")
         logger.info("NOTE: ADC delta values remain as hardware-defined constants")
@@ -832,6 +910,12 @@ def main():
                        help="Enable A-shift quantization strategy: "
                             "asymmetric (unsigned) quantization + A-shift for SiLU outputs (down_proj). "
                             "If False, uses symmetric (signed) quantization for all activations.")
+    parser.add_argument("--activation_quant", type=str, default=None,
+                       choices=["symmetric", "asymmetric"],
+                       help="Activation quantization mode. "
+                            "'symmetric' = signed, zero_point=0. "
+                            "'asymmetric' = unsigned, with learned zero_point. "
+                            "If not set, defaults to per-layer logic based on ashift.")
     parser.add_argument("--mvm_limit", type=int, default=256)
     
     # Calibration settings
@@ -882,13 +966,26 @@ def main():
     args = parser.parse_args()
     set_seed(args.seed)
     
+    # Derive signed_activations flag from --activation_quant
+    if args.activation_quant == "symmetric":
+        signed_activations = True
+    elif args.activation_quant == "asymmetric":
+        signed_activations = False
+    else:
+        signed_activations = None  # per-layer logic based on ashift
+    
     # Log quantization strategy
-    logger.info(f"Quantization strategy: ashift={args.ashift}")
-    if args.ashift:
+    logger.info(f"Quantization strategy: ashift={args.ashift}, activation_quant={args.activation_quant}")
+    if signed_activations is True:
+        logger.info("  → Symmetric (signed) activation quantization for ALL layers")
+    elif signed_activations is False:
+        logger.info("  → Asymmetric (unsigned) activation quantization for ALL layers")
+    elif args.ashift:
         logger.info("  → Asymmetric (unsigned) + A-shift for layers AFTER SiLU (down_proj)")
         logger.info("  → Symmetric (signed) for all OTHER activations")
     else:
-        logger.info("  → Symmetric (signed) quantization for ALL activations")
+        logger.info("  → Symmetric (signed) quantization for ALL activations (default)")
+    logger.info("  → Weights: always symmetric (signed) per-channel")
     
     # Initialize WandB
     use_wandb = WANDB_AVAILABLE and not args.disable_wandb
@@ -905,6 +1002,8 @@ def main():
                 "ba": args.ba,
                 "k": args.k,
                 "ashift": args.ashift,
+                "activation_quant": args.activation_quant,
+                "signed_activations": signed_activations,
                 "ashift_mode": "per_layer_silu" if args.ashift else "none",
                 "quantization_note": "A-shift on down_proj only" if args.ashift else "Symmetric for all",
                 "mvm_limit": args.mvm_limit,
@@ -969,6 +1068,7 @@ def main():
         ba=args.ba,
         k=args.k,
         ashift=args.ashift,
+        signed_activations=signed_activations,
         exclude_patterns=["embed_tokens", "lm_head"],
         mvm_limit=args.mvm_limit,
         # PTQ: no kurtosis loss during calibration
@@ -1206,12 +1306,18 @@ def main():
         f.write(f"Calibration batches: {args.num_calibration_batches}\n")
         f.write(f"ADC hardware config: bx={args.bx}, bw={args.bw}, ba={args.ba}, k={args.k}\n")
         f.write(f"A-shift: {args.ashift}\n")
-        if args.ashift:
+        f.write(f"activation_quant: {args.activation_quant}\n")
+        if signed_activations is True:
+            f.write(f"Quantization strategy: Symmetric (signed) activations for all layers\n")
+        elif signed_activations is False:
+            f.write(f"Quantization strategy: Asymmetric (unsigned) activations for all layers\n")
+        elif args.ashift:
             f.write(f"Quantization strategy: Per-layer (A-shift for SiLU outputs only)\n")
             f.write(f"  - Layers after SiLU (down_proj): Asymmetric + A-shift\n")
             f.write(f"  - All other layers: Symmetric (signed)\n")
         else:
-            f.write(f"Quantization strategy: Symmetric (signed) for all activations\n")
+            f.write(f"Quantization strategy: Symmetric (signed) for all activations (default)\n")
+        f.write(f"Weights: always symmetric (signed) per-channel\n")
         f.write(f"\n")
         f.write("NOTE: ADC delta is a HARDWARE CONSTANT and cannot be changed!\n")
         f.write("      We calibrate activation/weight SCALES to optimally use the fixed ADC range.\n")
@@ -1394,7 +1500,7 @@ def _generate_adc_visualizations(model, sample_input, layer_patterns, title_pref
     return result_paths
 
 
-def _plot_adc_pipeline(data: Dict, layer_name: str, title_prefix: str, filepath: str):
+def _plot_adc_pipeline(data: dict, layer_name: str, title_prefix: str, filepath: str):
     """Plot ADC pipeline showing before/after ADC quantization"""
     import matplotlib.pyplot as plt
     
