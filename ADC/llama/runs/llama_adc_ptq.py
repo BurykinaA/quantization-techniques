@@ -496,31 +496,33 @@ class ADCCalibrator:
                 
                 # IMPORTANT: Filter out padding tokens using attention_mask
                 # This prevents padding from "poisoning" the calibration statistics
+                #
+                # Note on tensor shapes:
+                # - TiledLinearADC.forward() reshapes 3D [batch, seq, hidden] to 2D
+                #   [batch*seq, tile_in_features] before passing to tile hooks
+                # - So tiles see x.dim() == 2 with shape [batch*seq, features]
+                # - The mask [batch, seq] must be flattened to [batch*seq] to match
+                x_for_stats = None
                 if self.current_attention_mask is not None:
                     mask = self.current_attention_mask.to(x.device)
-                    # x shape: [batch, seq, hidden]
-                    # mask shape: [batch, seq]
                     if mask.dim() == 2 and x.dim() == 3:
-                        # Expand mask to match x dimensions
+                        # Standalone QATLinearADC: x is [batch, seq, hidden]
                         mask_expanded = mask.unsqueeze(-1).expand_as(x)
-                        # Only use values where mask == 1 (non-padding)
-                        x_filtered = x[mask_expanded.bool()].view(-1)
-                        if x_filtered.numel() > 0:
-                            self.stats[name]['act_min'].append(x_filtered.min().item())
-                            self.stats[name]['act_max'].append(x_filtered.max().item())
-                            self.stats[name]['act_absmax'].append(x_filtered.abs().max().item())
-                        else:
-                            # Fallback if all masked
-                            self.stats[name]['act_min'].append(x.min().item())
-                            self.stats[name]['act_max'].append(x.max().item())
-                            self.stats[name]['act_absmax'].append(x.abs().max().item())
-                    else:
-                        # Shape mismatch, use full tensor
-                        self.stats[name]['act_min'].append(x.min().item())
-                        self.stats[name]['act_max'].append(x.max().item())
-                        self.stats[name]['act_absmax'].append(x.abs().max().item())
+                        x_for_stats = x[mask_expanded.bool()]
+                    elif mask.dim() == 2 and x.dim() == 2:
+                        # Tile inside TiledLinearADC: x is [batch*seq, features]
+                        # Flatten mask from [batch, seq] -> [batch*seq]
+                        mask_flat = mask.reshape(-1)
+                        # Verify shapes are compatible
+                        if mask_flat.shape[0] == x.shape[0]:
+                            x_for_stats = x[mask_flat.bool()]
+                
+                if x_for_stats is not None and x_for_stats.numel() > 0:
+                    self.stats[name]['act_min'].append(x_for_stats.min().item())
+                    self.stats[name]['act_max'].append(x_for_stats.max().item())
+                    self.stats[name]['act_absmax'].append(x_for_stats.abs().max().item())
                 else:
-                    # No mask available, use full tensor (fallback)
+                    # Fallback: no mask, shape mismatch, or all tokens masked
                     self.stats[name]['act_min'].append(x.min().item())
                     self.stats[name]['act_max'].append(x.max().item())
                     self.stats[name]['act_absmax'].append(x.abs().max().item())
@@ -533,16 +535,30 @@ class ADCCalibrator:
                 
                 # Collect integer MM output (before ADC)
                 # Simulate quantization to get y_int
+                # Use only non-padding positions for y_int stats too
                 with torch.no_grad():
+                    # Use filtered activations for y_int if mask is available
+                    x_for_yint = x
+                    if self.current_attention_mask is not None:
+                        mask = self.current_attention_mask.to(x.device)
+                        if mask.dim() == 2 and x.dim() == 2:
+                            mask_flat = mask.reshape(-1)
+                            if mask_flat.shape[0] == x.shape[0]:
+                                x_for_yint = x[mask_flat.bool()]
+                        elif mask.dim() == 2 and x.dim() == 3:
+                            mask_expanded = mask.unsqueeze(-1).expand_as(x)
+                            # Filter and reshape to 2D: [n_valid_tokens, features]
+                            x_for_yint = x[mask_expanded.bool()].view(-1, x.shape[-1])
+                    
                     act_q = module.activation_quantizer
                     # Ensure scale is on the same device as input
                     s_x = act_q.scale.to(x.device)
                     if act_q.symmetric:
-                        code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
+                        code_x = torch.clamp(torch.round(x_for_yint / s_x), act_q.qmin, act_q.qmax)
                     else:
                         # Unsigned path: quantize to [0, 2^bx - 1] using zero_point offset
                         zp_x = act_q.zero_point.to(x.device)
-                        code_x_temp = torch.clamp(torch.round(x / s_x + zp_x), 0, act_q.qmax)
+                        code_x_temp = torch.clamp(torch.round(x_for_yint / s_x + zp_x), 0, act_q.qmax)
                         
                         if hasattr(module, 'ashift') and module.ashift:
                             # A-shift: subtract fixed C instead of learned zp_x
@@ -715,23 +731,50 @@ class ADCCalibrator:
                 # Fallback: assume symmetric if can't determine
                 is_symmetric = True
             
-            # For symmetric quantization: scale = absmax / (2^(n-1) - 1)
-            # For asymmetric: scale = absmax / (2^n - 1)
-            if is_symmetric:
-                act_levels = 2 ** (self.bx - 1) - 1  # e.g., 127 for 8-bit signed
-            else:
-                act_levels = 2 ** self.bx - 1  # e.g., 255 for 8-bit unsigned
-            
             w_levels = 2 ** (self.bw - 1) - 1  # Weights always symmetric, e.g., 127 for 8-bit
-            
-            optimal_act_scale = act_absmax / float(act_levels)
             optimal_w_scale = w_absmax / float(w_levels)
             
-            optimal_params[name] = {
-                'act_scale': optimal_act_scale,
-                'w_scale': optimal_w_scale,
-                'y_int_target': y_int_target,  # For monitoring
-            }
+            if is_symmetric:
+                # Symmetric: scale = absmax / (2^(n-1) - 1)
+                act_levels = 2 ** (self.bx - 1) - 1  # e.g., 127 for 8-bit signed
+                optimal_act_scale = act_absmax / float(act_levels)
+                
+                optimal_params[name] = {
+                    'act_scale': optimal_act_scale,
+                    'w_scale': optimal_w_scale,
+                    'y_int_target': y_int_target,  # For monitoring
+                }
+            else:
+                # Asymmetric: scale = (max - min) / (2^n - 1), zp = -min / scale
+                act_min_arr = np.array(stats['act_min'])
+                act_max_arr = np.array(stats['act_max'])
+                
+                if self.method == "minmax":
+                    act_min_val = act_min_arr.min()
+                    act_max_val = act_max_arr.max()
+                elif self.method == "percentile":
+                    act_min_val = np.percentile(act_min_arr, 0.1)
+                    act_max_val = np.percentile(act_max_arr, 99.9)
+                elif self.method == "mse":
+                    act_min_val = act_min_arr.min()
+                    act_max_val = act_max_arr.max()
+                else:
+                    act_min_val = act_min_arr.min()
+                    act_max_val = act_max_arr.max()
+                
+                act_range = max(act_max_val - act_min_val, 1e-8)
+                act_levels = 2 ** self.bx - 1  # e.g., 255 for 8-bit unsigned
+                optimal_act_scale = act_range / float(act_levels)
+                optimal_act_zp = -act_min_val / optimal_act_scale
+                # Clamp zero_point to valid range
+                optimal_act_zp = float(np.clip(optimal_act_zp, 0, act_levels))
+                
+                optimal_params[name] = {
+                    'act_scale': optimal_act_scale,
+                    'act_zero_point': optimal_act_zp,
+                    'w_scale': optimal_w_scale,
+                    'y_int_target': y_int_target,  # For monitoring
+                }
             
             all_act_scales.append(optimal_act_scale)
             all_w_scales.append(optimal_w_scale)
@@ -790,7 +833,7 @@ class ADCCalibrator:
                 params = optimal_params[name]
                 
                 with torch.no_grad():
-                    # Update activation quantizer scale
+                    # Update activation quantizer scale (and zero_point for asymmetric)
                     if hasattr(module, 'activation_quantizer'):
                         old_scale = module.activation_quantizer.scale.item()
                         module.activation_quantizer.scale.copy_(
@@ -798,7 +841,18 @@ class ADCCalibrator:
                         )
                         module.activation_quantizer._scale_initialized = True
                         
-                        logger.info(f"{name} [ACT]: scale {old_scale:.6f} -> {params['act_scale']:.6f}")
+                        # Update zero_point for asymmetric quantization
+                        if not module.activation_quantizer.symmetric and 'act_zero_point' in params:
+                            old_zp = module.activation_quantizer.zero_point.item()
+                            module.activation_quantizer.zero_point.copy_(
+                                torch.tensor(params['act_zero_point'], dtype=torch.float32)
+                            )
+                            if hasattr(module.activation_quantizer, '_zp_initialized'):
+                                module.activation_quantizer._zp_initialized = True
+                            logger.info(f"{name} [ACT]: scale {old_scale:.6f} -> {params['act_scale']:.6f}, "
+                                       f"zp {old_zp:.2f} -> {params['act_zero_point']:.2f}")
+                        else:
+                            logger.info(f"{name} [ACT]: scale {old_scale:.6f} -> {params['act_scale']:.6f}")
                         updated_act += 1
                     
                     # Update weight quantizer scale (per-channel)
