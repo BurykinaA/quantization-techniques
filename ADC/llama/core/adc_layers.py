@@ -258,8 +258,9 @@ class QATLinearADC(nn.Linear):
             self.C = 0
         
         # When True, skip ADC quantization (floor/clamp) in forward pass.
-        # Is used for diagnosing whether the ADC step itself causes issues.
         self.bypass_adc = False
+        # When True, skip ALL quantization (plain F.linear).
+        self.bypass_all = False
     
     def set_quantizer_mode(self, mode: str):
         """
@@ -526,9 +527,9 @@ class TiledLinearADC(nn.Module):
 
         with torch.no_grad():
             for i, t in enumerate(self.tiles):
-                t.weight.data = splits[i].clone()
+                t.weight.copy_(splits[i])
                 if (linear.bias is not None) and (t.bias is not None):
-                    t.bias.data = linear.bias.clone()
+                    t.bias.copy_(linear.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[-1] != self.in_features_total:
