@@ -293,11 +293,18 @@ class QATLinearADC(nn.Linear):
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.bypass_all:
-            return F.linear(x, self.weight, self.bias)
+            w = self.weight.to(x.dtype)
+            b = self.bias.to(x.dtype) if self.bias is not None else None
+            return F.linear(x, w, b)
+
+        # Cast to float32 for quantization math (parameters are float32),
+        # then cast output back at the end
+        input_dtype = x.dtype
+        x = x.float()
 
         # 1) Build activation codes (per-tensor quantizer)
         act_q = self.activation_quantizer
-        s_x = act_q.scale  # Use original scale (gradient clipping happens in safe_divide)
+        s_x = act_q.scale
         
         if act_q.symmetric:
             # Signed path (no A-shift): symmetric quantization
@@ -381,7 +388,7 @@ class QATLinearADC(nn.Linear):
         if self.bias is not None:
             y_real = y_real + self.bias
 
-        return y_real
+        return y_real.to(input_dtype)
     
     def get_auxiliary_losses(self) -> dict:
         """Get kurtosis (W-reshape) loss for this layer (Paper Equation 6 & 7)."""
