@@ -337,23 +337,38 @@ class QATLinearADC(nn.Linear):
         qmin_w, qmax_w = w_q.qmin, w_q.qmax
         code_w = torch.clamp(code_w, qmin_w, qmax_w)
 
-        # 3) Integer MM in code domain
-        y_int = F.linear(code_x, code_w, bias=None)
+        # 3) Integer MVM in code domain with per-sub-array ADC
+        #
+        # Hardware model: each crossbar column of M inputs is divided into
+        # k sub-arrays of M/k inputs. Each sub-array has its own ADC.
+        # delta is calibrated for the sub-array partial sum range.
 
         if self.bypass_adc:
-            # Skip ADC: use y_int directly (still quantized activations & weights)
+            y_int = F.linear(code_x, code_w, bias=None)
             adc_output = y_int
-        else:
+        elif self.k > 1 and self.in_features % self.k == 0:
+            sub_size = self.in_features // self.k
+
+            # [B, M] -> [B, k, sub_size];  [O, M] -> [O, k, sub_size]
+            code_x_g = code_x.view(*code_x.shape[:-1], self.k, sub_size)
+            code_w_g = code_w.view(code_w.shape[0], self.k, sub_size)
+
+            # Partial sums per sub-array: [B, k, O]
+            y_subs = torch.einsum('...ks,oks->...ko', code_x_g, code_w_g)
+
+            # ADC quantization on each sub-sum independently
             delta = self.delta
-            na = self.na
-            pa = self.pa
+            y_adc_codes = floor_ste(y_subs / delta)
+            y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)
 
-            # Apply ADC quantization (Paper Equation 2: uses floor, not round)
-            y_adc_codes = floor_ste(y_int / delta)
-            y_adc_codes = torch.clamp(y_adc_codes, na, pa)
-
-            # Dequantize back to the scale used for quantization
-            adc_output = y_adc_codes * delta
+            # Sum ADC outputs across k sub-arrays -> [B, O]
+            adc_output = (y_adc_codes * delta).sum(dim=-2)
+        else:
+            # k=1: single ADC on the full dot product
+            y_int = F.linear(code_x, code_w, bias=None)
+            y_adc_codes = floor_ste(y_int / self.delta)
+            y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)
+            adc_output = y_adc_codes * self.delta
 
         # Kurtosis loss for W-reshape (Paper Equation 6 & 7)
         if self.training and self.use_kurtosis_loss:
@@ -361,7 +376,7 @@ class QATLinearADC(nn.Linear):
                 self.weight, self.target_kurtosis
             )
         else:
-            self._last_kurtosis_loss = torch.tensor(0.0, device=y_int.device, dtype=y_int.dtype)
+            self._last_kurtosis_loss = torch.tensor(0.0, device=adc_output.device, dtype=adc_output.dtype)
 
         # 5) Dequantize back to real domain
         # y_real = adc_output * s_x * s_w (per out channel)
