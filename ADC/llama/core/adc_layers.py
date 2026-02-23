@@ -338,35 +338,17 @@ class QATLinearADC(nn.Linear):
         qmin_w, qmax_w = w_q.qmin, w_q.qmax
         code_w = torch.clamp(code_w, qmin_w, qmax_w)
 
-        # 3) Integer MVM in code domain with per-sub-array ADC
+        # 3) Integer MVM in code domain + ADC quantization
         #
-        # Hardware model: each crossbar column of M inputs is divided into
-        # k sub-arrays of M/k inputs. Each sub-array has its own ADC.
-        # delta is calibrated for the sub-array partial sum range.
+        # Single ADC on the full dot product (Eq. 2 from the paper).
+        # K appears only in the delta formula (Eq. 3), making delta smaller
+        # and giving the ADC finer resolution.
+
+        y_int = F.linear(code_x, code_w, bias=None)
 
         if self.bypass_adc:
-            y_int = F.linear(code_x, code_w, bias=None)
             adc_output = y_int
-        elif self.k > 1 and self.in_features % self.k == 0:
-            sub_size = self.in_features // self.k
-
-            # [B, M] -> [B, k, sub_size];  [O, M] -> [O, k, sub_size]
-            code_x_g = code_x.view(*code_x.shape[:-1], self.k, sub_size)
-            code_w_g = code_w.view(code_w.shape[0], self.k, sub_size)
-
-            # Partial sums per sub-array: [B, k, O]
-            y_subs = torch.einsum('...ks,oks->...ko', code_x_g, code_w_g)
-
-            # ADC quantization on each sub-sum independently
-            delta = self.delta
-            y_adc_codes = floor_ste(y_subs / delta)
-            y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)
-
-            # Sum ADC outputs across k sub-arrays -> [B, O]
-            adc_output = (y_adc_codes * delta).sum(dim=-2)
         else:
-            # k=1: single ADC on the full dot product
-            y_int = F.linear(code_x, code_w, bias=None)
             y_adc_codes = floor_ste(y_int / self.delta)
             y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)
             adc_output = y_adc_codes * self.delta
