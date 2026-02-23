@@ -1,7 +1,4 @@
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from typing import Optional, Tuple
 
 
 def floor_ste(x: torch.Tensor) -> torch.Tensor:
@@ -11,6 +8,7 @@ def floor_ste(x: torch.Tensor) -> torch.Tensor:
 def round_ste(x: torch.Tensor) -> torch.Tensor:
     return x + (torch.round(x) - x).detach()
 
+####
 
 class SafeDivideFunction(torch.autograd.Function):
     MAX_GRAD_NORM = 1000.0  # Maximum gradient norm for scale
@@ -102,16 +100,11 @@ class StraightThroughQuantize(torch.autograd.Function):
             quantized_levels = torch.clamp(torch.round(x_scaled), ctx.qmin, ctx.qmax) - zero_point
             scale_grad_per_element = grad_output * (quantized_levels - input / scale)
         
-        # Sum over appropriate dimensions to match original scale shape
         if ctx.per_channel:
-            # For per-channel, sum over all dimensions except the channel dimension
-            # мб переписать как-то
             dims_to_sum = list(range(input.ndim))
             dims_to_sum.remove(ctx.channel_dim)
             grad_scale = torch.mean(scale_grad_per_element, dim=dims_to_sum, keepdim=False)
             
-            # Make sure the shape matches exactly
-            # как он бля может не матчится
             if grad_scale.shape != original_scale.shape:
                 grad_scale = grad_scale.view_as(original_scale)
         else:

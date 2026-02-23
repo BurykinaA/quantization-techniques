@@ -13,7 +13,6 @@ import argparse
 import os
 import logging
 import math
-from typing import Optional
 import numpy as np
 
 import torch
@@ -31,20 +30,9 @@ from transformers import (
 from torch.utils.data import DataLoader
 from datetime import datetime
 
-import sys
-from pathlib import Path
-
-# Import ADC layers from llama module
 from ADC.llama.core.adc_layers import TiledLinearADC, QATLinearADC
-# WandB import
-try:
-    import wandb
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
-    print("Warning: wandb not available, logging will be disabled")
 
-# No complex monitoring needed for PTQ - we'll use simple visualization
+import wandb
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,7 +59,7 @@ class LlamaADCConverter:
         k: int = 4,
         ashift: bool = False,
         signed_activations: bool = None,
-        exclude_patterns: Optional[list[str]] = None,
+        exclude_patterns: list[str] | None = None,
         mvm_limit: int = 256,
         use_kurtosis_loss: bool = False,
         kurtosis_weight: float = 0.0,
@@ -96,7 +84,6 @@ class LlamaADCConverter:
             mvm_limit: Memory vector multiplication limit for tiling.
         """
         if exclude_patterns is None:
-            # Default: don't quantize embeddings and lm_head
             exclude_patterns = ["embed_tokens", "lm_head"]
 
         def should_exclude(name: str) -> bool:
@@ -573,63 +560,17 @@ class ADCCalibrator:
             
             return hook
         
-        # Register hooks on QATLinearADC layers (including tiles inside TiledLinearADC)
-        # First, let's see what modules exist (debug)
-        logger.info("Scanning model for ADC layers...")
-        logger.info(f"QATLinearADC class: {QATLinearADC}")
-        logger.info(f"TiledLinearADC class: {TiledLinearADC}")
-        
-        adc_count = 0
-        tiled_count = 0
-        sample_module_type = None
-        checked_sample = False
-        
-        for name, module in self.model.named_modules():
-            if isinstance(module, QATLinearADC):
-                adc_count += 1
-                if adc_count <= 3:  # Show first 3
-                    logger.info(f"  Found QATLinearADC: {name}")
-            elif isinstance(module, TiledLinearADC):
-                tiled_count += 1
-                if tiled_count <= 3:  # Show first 3
-                    logger.info(f"  Found TiledLinearADC: {name} with {len(module.tiles)} tiles")
-            
-            # Check for a sample module (use full path)
-            if not checked_sample and 'bert.encoder.layer.0.attention.self.query' == name:
-                checked_sample = True
-                sample_module_type = type(module).__name__
-                logger.info(f"  *** Sample module 'bert.encoder.layer.0.attention.self.query':")
-                logger.info(f"      Type: {type(module)}")
-                logger.info(f"      Class name: {type(module).__name__}")
-                logger.info(f"      Module: {type(module).__module__}")
-                logger.info(f"      Is QATLinearADC? {isinstance(module, QATLinearADC)}")
-                logger.info(f"      Is TiledLinearADC? {isinstance(module, TiledLinearADC)}")
-                if hasattr(module, 'tiles'):
-                    logger.info(f"      Has 'tiles' attribute with {len(module.tiles)} tiles")
-                    if len(module.tiles) > 0:
-                        first_tile = module.tiles[0]
-                        logger.info(f"      First tile type: {type(first_tile)}")
-                        logger.info(f"      First tile is QATLinearADC? {isinstance(first_tile, QATLinearADC)}")
-                        logger.info(f"      QATLinearADC from adc_layers: {QATLinearADC}")
-                        logger.info(f"      First tile's class: {type(first_tile)}")
-                        logger.info(f"      Are they same class? {type(first_tile) is QATLinearADC}")
-        
-        logger.info(f"Total: {adc_count} QATLinearADC, {tiled_count} TiledLinearADC")
-        logger.info("Registering hooks...")
-        
-        # Now register hooks
         for name, module in self.model.named_modules():
             if isinstance(module, QATLinearADC):
                 hook = module.register_forward_hook(make_hook(name))
                 hooks.append(hook)
-                logger.info(f"Registered hook on QATLinearADC: {name}")
             elif isinstance(module, TiledLinearADC):
-                # Register hooks on individual tiles
                 for tile_idx, tile in enumerate(module.tiles):
                     tile_name = f"{name}.tiles.{tile_idx}"
                     hook = tile.register_forward_hook(make_hook(tile_name))
                     hooks.append(hook)
-                    logger.info(f"Registered hook on tile: {tile_name}")
+        
+        logger.info(f"Registered {len(hooks)} calibration hooks")
         
         return hooks
     
@@ -771,7 +712,7 @@ class ADCCalibrator:
             all_y_int_targets.append(y_int_target)
         
         # Log calibration statistics to wandb
-        if log_to_wandb and WANDB_AVAILABLE and wandb.run is not None:
+        if log_to_wandb and wandb.run is not None:
             wandb.log({
                 "calibration/num_layers": len(optimal_params),
                 "calibration/act_scale_mean": np.mean(all_act_scales),
@@ -1072,7 +1013,7 @@ def main():
     parser.add_argument("--check_baseline", action="store_true",
                        help="Run FP16 baseline perplexity BEFORE ADC conversion (for debugging)")
     parser.add_argument("--visualize_layers", type=str, nargs="+",
-                       default=["layers.0.self_attn.q_proj", "layers.0.mlp.down_proj", "layers.15.mlp.gate_proj"],
+                       default=[], #["layers.0.self_attn.q_proj", "layers.0.mlp.down_proj", "layers.15.mlp.gate_proj"]
                        help="Layer patterns to visualize")
     
     args = parser.parse_args()
@@ -1100,7 +1041,7 @@ def main():
     logger.info("  → Weights: always symmetric (signed) per-channel")
     
     # Initialize WandB
-    use_wandb = WANDB_AVAILABLE and not args.disable_wandb
+    use_wandb = not args.disable_wandb
     model_short_name = args.model_name.split("/")[-1]
     if use_wandb:
         run_name = args.wandb_run_name or f"ptq_{model_short_name}_bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}_{args.calibration_method}"
@@ -1221,7 +1162,8 @@ def main():
     logger.info(f"Model: {stats['adc_linear']} ADC layers, {stats['regular_linear']} regular Linear, {stats['total_params']:,} params")
     
     # Show model structure with ADC hooks
-    model_structure_text = show_model_with_adc_hooks(model, args.visualize_layers)
+    viz_patterns = args.visualize_layers if not args.disable_visualizations else []
+    model_structure_text = show_model_with_adc_hooks(model, viz_patterns)
     
     # Log model structure to wandb
     if use_wandb:
@@ -1289,6 +1231,16 @@ def main():
             output_subdir=os.path.join(args.output_dir, "viz_before")
         )
     
+    # ---------------------------------------------------------------
+    # CRITICAL: Bypass ALL quantization during calibration so that
+    # hooks capture the true FP16 activations — not activations
+    # corrupted by quantization with default (uncalibrated) scales.
+    # ---------------------------------------------------------------
+    logger.info("Enabling bypass_all mode for calibration (FP16 forward passes)...")
+    for _, m in model.named_modules():
+        if isinstance(m, TiledLinearADC):
+            m.set_bypass_all(True)
+    
     calibrator = ADCCalibrator(
         model, 
         method=args.calibration_method,
@@ -1296,6 +1248,12 @@ def main():
         bw=args.bw
     )
     calibrator.calibrate(calibration_loader, num_batches=args.num_calibration_batches)
+    
+    # Disable bypass — re-enable quantization for inference
+    for _, m in model.named_modules():
+        if isinstance(m, TiledLinearADC):
+            m.set_bypass_all(False)
+    logger.info("bypass_all disabled — quantization re-enabled.")
     
     # Compute optimal parameters
     logger.info("Computing optimal quantization scales...")
