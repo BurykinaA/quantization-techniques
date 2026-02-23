@@ -1010,11 +1010,15 @@ def main():
     # Visualization settings
     parser.add_argument("--disable_visualizations", action="store_true",
                        help="Disable ADC visualizations")
+    parser.add_argument("--visualize_layers", type=str, nargs="+",
+                       default=[],
+                       help="Layer patterns to visualize (e.g. layers.0.self_attn.q_proj layers.0.mlp.down_proj)")
+    
+    # Debug / diagnostic settings
     parser.add_argument("--check_baseline", action="store_true",
                        help="Run FP16 baseline perplexity BEFORE ADC conversion (for debugging)")
-    parser.add_argument("--visualize_layers", type=str, nargs="+",
-                       default=[], #["layers.0.self_attn.q_proj", "layers.0.mlp.down_proj", "layers.15.mlp.gate_proj"]
-                       help="Layer patterns to visualize")
+    parser.add_argument("--run_no_adc_eval", action="store_true",
+                       help="Run extra evaluation WITHOUT ADC to isolate quantization vs ADC error")
     
     args = parser.parse_args()
     set_seed(args.seed)
@@ -1321,47 +1325,45 @@ def main():
         args.max_length = model_max_length
     
     # =========================================================================
-    # STEP 1.5: Diagnostic — quantized tiling WITHOUT ADC
+    # STEP 1.5 (optional): Diagnostic — quantized tiling WITHOUT ADC
     # =========================================================================
-    logger.info("=" * 80)
-    logger.info("STEP 1.5: DIAGNOSTIC — Tiling + Quantization WITHOUT ADC")
-    logger.info("=" * 80)
-    logger.info("Bypassing ADC (floor/clamp) to isolate whether ADC causes the issue...")
-    
-    # Enable ADC bypass on every TiledLinearADC
-    for _, module in model.named_modules():
-        if isinstance(module, TiledLinearADC):
-            module.set_bypass_adc(True)
-    
-    model.eval()
-    
-    # Quick perplexity on first eval dataset
-    _diag_ds = args.eval_datasets[0]
-    _diag_enc = load_and_tokenize_for_sliding_window(
-        _diag_ds, args.eval_split, tokenizer,
-        max_samples=args.max_eval_samples if _diag_ds == "c4" else None,
-    )
-    _diag_metrics = compute_perplexity_sliding_window(
-        model, _diag_enc, device,
-        max_length=args.max_length, stride=args.stride,
-        desc="NoADC eval",
-    )
-    logger.info(
-        f"WITHOUT ADC → {_diag_ds.upper()} Perplexity: {_diag_metrics['perplexity']:.4f}  "
-        f"(Loss: {_diag_metrics['avg_loss']:.4f})"
-    )
-    if use_wandb:
-        wandb.log({
-            "diagnostic/no_adc_perplexity": _diag_metrics["perplexity"],
-            "diagnostic/no_adc_avg_loss": _diag_metrics["avg_loss"],
-        })
-    
-    # Restore ADC
-    for _, module in model.named_modules():
-        if isinstance(module, TiledLinearADC):
-            module.set_bypass_adc(False)
-    logger.info("ADC re-enabled for full evaluation.")
-    logger.info("=" * 80)
+    if args.run_no_adc_eval:
+        logger.info("=" * 80)
+        logger.info("STEP 1.5: DIAGNOSTIC — Tiling + Quantization WITHOUT ADC")
+        logger.info("=" * 80)
+        logger.info("Bypassing ADC (floor/clamp) to isolate whether ADC causes the issue...")
+        
+        for _, module in model.named_modules():
+            if isinstance(module, TiledLinearADC):
+                module.set_bypass_adc(True)
+        
+        model.eval()
+        
+        _diag_ds = args.eval_datasets[0]
+        _diag_enc = load_and_tokenize_for_sliding_window(
+            _diag_ds, args.eval_split, tokenizer,
+            max_samples=args.max_eval_samples if _diag_ds == "c4" else None,
+        )
+        _diag_metrics = compute_perplexity_sliding_window(
+            model, _diag_enc, device,
+            max_length=args.max_length, stride=args.stride,
+            desc="NoADC eval",
+        )
+        logger.info(
+            f"WITHOUT ADC → {_diag_ds.upper()} Perplexity: {_diag_metrics['perplexity']:.4f}  "
+            f"(Loss: {_diag_metrics['avg_loss']:.4f})"
+        )
+        if use_wandb:
+            wandb.log({
+                "diagnostic/no_adc_perplexity": _diag_metrics["perplexity"],
+                "diagnostic/no_adc_avg_loss": _diag_metrics["avg_loss"],
+            })
+        
+        for _, module in model.named_modules():
+            if isinstance(module, TiledLinearADC):
+                module.set_bypass_adc(False)
+        logger.info("ADC re-enabled for full evaluation.")
+        logger.info("=" * 80)
     
     # =========================================================================
     # STEP 2: Evaluate perplexity on specified datasets (Sliding Window)
@@ -1519,227 +1521,268 @@ def main():
 
 def _generate_adc_visualizations(model, sample_input, layer_patterns, title_prefix="", output_subdir="./viz"):
     """
-    Generate visualizations for ADC layers showing before/after ADC quantization
-    
+    Generate 3x4 grid visualizations for ADC layers (12 plots per layer).
+
+    Layout matches the QAT reference style::
+
+        Row 1: Raw Activation X | Activation Codes | Dequant Activation | Act Quant Error
+        Row 2: Raw Weights W    | Weight Codes     | Dequant Weights    | W Quant Error
+        Row 3: FP Output        | Quantized Output | FP vs Quant scatter| Output Error
+
     Returns:
-        Dict[str, str]: Mapping of layer_name -> image_path
+        dict[str, str]: layer_name -> saved image path
     """
     import matplotlib.pyplot as plt
-    
+
     os.makedirs(output_subdir, exist_ok=True)
     logger.info(f"Generating ADC visualizations: {title_prefix}")
-    
+
     # Find ADC layers to visualize
     layers_to_viz = []
     for name, module in model.named_modules():
         if isinstance(module, QATLinearADC):
-            # Check against patterns
             if any(pattern in name for pattern in layer_patterns):
                 layers_to_viz.append((name, module))
         elif isinstance(module, TiledLinearADC) and len(module.tiles) > 0:
             if any(pattern in name for pattern in layer_patterns):
-                # Visualize first tile as representative
                 layers_to_viz.append((name + ".tiles.0", module.tiles[0]))
-    
+
     if not layers_to_viz:
         logger.warning(f"No ADC layers found matching patterns: {layer_patterns}")
         return {}
-    
+
     logger.info(f"Found {len(layers_to_viz)} layers to visualize")
-    
-    # Capture data for each layer
-    captured_data = {}
-    
+
+    captured_data: dict = {}
+
     def make_hook(layer_name):
         def hook(module, input, output):
             with torch.no_grad():
-                x = input[0]
-                
-                # Get quantizers
+                x = input[0].float()
+                w = module.weight.float()
+                bias = module.bias.float() if module.bias is not None else None
+
                 act_q = module.activation_quantizer
                 w_q = module.weight_quantizer
-                
-                # Build codes - ensure scales are on the same device as inputs
+
+                # --- Activation quantization ---
                 s_x = act_q.scale.to(x.device)
                 if act_q.symmetric:
                     code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
                 else:
-                    # Unsigned path: quantize to [0, 2^bx - 1] using zero_point offset
                     zp_x = act_q.zero_point.to(x.device)
                     code_x_temp = torch.clamp(torch.round(x / s_x + zp_x), 0, act_q.qmax)
-                    
                     if hasattr(module, 'ashift') and module.ashift:
-                        # A-shift: subtract fixed C instead of learned zp_x
                         code_x = code_x_temp - module.C
                     else:
-                        # Standard asymmetric: subtract learned zero_point to center
                         code_x = code_x_temp - zp_x
-                
-                # Weight codes - ensure scales are on the same device as weights
-                s_w_vec = w_q.scale.to(module.weight.device)
+                x_dequant = code_x * s_x
+
+                # --- Weight quantization ---
+                s_w_vec = w_q.scale.to(w.device)
                 s_w_b = s_w_vec.view(-1, 1)
-                code_w = torch.clamp(torch.round(module.weight / s_w_b), w_q.qmin, w_q.qmax)
-                
-                # Integer MM (before ADC)
+                code_w = torch.clamp(torch.round(w / s_w_b), w_q.qmin, w_q.qmax)
+                w_dequant = code_w * s_w_b
+
+                # --- FP output (no quantization) ---
+                y_fp = F.linear(x, w, bias)
+
+                # --- Quantized output (returned by the module) ---
+                y_quant = output.float()
+
+                # --- ADC internals ---
                 y_int = F.linear(code_x, code_w, bias=None)
-                
-                # ADC quantization
                 delta = module.delta
-                na = module.na
-                pa = module.pa
-                # Use floor to match actual ADC implementation (Paper Equation 2)
+                na, pa = module.na, module.pa
                 y_adc_codes = torch.clamp(torch.floor(y_int / delta), na, pa)
-                y_after_adc = y_adc_codes * delta
-                
+
                 captured_data[layer_name] = {
                     'x_raw': x.detach().cpu().numpy(),
                     'code_x': code_x.detach().cpu().numpy(),
-                    'w_raw': module.weight.detach().cpu().numpy(),
+                    'x_dequant': x_dequant.detach().cpu().numpy(),
+                    'w_raw': w.detach().cpu().numpy(),
                     'code_w': code_w.detach().cpu().numpy(),
+                    'w_dequant': w_dequant.detach().cpu().numpy(),
+                    'y_fp': y_fp.detach().cpu().numpy(),
+                    'y_quant': y_quant.detach().cpu().numpy(),
                     'y_int_before_adc': y_int.detach().cpu().numpy(),
-                    'y_after_adc': y_after_adc.detach().cpu().numpy(),
                     'y_adc_codes': y_adc_codes.detach().cpu().numpy(),
                     's_x': s_x.detach().cpu().item(),
                     's_w': s_w_vec.detach().cpu().numpy(),
+                    'act_qmin': act_q.qmin,
+                    'act_qmax': act_q.qmax,
+                    'w_qmin': w_q.qmin,
+                    'w_qmax': w_q.qmax,
                     'delta': delta,
                     'na': na,
                     'pa': pa,
                 }
         return hook
-    
-    # Attach hooks
+
     hooks = []
     for name, module in layers_to_viz:
-        hook = module.register_forward_hook(make_hook(name))
-        hooks.append(hook)
-    
-    # Run forward pass
+        hooks.append(module.register_forward_hook(make_hook(name)))
+
     model.eval()
     with torch.no_grad():
         _ = model(**sample_input)
-    
-    # Remove hooks
-    for hook in hooks:
-        hook.remove()
-    
-    # Generate plots
+
+    for h in hooks:
+        h.remove()
+
     result_paths = {}
     for name, _ in layers_to_viz:
         if name not in captured_data:
             continue
-        
         try:
             clean_name = name.replace(".", "_").replace("/", "_")
             filename = f"{clean_name}_{title_prefix.replace(' ', '_')}.png"
             filepath = os.path.join(output_subdir, filename)
-            
             _plot_adc_pipeline(captured_data[name], name, title_prefix, filepath)
-            
             result_paths[clean_name] = filepath
-            logger.info(f"  ✓ {name}")
+            logger.info(f"  saved {name}")
         except Exception as e:
-            logger.error(f"  ✗ {name}: {e}")
+            logger.error(f"  failed {name}: {e}")
             import traceback
             traceback.print_exc()
-    
+
     logger.info(f"Generated {len(result_paths)} visualizations in {output_subdir}")
     return result_paths
 
 
 def _plot_adc_pipeline(data: dict, layer_name: str, title_prefix: str, filepath: str):
-    """Plot ADC pipeline showing before/after ADC quantization"""
+    """
+    3x4 grid visualization matching the QAT reference style.
+
+    Row 1: Raw Activation X | Activation Codes | Dequant Activation | Act Quant Error
+    Row 2: Raw Weights W    | Weight Codes     | Dequant Weights    | W Quant Error
+    Row 3: FP Output        | Quantized Output | FP vs Quant scatter| Output Error
+    """
     import matplotlib.pyplot as plt
-    
-    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
-    fig.suptitle(f"{title_prefix}: {layer_name}", fontsize=14, fontweight='bold')
-    
-    # Take first sample for visualization
-    x_raw = data['x_raw'][0].flatten()[:1000]  # First 1000 elements
-    code_x = data['code_x'][0].flatten()[:1000]
-    w_raw = data['w_raw'].flatten()[:1000]
-    code_w = data['code_w'].flatten()[:1000]
-    y_before = data['y_int_before_adc'][0].flatten()[:1000]
-    y_after = data['y_after_adc'][0].flatten()[:1000]
-    y_codes = data['y_adc_codes'][0].flatten()[:1000]
-    
-    # Row 1: Activations and Weights
-    axes[0, 0].hist(x_raw, bins=50, alpha=0.7, color='blue', edgecolor='black')
-    axes[0, 0].set_title(f'X_raw\nrange: [{x_raw.min():.3f}, {x_raw.max():.3f}]')
-    axes[0, 0].set_xlabel('Value')
-    axes[0, 0].set_ylabel('Count')
-    axes[0, 0].grid(True, alpha=0.3)
-    
-    axes[0, 1].hist(code_x, bins=50, alpha=0.7, color='cyan', edgecolor='black')
-    axes[0, 1].set_title(f'X_codes\nscale: {data["s_x"]:.6f}')
-    axes[0, 1].set_xlabel('Code')
-    axes[0, 1].set_ylabel('Count')
-    axes[0, 1].grid(True, alpha=0.3)
-    
-    axes[0, 2].hist(w_raw, bins=50, alpha=0.7, color='green', edgecolor='black')
-    axes[0, 2].set_title(f'W_raw\nrange: [{w_raw.min():.3f}, {w_raw.max():.3f}]')
-    axes[0, 2].set_xlabel('Value')
-    axes[0, 2].set_ylabel('Count')
-    axes[0, 2].grid(True, alpha=0.3)
-    
-    axes[0, 3].hist(code_w, bins=50, alpha=0.7, color='lightgreen', edgecolor='black')
-    axes[0, 3].set_title(f'W_codes\nscale: [{data["s_w"].min():.6f}, {data["s_w"].max():.6f}]')
-    axes[0, 3].set_xlabel('Code')
-    axes[0, 3].set_ylabel('Count')
-    axes[0, 3].grid(True, alpha=0.3)
-    
-    # Row 2: ADC Input/Output
-    na, pa = data['na'], data['pa']
-    delta = data['delta']
-    
-    axes[1, 0].hist(y_before, bins=50, alpha=0.7, color='orange', edgecolor='black')
-    axes[1, 0].axvline(na * delta, color='red', linestyle='--', linewidth=2, label=f'ADC min={na*delta:.1f}')
-    axes[1, 0].axvline(pa * delta, color='red', linestyle='--', linewidth=2, label=f'ADC max={pa*delta:.1f}')
-    axes[1, 0].set_title(f'BEFORE ADC (Y_int)\nrange: [{y_before.min():.1f}, {y_before.max():.1f}]')
-    axes[1, 0].set_xlabel('Value')
-    axes[1, 0].set_ylabel('Count')
-    axes[1, 0].legend()
-    axes[1, 0].grid(True, alpha=0.3)
-    
-    axes[1, 1].hist(y_codes, bins=min(50, pa - na + 1), alpha=0.7, color='red', edgecolor='black')
-    axes[1, 1].axvline(na, color='darkred', linestyle='--', linewidth=2, label=f'na={na}')
-    axes[1, 1].axvline(pa, color='darkred', linestyle='--', linewidth=2, label=f'pa={pa}')
-    axes[1, 1].set_title(f'ADC codes\nΔ={delta:.3f}')
-    axes[1, 1].set_xlabel('ADC Code')
-    axes[1, 1].set_ylabel('Count')
-    axes[1, 1].legend()
-    axes[1, 1].grid(True, alpha=0.3)
-    
-    axes[1, 2].hist(y_after, bins=50, alpha=0.7, color='purple', edgecolor='black')
-    axes[1, 2].set_title(f'AFTER ADC\nrange: [{y_after.min():.1f}, {y_after.max():.1f}]')
-    axes[1, 2].set_xlabel('Value')
-    axes[1, 2].set_ylabel('Count')
-    axes[1, 2].grid(True, alpha=0.3)
-    
-    # Comparison: before vs after ADC
-    axes[1, 3].hist(y_before, bins=50, alpha=0.5, color='orange', label='Before ADC', edgecolor='black')
-    axes[1, 3].hist(y_after, bins=50, alpha=0.5, color='purple', label='After ADC', edgecolor='black')
-    axes[1, 3].axvline(na * delta, color='red', linestyle='--', linewidth=1, alpha=0.7)
-    axes[1, 3].axvline(pa * delta, color='red', linestyle='--', linewidth=1, alpha=0.7)
-    axes[1, 3].set_title('Before vs After ADC')
-    axes[1, 3].set_xlabel('Value')
-    axes[1, 3].set_ylabel('Count')
-    axes[1, 3].legend()
-    axes[1, 3].grid(True, alpha=0.3)
-    
-    # Calculate clipping statistics
-    clipped_low = (y_codes == na).sum()
-    clipped_high = (y_codes == pa).sum()
-    total = y_codes.size
-    clip_pct = 100.0 * (clipped_low + clipped_high) / total
-    
-    # Add text with statistics
-    stats_text = f"Clipping: {clip_pct:.2f}% ({clipped_low} low, {clipped_high} high)"
-    fig.text(0.5, 0.02, stats_text, ha='center', fontsize=12, bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-    
-    plt.tight_layout(rect=[0, 0.03, 1, 0.98])
+
+    N = 2000  # max elements to plot
+
+    x_raw = data['x_raw'].flatten()[:N]
+    code_x = data['code_x'].flatten()[:N]
+    x_dequant = data['x_dequant'].flatten()[:N]
+    x_err = x_raw - x_dequant
+
+    w_raw = data['w_raw'].flatten()[:N]
+    code_w = data['code_w'].flatten()[:N]
+    w_dequant = data['w_dequant'].flatten()[:N]
+    w_err = w_raw - w_dequant
+
+    y_fp = data['y_fp'].flatten()[:N]
+    y_quant = data['y_quant'].flatten()[:N]
+    y_err = y_fp - y_quant
+
+    act_qmin, act_qmax = data['act_qmin'], data['act_qmax']
+    w_qmin, w_qmax = data['w_qmin'], data['w_qmax']
+    s_x = data['s_x']
+    s_w = data['s_w']
+
+    bins = 50
+
+    fig, axes = plt.subplots(3, 4, figsize=(22, 14))
+    fig.suptitle(f"ADC Layer: {layer_name}", fontsize=14, fontweight='bold', y=0.995)
+
+    # ======================= ROW 1: Activations =======================
+    # 1. Raw Activation X
+    ax = axes[0, 0]
+    ax.hist(x_raw, bins=bins, alpha=0.8, color='royalblue', edgecolor='black', linewidth=0.3)
+    ax.set_title(f"1. Raw Activation X\nMean: {x_raw.mean():.4f}, Std: {x_raw.std():.4f}", fontsize=9)
+    ax.set_xlabel('Value'); ax.set_ylabel('Count')
+
+    # 2. Activation Codes
+    ax = axes[0, 1]
+    act_range_str = f"[{act_qmin}, {act_qmax}]"
+    n_act_bits = int(np.log2(act_qmax - act_qmin + 1)) if (act_qmax - act_qmin + 1) > 0 else 0
+    ax.hist(code_x, bins=bins, alpha=0.8, color='goldenrod', edgecolor='black', linewidth=0.3)
+    ax.axvline(act_qmin, color='red', ls='--', lw=1.5, label='qmin')
+    ax.axvline(act_qmax, color='red', ls='--', lw=1.5, label='qmax')
+    ax.set_title(f"2. Activation Codes ({n_act_bits}-bit)\nRange {act_range_str}", fontsize=9)
+    ax.set_xlabel('Code Value'); ax.set_ylabel('Count')
+    ax.legend(fontsize=7)
+
+    # 3. Dequantized Activation
+    ax = axes[0, 2]
+    ax.hist(x_dequant, bins=bins, alpha=0.8, color='darkcyan', edgecolor='black', linewidth=0.3)
+    ax.set_title(f"3. Dequantized Activation\nMean: {x_dequant.mean():.4f}", fontsize=9)
+    ax.set_xlabel('Value'); ax.set_ylabel('Count')
+
+    # 4. Activation Quant Error
+    ax = axes[0, 3]
+    act_mae = float(np.mean(np.abs(x_err)))
+    ax.hist(x_err, bins=bins, alpha=0.8, color='firebrick', edgecolor='black', linewidth=0.3)
+    ax.set_title(f"4. Activation Quant Error\nMAE: {act_mae:.4f}", fontsize=9)
+    ax.set_xlabel('Error'); ax.set_ylabel('Count')
+
+    # ======================= ROW 2: Weights =======================
+    # 5. Raw Weights W
+    ax = axes[1, 0]
+    ax.hist(w_raw, bins=bins, alpha=0.8, color='mediumorchid', edgecolor='black', linewidth=0.3)
+    ax.set_title(f"5. Raw Weights W\nMean: {w_raw.mean():.4f}, Std: {w_raw.std():.4f}", fontsize=9)
+    ax.set_xlabel('Value'); ax.set_ylabel('Count')
+
+    # 6. Weight Codes
+    ax = axes[1, 1]
+    w_range_str = f"[{w_qmin}, {w_qmax}]"
+    n_w_bits = int(np.log2(w_qmax - w_qmin + 1)) if (w_qmax - w_qmin + 1) > 0 else 0
+    ax.hist(code_w, bins=bins, alpha=0.8, color='orange', edgecolor='black', linewidth=0.3)
+    ax.axvline(w_qmin, color='red', ls='--', lw=1.5, label='qmin')
+    ax.axvline(w_qmax, color='red', ls='--', lw=1.5, label='qmax')
+    ax.set_title(f"6. Weight Codes ({n_w_bits}-bit)\nRange {w_range_str}", fontsize=9)
+    ax.set_xlabel('Code Value'); ax.set_ylabel('Count')
+    ax.legend(fontsize=7)
+
+    # 7. Dequantized Weights
+    ax = axes[1, 2]
+    ax.hist(w_dequant, bins=bins, alpha=0.8, color='darkcyan', edgecolor='black', linewidth=0.3)
+    ax.set_title(f"7. Dequantized Weights\nMean: {w_dequant.mean():.4f}", fontsize=9)
+    ax.set_xlabel('Value'); ax.set_ylabel('Count')
+
+    # 8. Weight Quant Error
+    ax = axes[1, 3]
+    w_mae = float(np.mean(np.abs(w_err)))
+    ax.hist(w_err, bins=bins, alpha=0.8, color='firebrick', edgecolor='black', linewidth=0.3)
+    ax.set_title(f"8. Weight Quant Error\nMAE: {w_mae:.4f}", fontsize=9)
+    ax.set_xlabel('Error'); ax.set_ylabel('Count')
+
+    # ======================= ROW 3: Output =======================
+    # 9. FP Output
+    ax = axes[2, 0]
+    ax.hist(y_fp, bins=bins, alpha=0.8, color='royalblue', edgecolor='black', linewidth=0.3)
+    ax.set_title(f"9. FP Output\nMean: {y_fp.mean():.4f}, Std: {y_fp.std():.4f}", fontsize=9)
+    ax.set_xlabel('Value'); ax.set_ylabel('Count')
+
+    # 10. Quantized Output
+    ax = axes[2, 1]
+    ax.hist(y_quant, bins=bins, alpha=0.8, color='orange', edgecolor='black', linewidth=0.3)
+    ax.set_title(f"10. Quantized Output\nMean: {y_quant.mean():.4f}", fontsize=9)
+    ax.set_xlabel('Value'); ax.set_ylabel('Count')
+
+    # 11. FP vs Quantized (scatter)
+    ax = axes[2, 2]
+    subsample = min(len(y_fp), 500)
+    idx = np.random.choice(len(y_fp), subsample, replace=False)
+    ax.scatter(y_fp[idx], y_quant[idx], alpha=0.4, s=6, color='steelblue')
+    lims = [min(y_fp[idx].min(), y_quant[idx].min()),
+            max(y_fp[idx].max(), y_quant[idx].max())]
+    ax.plot(lims, lims, 'r--', lw=1.5, label='y=x')
+    ax.set_title("11. FP vs Quantized", fontsize=9)
+    ax.set_xlabel('Full Precision'); ax.set_ylabel('Quantized')
+    ax.legend(fontsize=7)
+
+    # 12. Output Error
+    ax = axes[2, 3]
+    out_mse = float(np.mean(y_err ** 2))
+    ax.hist(y_err, bins=bins, alpha=0.8, color='firebrick', edgecolor='black', linewidth=0.3)
+    ax.set_title(f"12. Output Error\nMSE: {out_mse:.6f}", fontsize=9)
+    ax.set_xlabel('Error (FP - Quant)'); ax.set_ylabel('Count')
+
+    plt.tight_layout(rect=[0, 0, 1, 0.97])
     fig.savefig(filepath, dpi=150, bbox_inches='tight')
     plt.close(fig)
-    
     return filepath
 
 

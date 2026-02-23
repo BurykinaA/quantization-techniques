@@ -1,31 +1,34 @@
 #!/bin/bash
-# ADC Post-Training Quantization (PTQ) for LLaMA models
-# Pipeline: Calibrate → Quantize + Tile + ADC → Evaluate → Visualize
+# ADC PTQ Debug Script for LLaMA
 #
-# Supports: meta-llama/Llama-3.1-8B, meta-llama/Llama-3.2-3B, meta-llama/Llama-3.2-1B
+# Runs extra diagnostics on top of the normal PTQ pipeline:
+#   1. FP16 baseline perplexity (before any quantization)
+#   2. Quantization + Tiling WITHOUT ADC (isolates quantization error)
+#   3. Full pipeline WITH ADC
+#
+# Use this to diagnose whether perplexity issues come from
+# quantization, tiling, or the ADC step.
 
 # ============================================================
 # MODEL CONFIGURATION
 # ============================================================
 MODEL_NAME="meta-llama/Llama-3.2-1B"
-
-# Output directory (timestamp appended automatically)
 OUTPUT_DIR="./ADC/llama/checkpoints/outputs_llama_adc_ptq"
 
 # ============================================================
 # ADC Hardware Configuration
 # ============================================================
-BX=8              # Activation bits
-BW=8              # Weight bits
-BA=8              # ADC bits
-K=4               # Hardware design parameter (sub-ADCs per column)
-ASHIFT=false      # A-shift: false=symmetric, true=asymmetric+A-shift
-MVM_LIMIT=256     # Max crossbar size (tiling splits layers > this)
+BX=8
+BW=8
+BA=8
+K=4
+ASHIFT=false
+MVM_LIMIT=256
 
 # ============================================================
 # Calibration Settings
 # ============================================================
-CALIBRATION_METHOD="percentile"  # Options: minmax, percentile, mse
+CALIBRATION_METHOD="percentile"
 NUM_CALIBRATION_BATCHES=128
 CALIBRATION_BATCH_SIZE=4
 CALIBRATION_MAX_LENGTH=512
@@ -37,7 +40,7 @@ CALIBRATION_DATASET="wikitext2"
 EVAL_DATASETS="wikitext2"
 
 # ============================================================
-# Evaluation Settings (Sliding Window)
+# Evaluation Settings
 # ============================================================
 MAX_LENGTH=2048
 STRIDE=""
@@ -45,49 +48,27 @@ EVAL_SPLIT="test"
 MAX_EVAL_SAMPLES=1000
 
 # ============================================================
-# Visualization Settings
-# ============================================================
-# Layer patterns to generate 3x4 diagnostic plots for.
-# Each matched layer produces a before/after calibration visualization.
-VISUALIZE_LAYERS="layers.0.self_attn.q_proj layers.0.mlp.down_proj layers.15.mlp.gate_proj"
-
-# ============================================================
 # Other Settings
 # ============================================================
 TORCH_DTYPE="float16"
 WANDB_PROJECT="llama-adc-ptq"
 MODEL_SHORT_NAME=$(echo $MODEL_NAME | sed 's/.*\///')
-WANDB_RUN_NAME="ptq_${MODEL_SHORT_NAME}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
+WANDB_RUN_NAME="debug_${MODEL_SHORT_NAME}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
 SEED=42
 
-# ============================================================
-# Print configuration
-# ============================================================
 echo "========================================"
-echo "LLaMA ADC Post-Training Quantization"
+echo "LLaMA ADC PTQ — DEBUG MODE"
 echo "========================================"
-echo "Model:             $MODEL_NAME"
-echo "Output:            $OUTPUT_DIR"
+echo "Model:        $MODEL_NAME"
+echo "Config:       BX=$BX  BW=$BW  BA=$BA  K=$K  MVM=$MVM_LIMIT"
 echo ""
-echo "ADC Configuration:"
-echo "  BX=$BX  BW=$BW  BA=$BA  K=$K  MVM=$MVM_LIMIT"
-echo ""
-echo "Quantization Strategy:"
-if [ "$ASHIFT" = true ]; then
-    echo "  Asymmetric (unsigned) + A-shift for SiLU outputs"
-else
-    echo "  Symmetric (signed) for all activations"
-fi
-echo ""
-echo "Calibration: $CALIBRATION_METHOD ($NUM_CALIBRATION_BATCHES batches)"
-echo "Evaluation:  $EVAL_DATASETS (sliding window, ctx=$MAX_LENGTH)"
-echo "Visualize:   $VISUALIZE_LAYERS"
+echo "Extra diagnostics enabled:"
+echo "  [1] FP16 baseline perplexity    (--check_baseline)"
+echo "  [2] Quant+Tiling WITHOUT ADC    (--run_no_adc_eval)"
+echo "  [3] Full pipeline WITH ADC      (always)"
 echo "========================================"
 echo ""
 
-# ============================================================
-# Build and run command
-# ============================================================
 CMD="python ADC/llama/runs/llama_adc_ptq.py \
     --model_name \"$MODEL_NAME\" \
     --output_dir \"$OUTPUT_DIR\" \
@@ -109,7 +90,9 @@ CMD="python ADC/llama/runs/llama_adc_ptq.py \
     --seed $SEED \
     --wandb_project \"$WANDB_PROJECT\" \
     --wandb_run_name \"$WANDB_RUN_NAME\" \
-    --visualize_layers $VISUALIZE_LAYERS"
+    --disable_visualizations \
+    --check_baseline \
+    --run_no_adc_eval"
 
 if [ -n "$STRIDE" ]; then
     CMD="$CMD --stride $STRIDE"
@@ -119,7 +102,7 @@ if [ "$ASHIFT" = true ]; then
     CMD="$CMD --ashift"
 fi
 
-echo "Running PTQ..."
+echo "Running PTQ with diagnostics..."
 echo ""
 eval $CMD
 
@@ -128,19 +111,15 @@ EXIT_CODE=$?
 echo ""
 echo "========================================"
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "PTQ Complete!"
+    echo "Debug PTQ Complete!"
     echo "========================================"
     echo ""
-    echo "Results:  $OUTPUT_DIR"
-    echo "Plots:    $OUTPUT_DIR/viz_before/  and  $OUTPUT_DIR/viz_after/"
-    echo "WandB:    https://wandb.ai/your-username/$WANDB_PROJECT"
+    echo "Check WandB for metrics comparison:"
+    echo "  baseline/perplexity       — FP16 (no quantization)"
+    echo "  diagnostic/no_adc_perplexity — Quant + Tiling only"
+    echo "  final perplexity          — Full ADC pipeline"
 else
-    echo "PTQ Failed (exit code $EXIT_CODE)"
+    echo "Debug PTQ Failed (exit code $EXIT_CODE)"
     echo "========================================"
-    echo ""
-    echo "Common issues:"
-    echo "  - OOM: Reduce MAX_LENGTH or CALIBRATION_BATCH_SIZE"
-    echo "  - Auth: Run 'huggingface-cli login' for gated models"
-    echo "  - CUDA: Check GPU availability with 'nvidia-smi'"
 fi
 echo "========================================"
