@@ -511,9 +511,9 @@ class TiledLinearADC(nn.Module):
 
         with torch.no_grad():
             for i, t in enumerate(self.tiles):
-                t.weight.copy_(splits[i])
+                t.weight.data = splits[i].clone()
                 if (linear.bias is not None) and (t.bias is not None):
-                    t.bias.copy_(linear.bias)
+                    t.bias.data = linear.bias.clone()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[-1] != self.in_features_total:
