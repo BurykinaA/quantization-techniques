@@ -744,7 +744,11 @@ def diagnose_quantized_model(model, tokenizer, device, num_layers_to_print: int 
 # =========================================================================
 
 def _capture_activations_for_layer(model, sample_input, layer_name, device):
-    """Run one forward pass and capture input activations for a specific nn.Linear layer."""
+    """Run one forward pass and capture input activations for a specific nn.Linear layer.
+
+    Padding positions (where attention_mask == 0) are stripped so that
+    the returned tensor contains only real-token activations.
+    """
     captured = {}
 
     def hook(module, input, output):
@@ -765,7 +769,21 @@ def _capture_activations_for_layer(model, sample_input, layer_name, device):
         model(**{k: v.to(device) for k, v in sample_input.items()})
     h.remove()
 
-    return captured.get('x', None)
+    x = captured.get('x', None)
+    if x is None:
+        return None
+
+    # Strip padding positions using attention_mask
+    mask = sample_input.get('attention_mask', None)
+    if mask is not None:
+        mask_cpu = mask.cpu()
+        if x.dim() == 3 and mask_cpu.dim() == 2:
+            # x: [batch, seq_len, hidden], mask: [batch, seq_len]
+            # Keep only real tokens (mask == 1) for the first batch element
+            valid = mask_cpu[0].bool()  # [seq_len]
+            x = x[:, valid, :]  # [1, num_real_tokens, hidden]
+
+    return x
 
 
 def _generate_smooth_quant_3d_visualization(
