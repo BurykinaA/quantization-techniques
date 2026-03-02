@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
-Post-Training Quantization (PTQ) for ADC-based LLaMA models with SmoothQuant preprocessing.
+Post-Training Quantization (PTQ) for ADC-based LLaMA models with optional
+SmoothQuant or FlatQuant preprocessing.
 
-Pipeline: SmoothQuant → ADC Convert → Calibrate → Evaluate → Visualize
-
-SmoothQuant migrates quantization difficulty from activations to weights
-before ADC conversion, improving quantization quality.
+Pipeline: Preprocess (SmoothQuant/FlatQuant/None) → ADC Convert → Calibrate → Evaluate → Visualize
 
 Supports:
 - meta-llama/Llama-3.1-8B
@@ -39,6 +37,11 @@ from ADC.llama.core.adc_layers import TiledLinearADC, QATLinearADC
 from ADC.llama.core.smooth_quant import (
     calibrate_smooth_scales,
     apply_smooth_quant,
+)
+from ADC.llama.core.flat_quant import (
+    calibrate_flat_stats,
+    fit_flat_transforms,
+    apply_flat_quant,
 )
 
 import wandb
@@ -1130,7 +1133,7 @@ def _plot_adc_pipeline(data: dict, layer_name: str, title_prefix: str, filepath:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PTQ for ADC-based LLaMA models with SmoothQuant preprocessing"
+        description="PTQ for ADC-based LLaMA models with configurable preprocessing"
     )
 
     # Model settings
@@ -1153,6 +1156,24 @@ def main():
     parser.add_argument("--smooth_quant_layers", type=str, nargs="+", default=[],
                         help="Layer patterns for SmoothQuant 3D visualization "
                              "(e.g. layers.0.self_attn.q_proj layers.0.mlp.gate_proj)")
+    parser.add_argument("--preprocess_method", type=str, default="smooth_quant",
+                        choices=["smooth_quant", "flat_quant", "none"],
+                        help="Preprocess before ADC conversion")
+
+    # FlatQuant settings
+    parser.add_argument("--flat_quant_batches", type=int, default=64,
+                        help="Number of calibration batches for FlatQuant activation stats")
+    parser.add_argument("--flat_quant_beta", type=float, default=0.5,
+                        help="FlatQuant activation/weight balance coefficient")
+    parser.add_argument("--flat_quant_flatten_strength", type=float, default=0.25,
+                        help="Flatness regularization strength for transform fitting")
+    parser.add_argument("--flat_quant_layers", type=str, nargs="+", default=[],
+                        help="Layer patterns for FlatQuant 3D visualization "
+                             "(e.g. layers.0.self_attn.q_proj layers.0.mlp.gate_proj)")
+    parser.add_argument("--flat_quant_save_transforms", action="store_true",
+                        help="Save fitted FlatQuant transforms to output_dir")
+    parser.add_argument("--flat_quant_reload_path", type=str, default=None,
+                        help="Optional .pt path for pre-fitted FlatQuant transforms")
 
     # ADC settings
     parser.add_argument("--bx", type=int, default=8, help="Activation bits")
@@ -1230,26 +1251,55 @@ def main():
         logger.info("  -> Symmetric (signed) quantization for ALL activations (default)")
     logger.info("  -> Weights: always symmetric (signed) per-channel")
 
-    if not args.disable_smooth_quant:
-        logger.info(f"SmoothQuant: alpha={args.alpha}, calibration batches={args.smooth_quant_batches}")
+    if args.disable_smooth_quant and args.preprocess_method == "smooth_quant":
+        logger.warning("--disable_smooth_quant is deprecated. Falling back to preprocess_method=none")
+        args.preprocess_method = "none"
+
+    if args.preprocess_method == "smooth_quant":
+        logger.info(f"Preprocess: smooth_quant (alpha={args.alpha}, batches={args.smooth_quant_batches})")
+    elif args.preprocess_method == "flat_quant":
+        logger.info(
+            "Preprocess: flat_quant "
+            f"(beta={args.flat_quant_beta}, flatten_strength={args.flat_quant_flatten_strength}, "
+            f"batches={args.flat_quant_batches})"
+        )
     else:
-        logger.info("SmoothQuant: DISABLED")
+        logger.info("Preprocess: none")
 
     # Initialize WandB
     use_wandb = not args.disable_wandb
     model_short_name = args.model_name.split("/")[-1]
     if use_wandb:
-        run_name = args.wandb_run_name or (
-            f"sq_ptq_{model_short_name}_a{args.alpha}_bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}_{args.calibration_method}"
-        )
+        if args.preprocess_method == "smooth_quant":
+            default_run_name = (
+                f"sq_ptq_{model_short_name}_a{args.alpha}_bx{args.bx}_bw{args.bw}_"
+                f"ba{args.ba}_k{args.k}_{args.calibration_method}"
+            )
+        elif args.preprocess_method == "flat_quant":
+            default_run_name = (
+                f"fq_ptq_{model_short_name}_b{args.flat_quant_beta}_fs{args.flat_quant_flatten_strength}_"
+                f"bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}_{args.calibration_method}"
+            )
+        else:
+            default_run_name = (
+                f"ptq_{model_short_name}_bx{args.bx}_bw{args.bw}_"
+                f"ba{args.ba}_k{args.k}_{args.calibration_method}"
+            )
+
+        run_name = args.wandb_run_name or default_run_name
         wandb.init(
             project=args.wandb_project,
             name=run_name,
             config={
                 "model_name": args.model_name,
+                "preprocess_method": args.preprocess_method,
                 "smooth_quant_alpha": args.alpha,
                 "smooth_quant_batches": args.smooth_quant_batches,
-                "smooth_quant_enabled": not args.disable_smooth_quant,
+                "smooth_quant_enabled": args.preprocess_method == "smooth_quant",
+                "flat_quant_batches": args.flat_quant_batches,
+                "flat_quant_beta": args.flat_quant_beta,
+                "flat_quant_flatten_strength": args.flat_quant_flatten_strength,
+                "flat_quant_reload_path": args.flat_quant_reload_path,
                 "bx": args.bx,
                 "bw": args.bw,
                 "ba": args.ba,
@@ -1329,104 +1379,101 @@ def main():
         logger.info("=" * 80)
 
     # =========================================================================
-    # STEP 0: SMOOTHQUANT PREPROCESSING
+    # STEP 0: OPTIONAL PREPROCESSING (SmoothQuant / FlatQuant / None)
     # =========================================================================
-    if not args.disable_smooth_quant:
+    preprocess_summary = "DISABLED"
+    if args.preprocess_method in ("smooth_quant", "flat_quant"):
         logger.info("=" * 80)
-        logger.info("STEP 0: SMOOTHQUANT PREPROCESSING")
+        logger.info(f"STEP 0: {args.preprocess_method.upper()} PREPROCESSING")
         logger.info("=" * 80)
-        logger.info(f"Alpha: {args.alpha}, Calibration batches: {args.smooth_quant_batches}")
 
-        # --- Prepare calibration data for SmoothQuant ---
-        logger.info(f"Loading {args.calibration_dataset.upper()} for SmoothQuant calibration...")
+        logger.info(f"Loading {args.calibration_dataset.upper()} for preprocessing calibration...")
         is_streaming = (args.calibration_dataset == "c4")
-        sq_calib_raw = load_dataset_by_name(args.calibration_dataset, split="train")
-        sq_calib_dataset = prepare_dataset_for_lm(
-            sq_calib_raw, tokenizer,
+        pre_calib_raw = load_dataset_by_name(args.calibration_dataset, split="train")
+        pre_calib_dataset = prepare_dataset_for_lm(
+            pre_calib_raw,
+            tokenizer,
             max_length=args.calibration_max_length,
             max_samples=2000,
             min_text_length=50,
-            streaming=is_streaming
+            streaming=is_streaming,
         )
 
-        def sq_collator(features):
+        def pre_collator(features):
             return {
                 "input_ids": torch.tensor([f["input_ids"] for f in features]),
                 "attention_mask": torch.tensor([f["attention_mask"] for f in features]),
             }
 
-        sq_loader = DataLoader(
-            sq_calib_dataset,
+        pre_loader = DataLoader(
+            pre_calib_dataset,
             batch_size=args.calibration_batch_size,
             shuffle=False,
-            collate_fn=sq_collator,
+            collate_fn=pre_collator,
         )
 
-        # --- Save original weights for visualization layers ---
-        original_weights = {}
-        sq_viz_layers = args.smooth_quant_layers
-        if sq_viz_layers:
-            for name, module in model.named_modules():
-                if isinstance(module, nn.Linear):
-                    if any(pat in name for pat in sq_viz_layers):
+        if args.preprocess_method == "smooth_quant":
+            logger.info(f"Alpha: {args.alpha}, Calibration batches: {args.smooth_quant_batches}")
+            preprocess_summary = f"smooth_quant(alpha={args.alpha})"
+
+            # Save original tensors for optional visualization.
+            original_weights = {}
+            sq_viz_layers = args.smooth_quant_layers
+            if sq_viz_layers:
+                for name, module in model.named_modules():
+                    if isinstance(module, nn.Linear) and any(pat in name for pat in sq_viz_layers):
                         original_weights[name] = module.weight.detach().cpu().float().clone()
                         logger.info(f"  Saved original weights for viz: {name}")
 
-        # --- Capture original activations for visualization ---
-        original_activations = {}
-        if sq_viz_layers:
-            sample_for_sq = {
-                'input_ids': torch.tensor([sq_calib_dataset[0]['input_ids']]).to(device),
-                'attention_mask': torch.tensor([sq_calib_dataset[0]['attention_mask']]).to(device),
-            }
-            for name, module in model.named_modules():
-                if isinstance(module, nn.Linear):
-                    if any(pat in name for pat in sq_viz_layers):
+            original_activations = {}
+            sample_for_sq = None
+            if sq_viz_layers and len(pre_calib_dataset) > 0:
+                sample_for_sq = {
+                    "input_ids": torch.tensor([pre_calib_dataset[0]["input_ids"]]).to(device),
+                    "attention_mask": torch.tensor([pre_calib_dataset[0]["attention_mask"]]).to(device),
+                }
+                for name, module in model.named_modules():
+                    if isinstance(module, nn.Linear) and any(pat in name for pat in sq_viz_layers):
                         act = _capture_activations_for_layer(model, sample_for_sq, name, device)
                         if act is not None:
                             original_activations[name] = act.clone()
                             logger.info(f"  Captured original activations for viz: {name} {act.shape}")
 
-        # --- Calibrate SmoothQuant scales ---
-        logger.info("Calibrating SmoothQuant activation statistics...")
-        act_maxes = calibrate_smooth_scales(
-            model, sq_loader, num_batches=args.smooth_quant_batches, device=device
-        )
+            logger.info("Calibrating SmoothQuant activation statistics...")
+            act_maxes = calibrate_smooth_scales(
+                model,
+                pre_loader,
+                num_batches=args.smooth_quant_batches,
+                device=device,
+            )
 
-        # --- Apply SmoothQuant ---
-        logger.info("Applying SmoothQuant smoothing...")
-        applied_scales = apply_smooth_quant(model, act_maxes, alpha=args.alpha)
+            logger.info("Applying SmoothQuant smoothing...")
+            applied_scales = apply_smooth_quant(model, act_maxes, alpha=args.alpha)
 
-        if use_wandb:
-            for group_key, scales in applied_scales.items():
-                wandb.log({
-                    f"smooth_quant/{group_key}/scale_mean": scales.mean().item(),
-                    f"smooth_quant/{group_key}/scale_std": scales.std().item(),
-                    f"smooth_quant/{group_key}/scale_min": scales.min().item(),
-                    f"smooth_quant/{group_key}/scale_max": scales.max().item(),
-                })
+            if use_wandb:
+                for group_key, scales in applied_scales.items():
+                    wandb.log({
+                        f"smooth_quant/{group_key}/scale_mean": scales.mean().item(),
+                        f"smooth_quant/{group_key}/scale_std": scales.std().item(),
+                        f"smooth_quant/{group_key}/scale_min": scales.min().item(),
+                        f"smooth_quant/{group_key}/scale_max": scales.max().item(),
+                    })
 
-        # --- 3D Visualization: before vs after ---
-        if sq_viz_layers and not args.disable_visualizations:
-            logger.info("Generating SmoothQuant 3D visualizations...")
-            sq_viz_dir = os.path.join(args.output_dir, "viz_smooth_quant")
-            os.makedirs(sq_viz_dir, exist_ok=True)
+            if sq_viz_layers and not args.disable_visualizations and sample_for_sq is not None:
+                logger.info("Generating SmoothQuant 3D visualizations...")
+                sq_viz_dir = os.path.join(args.output_dir, "viz_smooth_quant")
+                os.makedirs(sq_viz_dir, exist_ok=True)
 
-            for name, module in model.named_modules():
-                if isinstance(module, nn.Linear):
-                    if any(pat in name for pat in sq_viz_layers):
+                for name, module in model.named_modules():
+                    if isinstance(module, nn.Linear) and any(pat in name for pat in sq_viz_layers):
                         if name not in original_weights or name not in original_activations:
                             continue
-
-                        smoothed_act = _capture_activations_for_layer(
-                            model, sample_for_sq, name, device
-                        )
+                        smoothed_act = _capture_activations_for_layer(model, sample_for_sq, name, device)
                         if smoothed_act is None:
                             continue
 
                         clean_name = name.replace(".", "_").replace("/", "_")
                         filepath = os.path.join(sq_viz_dir, f"{clean_name}_smooth_quant_3d.png")
-
                         _generate_smooth_quant_3d_visualization(
                             act_original=original_activations[name],
                             act_smoothed=smoothed_act,
@@ -1435,17 +1482,74 @@ def main():
                             layer_name=name,
                             filepath=filepath,
                         )
-
                         if use_wandb:
                             wandb.log({f"viz_smooth_quant/{clean_name}": wandb.Image(filepath)})
+                logger.info(f"SmoothQuant 3D visualizations saved to {sq_viz_dir}")
 
-            logger.info(f"SmoothQuant 3D visualizations saved to {sq_viz_dir}")
+            logger.info("=" * 80)
+            logger.info("SmoothQuant preprocessing complete")
+            logger.info("=" * 80)
+        else:
+            logger.info(
+                f"Beta: {args.flat_quant_beta}, Flatten strength: {args.flat_quant_flatten_strength}, "
+                f"Calibration batches: {args.flat_quant_batches}"
+            )
+            preprocess_summary = (
+                f"flat_quant(beta={args.flat_quant_beta}, "
+                f"flatten_strength={args.flat_quant_flatten_strength})"
+            )
 
-        logger.info("=" * 80)
-        logger.info("SmoothQuant preprocessing complete")
-        logger.info("=" * 80)
+            logger.info("Calibrating FlatQuant activation statistics...")
+            flat_stats = calibrate_flat_stats(
+                model,
+                pre_loader,
+                num_batches=args.flat_quant_batches,
+                device=device,
+            )
+
+            if args.flat_quant_reload_path:
+                logger.info(f"Loading FlatQuant transforms from {args.flat_quant_reload_path}")
+                transforms = torch.load(args.flat_quant_reload_path, map_location="cpu")
+            else:
+                linears_by_name = {
+                    name: module
+                    for name, module in model.named_modules()
+                    if isinstance(module, nn.Linear)
+                    and "embed_tokens" not in name
+                    and "lm_head" not in name
+                }
+                transforms = fit_flat_transforms(
+                    act_stats=flat_stats,
+                    linears_by_name=linears_by_name,
+                    beta=args.flat_quant_beta,
+                    flatten_strength=args.flat_quant_flatten_strength,
+                )
+
+            logger.info("Applying FlatQuant transforms...")
+            applied_scales = apply_flat_quant(model, transforms)
+
+            if use_wandb:
+                for group_key, scales in applied_scales.items():
+                    wandb.log({
+                        f"flat_quant/{group_key}/scale_mean": scales.mean().item(),
+                        f"flat_quant/{group_key}/scale_std": scales.std().item(),
+                        f"flat_quant/{group_key}/scale_min": scales.min().item(),
+                        f"flat_quant/{group_key}/scale_max": scales.max().item(),
+                    })
+
+            if args.flat_quant_save_transforms:
+                os.makedirs(args.output_dir, exist_ok=True)
+                transforms_path = os.path.join(args.output_dir, "flat_quant_transforms.pt")
+                torch.save(transforms, transforms_path)
+                logger.info(f"Saved FlatQuant transforms to: {transforms_path}")
+                if use_wandb:
+                    wandb.run.summary["flat_quant_transforms_path"] = transforms_path
+
+            logger.info("=" * 80)
+            logger.info("FlatQuant preprocessing complete")
+            logger.info("=" * 80)
     else:
-        logger.info("SmoothQuant disabled, skipping preprocessing step")
+        logger.info("Preprocessing disabled, skipping STEP 0")
 
     # =========================================================================
     # STEP 1: Convert to ADC layers (on the now-smoothed model)
@@ -1701,7 +1805,7 @@ def main():
     logger.info("=" * 80)
     logger.info("RESULTS SUMMARY (Sliding Window Perplexity)")
     logger.info("=" * 80)
-    logger.info(f"SmoothQuant: {'alpha=' + str(args.alpha) if not args.disable_smooth_quant else 'DISABLED'}")
+    logger.info(f"Preprocess: {preprocess_summary}")
     logger.info(f"Context window: {args.max_length}, Stride: {args.stride or args.max_length // 2}")
     for ds_name, metrics in all_eval_metrics.items():
         logger.info(
@@ -1738,10 +1842,10 @@ def main():
     # Save calibration info
     with open(os.path.join(args.output_dir, "calibration_info.txt"), "w") as f:
         f.write("=" * 80 + "\n")
-        f.write("LLaMA SMOOTHQUANT + ADC POST-TRAINING QUANTIZATION (PTQ) RESULTS\n")
+        f.write("LLaMA PREPROCESS + ADC POST-TRAINING QUANTIZATION (PTQ) RESULTS\n")
         f.write("=" * 80 + "\n\n")
         f.write(f"Model: {args.model_name}\n")
-        f.write(f"SmoothQuant: {'alpha=' + str(args.alpha) if not args.disable_smooth_quant else 'DISABLED'}\n")
+        f.write(f"Preprocess: {preprocess_summary}\n")
         f.write(f"Calibration method: {args.calibration_method}\n")
         f.write(f"Calibration batches: {args.num_calibration_batches}\n")
         f.write(f"ADC hardware config: bx={args.bx}, bw={args.bw}, ba={args.ba}, k={args.k}\n")
@@ -1793,7 +1897,7 @@ def main():
         if viz_after:
             logger.info(f"  After calibration:  {os.path.join(args.output_dir, 'viz_after')}")
 
-    if not args.disable_smooth_quant and not args.disable_visualizations and args.smooth_quant_layers:
+    if args.preprocess_method == "smooth_quant" and not args.disable_visualizations and args.smooth_quant_layers:
         logger.info(f"  SmoothQuant 3D:     {os.path.join(args.output_dir, 'viz_smooth_quant')}")
 
     # Final WandB logging
