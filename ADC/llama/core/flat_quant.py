@@ -1,17 +1,36 @@
 """
-FlatQuant: Flatness Matters for LLM Quantization.
+FlatQuant: Flatness-aware Post-Training Quantization for LLMs
+==============================================================
 
-Native implementation of the FlatQuant algorithm for LLaMA models,
-following the official upstream: https://github.com/ruikangliu/FlatQuant
+Implementation based on the official FlatQuant repository:
+  https://github.com/ruikangliu/FlatQuant
 
-Core idea: learn per-layer affine transformations (Kronecker-decomposed
-orthogonal matrices + diagonal scaling + learnable clipping) that make
-weights and activations flatter and more quantization-friendly. Transforms
-are trained via MSE loss between FP and quantized layer outputs, then
-reparameterized into the model weights before downstream use.
+Algorithm overview
+------------------
+FlatQuant learns per-layer affine transformations that make weight and
+activation distributions "flatter" (more uniform), reducing quantization
+error.  Each transformation is a Kronecker-decomposed orthogonal matrix
+with optional diagonal scaling and learnable clipping.
 
-Reference: Sun et al., "FlatQuant: Flatness Matters for LLM Quantization",
-ICML 2025.
+Pipeline (in order):
+  1. apply_flatquant_to_model   — wrap attention / MLP with FlatQuant modules
+  2. calibrate_flat_quant       — layer-by-layer MSE training of transforms
+  3. reparameterize_model       — fold transforms into weights / LayerNorm
+  4. strip_flatquant_wrappers   — restore plain nn.Linear for downstream use
+
+During calibration each layer is trained independently:
+  • FP reference output is computed with the original (unwrapped) weights
+  • Quantized output is computed with transforms + fake quantisation
+  • MSE loss between the two is minimised to learn optimal transforms
+
+File layout
+-----------
+  Part 1 — Fake Quantizers           (weight & activation)
+  Part 2 — Kronecker Transform       (learnable orthogonal via SVD)
+  Part 3 — FlatQuantLinear           (linear + transform + quantisation)
+  Part 4 — LLaMA Module Wrappers     (Attention, MLP)
+  Part 5 — Model-Level Operations    (apply, calibrate, reparameterize, strip)
+  Part 6 — Save / Load Transforms
 """
 
 import functools
@@ -29,11 +48,15 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================================
-# Quantizer utilities (used during FlatQuant calibration only)
+# Part 1 — Fake Quantizers (used during FlatQuant calibration only)
 # =========================================================================
 
 class _WeightQuantizer(nn.Module):
-    """Symmetric per-channel weight quantizer for FlatQuant training."""
+    """Symmetric per-channel fake quantizer for weights.
+
+    Quantizes and immediately dequantizes (fake-quant) to simulate
+    quantization error during training while keeping gradients flowing.
+    """
 
     def __init__(self, bits: int = 8):
         super().__init__()
@@ -54,9 +77,10 @@ class _WeightQuantizer(nn.Module):
 
 
 class _ActivationQuantizer(nn.Module):
-    """Symmetric per-token activation quantizer for FlatQuant training.
+    """Symmetric per-token fake quantizer for activations.
 
-    Optionally supports learnable activation clipping (lac).
+    Optionally supports Learnable Activation Clipping (LAC), where a
+    sigmoid-gated clip factor is trained to find optimal clipping bounds.
     """
 
     def __init__(self, bits: int = 8, lac: bool = False):
@@ -65,7 +89,7 @@ class _ActivationQuantizer(nn.Module):
         self.maxq = 2 ** (bits - 1) - 1
         self.lac = lac
         if lac:
-            self.clip_factor = nn.Parameter(torch.tensor(4.0), requires_grad=True)
+            self.clip_factor = nn.Parameter(torch.tensor(4.0))
             self.sigmoid = nn.Sigmoid()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -77,22 +101,44 @@ class _ActivationQuantizer(nn.Module):
 
 
 # =========================================================================
-# Kronecker-decomposed orthogonal transform (SVD parametrization)
+# Part 2 — Kronecker-decomposed SVD Transform
 # =========================================================================
+#
+# Core FlatQuant transformation.
+#
+#   Forward:  T(x) = (x * diag_scale) @ kron(L, R)
+#   Inverse:  T⁻¹(w) = (w / diag_scale) @ kron(L⁻¹, R⁻¹)
+#
+# L, R are factored via SVD:  L = U_L @ diag(s_L) @ V_L^T
+# U, V are constrained orthogonal through the Cayley parametrization.
+#
+# Key property: without quantization the transforms cancel:
+#   T(x) @ T⁻¹(W)^T  =  x @ W^T
+# With quantization the error is reduced because both x and W have
+# "flatter" distributions after transformation.
+# =========================================================================
+
 
 def _kronecker_matmul(
     x: torch.Tensor, mat_l: torch.Tensor, mat_r: torch.Tensor,
 ) -> torch.Tensor:
-    """Efficient Kronecker product matmul: x @ kron(mat_l, mat_r)."""
-    init_shape = x.shape
+    """Efficient Kronecker product matmul:  x @ kron(mat_l, mat_r).
+
+    Avoids forming the full Kronecker product by exploiting its structure:
+    reshape x to 3-D, apply mat_r (right), then mat_l (left).
+    """
+    shape = x.shape
     x = x.reshape(-1, mat_l.shape[0], mat_r.shape[0])
     x = torch.matmul(x, mat_r)
     x = torch.matmul(mat_l.T, x)
-    return x.reshape(init_shape)
+    return x.reshape(shape)
 
 
 def _get_decompose_dim(n: int) -> tuple[int, int]:
-    """Find (a-b, a+b) such that (a-b)*(a+b) == n, for Kronecker split."""
+    """Factor *n* into (p, q) with p*q == n and p ≈ q.
+
+    Uses the identity  n = (a − b)(a + b)  where  a² − b² = n.
+    """
     a = int(math.sqrt(n))
     if a * a < n:
         a += 1
@@ -106,7 +152,7 @@ def _get_decompose_dim(n: int) -> tuple[int, int]:
 
 
 def _random_orthogonal(size: int) -> torch.Tensor:
-    """Random orthogonal matrix via QR decomposition."""
+    """Random orthogonal matrix via QR decomposition (Haar measure)."""
     h = torch.randn(size, size)
     q, r = torch.linalg.qr(h)
     q = q @ torch.diag(torch.sign(torch.diag(r)))
@@ -114,10 +160,14 @@ def _random_orthogonal(size: int) -> torch.Tensor:
 
 
 class KroneckerTransform(nn.Module):
-    """Kronecker-decomposed SVD orthogonal transform with optional diagonal scaling.
+    """Learnable Kronecker-decomposed transform with optional diagonal.
 
-    Represents T = diag(d) @ kron(U_L @ diag(s_L) @ V_L^T, U_R @ diag(s_R) @ V_R^T)
-    where U, V are constrained to be orthogonal via Cayley parametrization.
+    Parameters
+    ----------
+    dim : int
+        Input dimension (automatically factored into left × right).
+    add_diag : bool
+        Whether to include a learnable per-channel diagonal scale.
     """
 
     def __init__(self, dim: int, add_diag: bool = False):
@@ -127,6 +177,7 @@ class KroneckerTransform(nn.Module):
         self.right_size = right_size
         self.dim = dim
 
+        # Left Kronecker factor:  U_L @ diag(s_L) @ V_L^T
         self.u_left = nn.Linear(left_size, left_size, bias=False, dtype=torch.float32)
         self.u_left.weight.data = _random_orthogonal(left_size)
         self.u_left = nn.utils.parametrizations.orthogonal(
@@ -139,6 +190,7 @@ class KroneckerTransform(nn.Module):
         )
         self.diag_left = nn.Parameter(torch.ones(left_size, dtype=torch.float32))
 
+        # Right Kronecker factor:  U_R @ diag(s_R) @ V_R^T
         self.u_right = nn.Linear(right_size, right_size, bias=False, dtype=torch.float32)
         self.u_right.weight.data = _random_orthogonal(right_size)
         self.u_right = nn.utils.parametrizations.orthogonal(
@@ -151,6 +203,7 @@ class KroneckerTransform(nn.Module):
         )
         self.diag_right = nn.Parameter(torch.ones(right_size, dtype=torch.float32))
 
+        # Optional per-channel diagonal scaling
         self.add_diag = add_diag
         self.use_diag = True
         if add_diag:
@@ -159,18 +212,13 @@ class KroneckerTransform(nn.Module):
         self._eval_mode = False
 
     def forward(self, x: torch.Tensor, inv_t: bool = False) -> torch.Tensor:
+        """Apply forward (*inv_t=False*) or inverse (*inv_t=True*) transform."""
         if self.add_diag and self.use_diag:
-            if inv_t:
-                x = x / self.diag_scale.to(x)
-            else:
-                x = x * self.diag_scale.to(x)
+            x = x / self.diag_scale.to(x) if inv_t else x * self.diag_scale.to(x)
 
         if not self._eval_mode:
-            dl = self.diag_left
-            dr = self.diag_right
-            if inv_t:
-                dl = 1.0 / dl
-                dr = 1.0 / dr
+            dl = 1.0 / self.diag_left if inv_t else self.diag_left
+            dr = 1.0 / self.diag_right if inv_t else self.diag_right
             mat_l = self.u_left.weight @ torch.diag(dl) @ self.v_left.weight.T
             mat_r = self.u_right.weight @ torch.diag(dr) @ self.v_right.weight.T
         else:
@@ -182,6 +230,7 @@ class KroneckerTransform(nn.Module):
         return _kronecker_matmul(x, mat_l.to(x), mat_r.to(x))
 
     def to_eval_mode(self) -> None:
+        """Pre-compute and cache forward / inverse matrices, free SVD params."""
         if self._eval_mode:
             return
         with torch.no_grad():
@@ -199,11 +248,23 @@ class KroneckerTransform(nn.Module):
 
 
 # =========================================================================
-# FlatQuantized Linear layer
+# Part 3 — FlatQuantLinear
 # =========================================================================
 
 class FlatQuantLinear(nn.Module):
-    """Linear layer with FlatQuant transform, quantizers and learnable clipping."""
+    """Linear layer augmented with FlatQuant transform and fake quantisation.
+
+    Wraps an existing ``nn.Linear``.  During calibration::
+
+        W' = T⁻¹(W)              # inverse transform on weights
+        W' = clip(W')             # optional LWC
+        W_q = fake_quant(W')      # weight quantisation
+        x_q = fake_quant(x)       # activation quantisation
+        y   = x_q @ W_q^T + bias
+
+    After ``reparameterize()``, the transform is folded into weights
+    permanently; only the activation quantiser stays active at eval time.
+    """
 
     def __init__(
         self,
@@ -235,12 +296,8 @@ class FlatQuantLinear(nn.Module):
         wmin = wmin * self.sigmoid(self.clip_factor_w_min)
         return torch.clamp(weight, min=wmin, max=wmax)
 
-    def _apply_trans(
-        self, weight: torch.Tensor, qa_trans: KroneckerTransform,
-    ) -> torch.Tensor:
-        return qa_trans(weight, inv_t=True)
-
     def ori_forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Original FP forward — no transform, no quantisation."""
         return self.linear(x)
 
     def train_forward(
@@ -248,9 +305,10 @@ class FlatQuantLinear(nn.Module):
         x: torch.Tensor,
         qa_trans: KroneckerTransform | None = None,
     ) -> torch.Tensor:
+        """Quantised forward with optional transform (calibration path)."""
         weight = self.linear.weight.data
         if qa_trans is not None:
-            weight = self._apply_trans(weight, qa_trans)
+            weight = qa_trans(weight, inv_t=True)
         if self.lwc:
             weight = self._apply_wclip(weight)
         self.w_quantizer.find_params(weight)
@@ -266,18 +324,37 @@ class FlatQuantLinear(nn.Module):
         ori_dtype = weight.dtype
         weight = weight.to(torch.float64)
         if qa_trans is not None:
-            weight = self._apply_trans(weight, qa_trans)
+            weight = qa_trans(weight, inv_t=True)
         if self.lwc:
             weight = self._apply_wclip(weight)
         self.linear.weight.data = weight.to(ori_dtype)
 
 
 # =========================================================================
-# FlatQuant LLaMA modules
+# Part 4 — LLaMA Module Wrappers
+# =========================================================================
+#
+# We delegate the actual computation (RoPE, attention math, etc.) to the
+# original HuggingFace modules, making this code compatible across
+# different transformers versions.  Only the linear projections are
+# intercepted for transform + quantisation.
 # =========================================================================
 
+
 class FlatQuantLlamaMLP(nn.Module):
-    """LLaMA MLP wrapped with FlatQuant transforms."""
+    """LLaMA MLP wrapped with FlatQuant transforms.
+
+    Transforms
+    ----------
+    up_gate_trans : shared by gate_proj and up_proj
+    down_trans    : applied before down_proj
+
+    Data flow during calibration (_ori_mode=False)::
+
+        x → up_gate_trans(x) → gate_proj(x', T) → act_fn ─┐
+                               → up_proj(x', T)  ──────────× → intermediate
+        intermediate → down_trans(intermediate) → down_proj(x'', T) → output
+    """
 
     def __init__(
         self, mlp: nn.Module, w_bits: int, a_bits: int,
@@ -308,6 +385,7 @@ class FlatQuantLlamaMLP(nn.Module):
         return self._trans_forward(x)
 
     def _ori_forward(self, x: torch.Tensor) -> torch.Tensor:
+        """FP forward — collects activation statistics for diagonal init."""
         if self._collect_smax and hasattr(self, "_up_smax"):
             self._up_smax = torch.maximum(
                 self._up_smax.to(x.device),
@@ -324,6 +402,7 @@ class FlatQuantLlamaMLP(nn.Module):
         return self.down_proj.ori_forward(intermediate)
 
     def _trans_forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Quantised forward with transforms."""
         x_ts = self.up_gate_trans(x)
         gate = self.act_fn(self.gate_proj.train_forward(x_ts, qa_trans=self.up_gate_trans))
         up = self.up_proj.train_forward(x_ts, qa_trans=self.up_gate_trans)
@@ -332,6 +411,7 @@ class FlatQuantLlamaMLP(nn.Module):
         return self.down_proj.train_forward(x_ts2, qa_trans=self.down_trans)
 
     def init_diag_scale(self, alpha: float = 0.5) -> None:
+        """SmoothQuant-style diagonal init from activation / weight stats."""
         if not hasattr(self, "_up_smax"):
             return
         up_w = torch.cat([
@@ -349,12 +429,15 @@ class FlatQuantLlamaMLP(nn.Module):
         self._collect_smax = False
 
     def reparameterize(self) -> None:
+        """Fold transforms into projection weights permanently."""
         self.up_gate_trans.to_eval_mode()
         self.down_trans.to_eval_mode()
         self.gate_proj.reparameterize(qa_trans=self.up_gate_trans)
         self.up_proj.reparameterize(qa_trans=self.up_gate_trans)
         self.down_proj.reparameterize(qa_trans=self.down_trans)
         self.up_gate_trans.use_diag = False
+        # Absorb down_trans diagonal into up_proj weights so the
+        # downstream intermediate tensor is already scaled.
         if self.down_trans.add_diag:
             w = self.up_proj.linear.weight
             ori_dtype = w.dtype
@@ -366,10 +449,18 @@ class FlatQuantLlamaMLP(nn.Module):
 
 
 class _QuantProjectionWrapper(nn.Module):
-    """Temporary drop-in replacement for nn.Linear that routes through
-    FlatQuantLinear.train_forward during calibration."""
+    """Temporary drop-in for ``nn.Linear`` during attention calibration.
 
-    def __init__(self, fq_linear: FlatQuantLinear, qa_trans: KroneckerTransform | None = None):
+    Routes the forward call through ``FlatQuantLinear.train_forward``,
+    applying both the inverse transform to weights and fake quantisation.
+    Used to monkey-patch the original attention module's projections.
+    """
+
+    def __init__(
+        self,
+        fq_linear: FlatQuantLinear,
+        qa_trans: KroneckerTransform | None = None,
+    ):
         super().__init__()
         self._fq = fq_linear
         self._qa = qa_trans
@@ -381,9 +472,24 @@ class _QuantProjectionWrapper(nn.Module):
 class FlatQuantLlamaAttention(nn.Module):
     """LLaMA self-attention wrapped with FlatQuant transforms.
 
-    Delegates the full attention computation (RoPE, masking, etc.) to the
-    original HuggingFace module and only intercepts the linear projections
-    for quantization-aware transform training.
+    Design: instead of re-implementing the full attention forward (which is
+    HuggingFace-version-specific), we keep the original attention module
+    and delegate to it.  Only the linear projections are intercepted.
+
+    Transform
+    ---------
+    ln_trans : shared by q_proj, k_proj, v_proj (applied after LayerNorm)
+
+    Modes
+    -----
+    _ori_mode = True  (FP reference)
+        Collects activation statistics, delegates to ``_orig_attn`` as-is.
+
+    _ori_mode = False (quantised training)
+        1. Apply ``ln_trans`` to hidden_states (forward transform)
+        2. Temporarily replace q/k/v/o projections with quantised wrappers
+        3. Call ``_orig_attn.forward(...)``  (handles RoPE, masking, etc.)
+        4. Restore original projections
     """
 
     def __init__(
@@ -406,16 +512,14 @@ class FlatQuantLlamaAttention(nn.Module):
         if self._collect_smax:
             self._ln_smax = torch.ones(in_dim, device="cpu") * 1e-5
 
-    # ------------------------------------------------------------------
-    # Main forward — called by LlamaDecoderLayer
-    # ------------------------------------------------------------------
     def forward(self, *args, **kwargs):
+        """Dispatch to FP or quantised path based on ``_ori_mode``."""
         if self._ori_mode:
             return self._ori_forward(*args, **kwargs)
         return self._train_forward(*args, **kwargs)
 
     def _ori_forward(self, *args, **kwargs):
-        """FP reference path: collect activation stats, delegate to original attn."""
+        """FP reference path: collect activation stats, delegate to original."""
         hs = args[0] if args else kwargs.get("hidden_states")
         if hs is not None and self._collect_smax and hasattr(self, "_ln_smax"):
             self._ln_smax = torch.maximum(
@@ -425,13 +529,14 @@ class FlatQuantLlamaAttention(nn.Module):
         return self._orig_attn(*args, **kwargs)
 
     def _train_forward(self, *args, **kwargs):
-        """Quantized training path: apply transform, swap projections, delegate."""
+        """Quantised training path via projection swapping."""
+        # 1. Apply forward transform to hidden_states
         if args:
-            hs = self.ln_trans(args[0])
-            args = (hs,) + args[1:]
+            args = (self.ln_trans(args[0]),) + args[1:]
         elif "hidden_states" in kwargs:
             kwargs["hidden_states"] = self.ln_trans(kwargs["hidden_states"])
 
+        # 2. Swap projections → quantised wrappers, call, restore
         saved = (
             self._orig_attn.q_proj,
             self._orig_attn.k_proj,
@@ -453,6 +558,7 @@ class FlatQuantLlamaAttention(nn.Module):
             ) = saved
 
     def init_diag_scale(self, alpha: float = 0.5) -> None:
+        """SmoothQuant-style diagonal init from activation / weight stats."""
         if not hasattr(self, "_ln_smax"):
             return
         qkv_w = torch.cat([
@@ -468,6 +574,7 @@ class FlatQuantLlamaAttention(nn.Module):
         self._collect_smax = False
 
     def reparameterize(self) -> None:
+        """Fold transforms into projection weights permanently."""
         self.ln_trans.to_eval_mode()
         self.q_proj.reparameterize(qa_trans=self.ln_trans)
         self.k_proj.reparameterize(qa_trans=self.ln_trans)
@@ -476,7 +583,7 @@ class FlatQuantLlamaAttention(nn.Module):
 
 
 # =========================================================================
-# Apply / strip FlatQuant wrappers
+# Part 5 — Model-Level Operations
 # =========================================================================
 
 def apply_flatquant_to_model(
@@ -501,7 +608,12 @@ def apply_flatquant_to_model(
 
 
 def reparameterize_model(model: nn.Module) -> nn.Module:
-    """Fold trained FlatQuant transforms into model weights and LayerNorm."""
+    """Fold all FlatQuant transforms into model weights and LayerNorm.
+
+    After this the model still carries FlatQuant wrappers, but their
+    transforms are effectively identity.  Call ``strip_flatquant_wrappers``
+    next to remove the wrappers entirely.
+    """
     for layer in model.model.layers:
         attn = layer.self_attn
         mlp = layer.mlp
@@ -518,7 +630,7 @@ def reparameterize_model(model: nn.Module) -> nn.Module:
 
 
 def _reparameterize_ln(ln: nn.Module, trans: KroneckerTransform) -> None:
-    """Absorb diagonal scaling into LayerNorm weight."""
+    """Absorb diagonal scaling from *trans* into LayerNorm weight."""
     w = ln.weight.data
     ori_dtype = w.dtype
     ln.weight.data = (w.to(torch.float64) * trans.diag_scale.to(torch.float64)).to(ori_dtype)
@@ -526,12 +638,13 @@ def _reparameterize_ln(ln: nn.Module, trans: KroneckerTransform) -> None:
 
 
 def strip_flatquant_wrappers(model: nn.Module) -> nn.Module:
-    """Replace FlatQuant wrapper modules back with plain nn.Linear layers.
+    """Remove FlatQuant wrappers, restoring plain ``nn.Linear`` layers.
 
-    Call after reparameterize_model so the learned transforms are already
-    folded into the weights.
+    **Must** be called after ``reparameterize_model()`` so the learned
+    transforms are already folded into weights.
     """
     for layer in model.model.layers:
+        # --- Attention: put original attn back with reparameterised projs ---
         attn_wrapper = layer.self_attn
         if isinstance(attn_wrapper, FlatQuantLlamaAttention):
             orig = attn_wrapper._orig_attn
@@ -541,38 +654,23 @@ def strip_flatquant_wrappers(model: nn.Module) -> nn.Module:
             orig.o_proj = attn_wrapper.o_proj.linear
             layer.self_attn = orig
 
+        # --- MLP: reconstruct a standard LlamaMLP with reparameterised projs ---
         mlp_wrapper = layer.mlp
         if isinstance(mlp_wrapper, FlatQuantLlamaMLP):
-            from types import SimpleNamespace
-            orig_mlp = SimpleNamespace()
-            for attr in dir(layer.mlp):
-                if not attr.startswith("_"):
-                    try:
-                        setattr(orig_mlp, attr, getattr(layer.mlp, attr))
-                    except Exception:
-                        pass
-
-            parent_class = type(layer).mlp.fget.__class__ if hasattr(type(layer).mlp, 'fget') else None
-
-            gate = mlp_wrapper.gate_proj.linear
-            up = mlp_wrapper.up_proj.linear
-            down = mlp_wrapper.down_proj.linear
-            act_fn = mlp_wrapper.act_fn
-
             from transformers.models.llama.modeling_llama import LlamaMLP
             new_mlp = object.__new__(LlamaMLP)
             nn.Module.__init__(new_mlp)
-            new_mlp.gate_proj = gate
-            new_mlp.up_proj = up
-            new_mlp.down_proj = down
-            new_mlp.act_fn = act_fn
+            new_mlp.gate_proj = mlp_wrapper.gate_proj.linear
+            new_mlp.up_proj = mlp_wrapper.up_proj.linear
+            new_mlp.down_proj = mlp_wrapper.down_proj.linear
+            new_mlp.act_fn = mlp_wrapper.act_fn
             layer.mlp = new_mlp
 
     return model
 
 
 # =========================================================================
-# Layer-by-layer MSE calibration (core FlatQuant training)
+# Part 5b — Layer-by-layer MSE Calibration  (core training loop)
 # =========================================================================
 
 def calibrate_flat_quant(
@@ -590,11 +688,29 @@ def calibrate_flat_quant(
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
-    This follows the official FlatQuant `cali_flat_quant` procedure:
-    1. Capture calibration inputs to each layer
-    2. For each layer: compute FP outputs, then train transforms to minimize
-       MSE between FP and quantized outputs
-    3. Use trained layer output as input to the next layer
+    Follows the official ``cali_flat_quant`` procedure:
+
+    1. Run calibration data through the embedding layer to capture
+       first-layer inputs (hidden states + all kwargs like masks and
+       position embeddings).
+    2. For each decoder layer (sequentially):
+
+       a. Compute FP reference outputs  (``_ori_mode = True``)
+       b. Initialise diagonal scales from activation / weight statistics
+       c. Minimise  ``MSE(FP_output, quantised_output)``  over *epochs*
+       d. Feed this layer's trained output as the next layer's input
+
+    Parameters
+    ----------
+    model       : LLaMA model with FlatQuant wrappers already applied.
+    dataloader  : calibration data — iterable of (input_ids, …) tuples.
+    device      : GPU device.
+    nsamples    : number of calibration samples.
+    cali_bsz    : mini-batch size for transform training.
+    epochs      : training epochs per layer.
+    flat_lr     : base learning rate for transform parameters.
+    diag_alpha  : SmoothQuant-style α for diagonal initialisation.
+    add_diag, lwc, lac : whether the respective features are enabled.
     """
     model.eval()
     use_cache = model.config.use_cache
@@ -603,6 +719,7 @@ def calibrate_flat_quant(
     for param in model.parameters():
         param.requires_grad = False
 
+    # ── AMP setup ──
     dtype = torch.float16
     traincast = functools.partial(torch.amp.autocast, device_type="cuda", dtype=dtype)
     if not torch.cuda.is_available():
@@ -612,14 +729,26 @@ def calibrate_flat_quant(
     layers = model.model.layers
     hidden_size = model.config.hidden_size
 
+    # Move embedding + first layer to device for input capture
     layers[0] = layers[0].to(device)
     model.model.embed_tokens = model.model.embed_tokens.to(device)
     if hasattr(model.model, "rotary_emb"):
         model.model.rotary_emb = model.model.rotary_emb.to(device)
 
-    # Capture inputs to first layer
-    inps = torch.zeros((nsamples, model.config.max_position_embeddings if hasattr(model.config, 'max_position_embeddings') else 2048, hidden_size), dtype=dtype, device=device)
+    # ── Step 1: capture first-layer inputs ─────────────────────────
+    #
+    # We intercept the first decoder layer's forward to collect:
+    #   • hidden-state inputs  (stored in `inps`)
+    #   • all kwargs the decoder layer receives (attention_mask,
+    #     position_embeddings, position_ids, etc.) so we can replay
+    #     them during calibration.
+    #
+    # The inps tensor is allocated lazily on the first capture so its
+    # sequence-length dimension matches the actual calibration data
+    # (avoids the max_position_embeddings=131072 mismatch that would
+    # break RoPE).
 
+    inps = None  # shape will be (nsamples, actual_seqlen, hidden_size)
     cache = {"i": 0, "layer_kwargs": None}
 
     class _Catcher(nn.Module):
@@ -628,9 +757,14 @@ def calibrate_flat_quant(
             self.module = module
 
         def forward(self, inp, **kwargs):
+            nonlocal inps
             if cache["i"] < nsamples:
-                seq_len = inp.shape[1]
-                inps[cache["i"], :seq_len, :] = inp[0]
+                if inps is None:
+                    inps = torch.zeros(
+                        (nsamples, inp.shape[1], hidden_size),
+                        dtype=dtype, device=device,
+                    )
+                inps[cache["i"]] = inp[0]
                 cache["i"] += 1
                 if cache["layer_kwargs"] is None:
                     cache["layer_kwargs"] = kwargs
@@ -651,20 +785,26 @@ def calibrate_flat_quant(
     logger.info(f"Captured {actual_nsamples} calibration samples")
     inps = inps[:actual_nsamples]
 
+    # Build kwargs for single-sample and batched layer calls.
+    # attention_mask needs repeating for batch>1; everything else
+    # (position_embeddings, position_ids, …) broadcasts naturally.
     layer_kwargs = cache["layer_kwargs"] or {}
+
+    batch_kwargs = dict(layer_kwargs)
     attention_mask = layer_kwargs.get("attention_mask")
     if attention_mask is not None:
-        attention_mask_batch = attention_mask.repeat(cali_bsz, 1, 1, 1).float()
-    else:
-        attention_mask_batch = None
+        batch_kwargs["attention_mask"] = attention_mask.repeat(cali_bsz, 1, 1, 1).float()
 
+    # Free GPU memory from embedding / rotary
     layers[0] = layers[0].module
     layers[0] = layers[0].cpu()
     model.model.embed_tokens = model.model.embed_tokens.cpu()
     if hasattr(model.model, "rotary_emb"):
         model.model.rotary_emb = model.model.rotary_emb.cpu()
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
+    # ── Step 2: layer-by-layer calibration ─────────────────────────
     fp_inps = inps
     fp_outs = torch.zeros_like(inps)
     loss_func = nn.MSELoss()
@@ -674,13 +814,14 @@ def calibrate_flat_quant(
         logger.info(f"========= FlatQuant calibration: Layer {i}/{num_layers - 1} =========")
         layer = layers[i].to(device)
 
+        # Remember original dtypes so we can restore after float32 training
         dtype_dict = {}
         for name, param in layer.named_parameters():
             dtype_dict[name] = param.dtype
         with torch.no_grad():
             layer.float()
 
-        # Compute FP reference outputs
+        # (a) Compute FP reference outputs ──────────────────────────
         layer.self_attn._ori_mode = True
         layer.mlp._ori_mode = True
         with torch.no_grad():
@@ -692,22 +833,25 @@ def calibrate_flat_quant(
         layer.self_attn._ori_mode = False
         layer.mlp._ori_mode = False
 
-        # Initialize diagonal scales from activation/weight statistics
+        # (b) Initialise diagonal scales from activation / weight stats
         if add_diag:
             layer.self_attn.init_diag_scale(alpha=diag_alpha)
             layer.mlp.init_diag_scale(alpha=diag_alpha)
 
         layer = layer.to(device)
 
-        # Set up trainable parameters
+        # (c) Set up trainable parameters & optimiser ───────────────
         for param in layer.parameters():
             param.requires_grad = False
 
-        trained_params = []
-        trained_params.append({
-            "params": _get_params_by_pattern(layer, ["trans.u_", "trans.v_", "trans.diag_left", "trans.diag_right"]),
-            "lr": flat_lr,
-        })
+        trained_params = [
+            {
+                "params": _get_params_by_pattern(
+                    layer, ["trans.u_", "trans.v_", "trans.diag_left", "trans.diag_right"],
+                ),
+                "lr": flat_lr,
+            },
+        ]
         if add_diag:
             trained_params.append({
                 "params": _get_params_by_pattern(layer, ["trans.diag_scale"]),
@@ -730,12 +874,7 @@ def calibrate_flat_quant(
             optimizer, T_max=max(total_steps, 1), eta_min=flat_lr * 1e-3,
         )
 
-        batch_kwargs = dict(layer_kwargs)
-        if attention_mask_batch is not None:
-            batch_kwargs["attention_mask"] = attention_mask_batch
-        elif "attention_mask" in batch_kwargs:
-            del batch_kwargs["attention_mask"]
-
+        # (d) Train transforms via MSE loss ─────────────────────────
         for epoch in range(epochs):
             epoch_mse = 0.0
             with traincast():
@@ -753,21 +892,23 @@ def calibrate_flat_quant(
             lr = optimizer.param_groups[0]["lr"]
             logger.info(f"  layer {i} epoch {epoch}, lr={lr:.8f}, mse={epoch_mse:.8f}")
 
-        # Use quantized output as next layer's input
+        # Feed this layer's output as the next layer's input
         fp_inps, fp_outs = fp_outs, fp_inps
 
-        # Move layer back to CPU and clean up
+        # Restore dtypes and move to CPU
         for name, param in layer.named_parameters():
             param.requires_grad = False
             if name in dtype_dict:
                 param.data = param.to(dtype_dict[name])
         layers[i] = layer.cpu()
         del layer
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     del inps, fp_inps, fp_outs
     gc.collect()
-    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     model.config.use_cache = use_cache
     logger.info("FlatQuant calibration complete")
@@ -777,7 +918,7 @@ def calibrate_flat_quant(
 def _get_params_by_pattern(
     module: nn.Module, patterns: list[str],
 ) -> list[nn.Parameter]:
-    """Collect parameters whose names match any of the given patterns."""
+    """Collect parameters whose names contain any of *patterns*."""
     params = []
     for name, param in module.named_parameters():
         if any(p in name for p in patterns):
@@ -787,7 +928,7 @@ def _get_params_by_pattern(
 
 
 # =========================================================================
-# Save / load transforms
+# Part 6 — Save / Load Transforms
 # =========================================================================
 
 def save_flat_transforms(model: nn.Module, path: str) -> None:
