@@ -786,14 +786,27 @@ def calibrate_flat_quant(
     inps = inps[:actual_nsamples]
 
     # Build kwargs for single-sample and batched layer calls.
-    # attention_mask needs repeating for batch>1; everything else
-    # (position_embeddings, position_ids, …) broadcasts naturally.
+    # The Catcher may have captured kwargs from a multi-sample batch
+    # (depending on dataloader batch_size), so we normalise everything
+    # to batch=1 first.  position_embeddings / position_ids broadcast
+    # naturally from batch=1; only attention_mask needs explicit
+    # expansion for the batched training calls.
     layer_kwargs = cache["layer_kwargs"] or {}
+
+    for key in list(layer_kwargs.keys()):
+        val = layer_kwargs[key]
+        if isinstance(val, torch.Tensor) and val.dim() >= 1 and val.shape[0] > 1:
+            layer_kwargs[key] = val[:1]
+        elif isinstance(val, tuple):
+            layer_kwargs[key] = tuple(
+                v[:1] if isinstance(v, torch.Tensor) and v.dim() >= 1 and v.shape[0] > 1 else v
+                for v in val
+            )
 
     batch_kwargs = dict(layer_kwargs)
     attention_mask = layer_kwargs.get("attention_mask")
     if attention_mask is not None:
-        batch_kwargs["attention_mask"] = attention_mask.repeat(cali_bsz, 1, 1, 1).float()
+        batch_kwargs["attention_mask"] = attention_mask.expand(cali_bsz, -1, -1, -1)
 
     # Free GPU memory from embedding / rotary
     layers[0] = layers[0].module
