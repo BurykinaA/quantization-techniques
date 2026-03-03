@@ -39,9 +39,12 @@ from ADC.llama.core.smooth_quant import (
     apply_smooth_quant,
 )
 from ADC.llama.core.flat_quant import (
-    calibrate_flat_stats,
-    fit_flat_transforms,
-    apply_flat_quant,
+    apply_flatquant_to_model,
+    calibrate_flat_quant,
+    reparameterize_model as fq_reparameterize_model,
+    strip_flatquant_wrappers,
+    save_flat_transforms,
+    load_flat_transforms,
 )
 
 import wandb
@@ -1161,19 +1164,36 @@ def main():
                         help="Preprocess before ADC conversion")
 
     # FlatQuant settings
-    parser.add_argument("--flat_quant_batches", type=int, default=64,
-                        help="Number of calibration batches for FlatQuant activation stats")
-    parser.add_argument("--flat_quant_beta", type=float, default=0.5,
-                        help="FlatQuant activation/weight balance coefficient")
-    parser.add_argument("--flat_quant_flatten_strength", type=float, default=0.25,
-                        help="Flatness regularization strength for transform fitting")
-    parser.add_argument("--flat_quant_layers", type=str, nargs="+", default=[],
-                        help="Layer patterns for FlatQuant 3D visualization "
-                             "(e.g. layers.0.self_attn.q_proj layers.0.mlp.gate_proj)")
-    parser.add_argument("--flat_quant_save_transforms", action="store_true",
-                        help="Save fitted FlatQuant transforms to output_dir")
-    parser.add_argument("--flat_quant_reload_path", type=str, default=None,
-                        help="Optional .pt path for pre-fitted FlatQuant transforms")
+    parser.add_argument("--fq_w_bits", type=int, default=8,
+                        help="FlatQuant internal weight quantizer bits during calibration")
+    parser.add_argument("--fq_a_bits", type=int, default=8,
+                        help="FlatQuant internal activation quantizer bits during calibration")
+    parser.add_argument("--fq_nsamples", type=int, default=128,
+                        help="Number of calibration samples for FlatQuant")
+    parser.add_argument("--fq_cali_bsz", type=int, default=4,
+                        help="Batch size for FlatQuant layer-by-layer calibration")
+    parser.add_argument("--fq_epochs", type=int, default=15,
+                        help="Training epochs per layer for FlatQuant")
+    parser.add_argument("--fq_lr", type=float, default=5e-3,
+                        help="Learning rate for FlatQuant transform training")
+    parser.add_argument("--fq_diag_alpha", type=float, default=0.5,
+                        help="Diagonal scale initialization alpha (SmoothQuant-style)")
+    parser.add_argument("--fq_add_diag", action="store_true", default=True,
+                        help="Enable per-channel diagonal scaling in transforms")
+    parser.add_argument("--fq_no_diag", dest="fq_add_diag", action="store_false",
+                        help="Disable per-channel diagonal scaling")
+    parser.add_argument("--fq_lwc", action="store_true", default=True,
+                        help="Enable learnable weight clipping")
+    parser.add_argument("--fq_no_lwc", dest="fq_lwc", action="store_false",
+                        help="Disable learnable weight clipping")
+    parser.add_argument("--fq_lac", action="store_true", default=True,
+                        help="Enable learnable activation clipping")
+    parser.add_argument("--fq_no_lac", dest="fq_lac", action="store_false",
+                        help="Disable learnable activation clipping")
+    parser.add_argument("--fq_save_transforms", action="store_true",
+                        help="Save trained FlatQuant transforms to output_dir")
+    parser.add_argument("--fq_reload_path", type=str, default=None,
+                        help="Path to pre-trained FlatQuant transforms .pt file")
 
     # ADC settings
     parser.add_argument("--bx", type=int, default=8, help="Activation bits")
@@ -1260,8 +1280,8 @@ def main():
     elif args.preprocess_method == "flat_quant":
         logger.info(
             "Preprocess: flat_quant "
-            f"(beta={args.flat_quant_beta}, flatten_strength={args.flat_quant_flatten_strength}, "
-            f"batches={args.flat_quant_batches})"
+            f"(w_bits={args.fq_w_bits}, a_bits={args.fq_a_bits}, epochs={args.fq_epochs}, "
+            f"lr={args.fq_lr}, diag={args.fq_add_diag}, lwc={args.fq_lwc}, lac={args.fq_lac})"
         )
     else:
         logger.info("Preprocess: none")
@@ -1277,7 +1297,7 @@ def main():
             )
         elif args.preprocess_method == "flat_quant":
             default_run_name = (
-                f"fq_ptq_{model_short_name}_b{args.flat_quant_beta}_fs{args.flat_quant_flatten_strength}_"
+                f"fq_ptq_{model_short_name}_w{args.fq_w_bits}a{args.fq_a_bits}_e{args.fq_epochs}_"
                 f"bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}_{args.calibration_method}"
             )
         else:
@@ -1296,10 +1316,15 @@ def main():
                 "smooth_quant_alpha": args.alpha,
                 "smooth_quant_batches": args.smooth_quant_batches,
                 "smooth_quant_enabled": args.preprocess_method == "smooth_quant",
-                "flat_quant_batches": args.flat_quant_batches,
-                "flat_quant_beta": args.flat_quant_beta,
-                "flat_quant_flatten_strength": args.flat_quant_flatten_strength,
-                "flat_quant_reload_path": args.flat_quant_reload_path,
+                "fq_w_bits": args.fq_w_bits,
+                "fq_a_bits": args.fq_a_bits,
+                "fq_nsamples": args.fq_nsamples,
+                "fq_epochs": args.fq_epochs,
+                "fq_lr": args.fq_lr,
+                "fq_add_diag": args.fq_add_diag,
+                "fq_lwc": args.fq_lwc,
+                "fq_lac": args.fq_lac,
+                "fq_reload_path": args.fq_reload_path,
                 "bx": args.bx,
                 "bw": args.bw,
                 "ba": args.ba,
@@ -1490,60 +1515,58 @@ def main():
             logger.info("SmoothQuant preprocessing complete")
             logger.info("=" * 80)
         else:
+            # --- FlatQuant: apply wrappers -> train -> reparameterize -> strip ---
             logger.info(
-                f"Beta: {args.flat_quant_beta}, Flatten strength: {args.flat_quant_flatten_strength}, "
-                f"Calibration batches: {args.flat_quant_batches}"
+                f"FlatQuant config: w_bits={args.fq_w_bits}, a_bits={args.fq_a_bits}, "
+                f"epochs={args.fq_epochs}, lr={args.fq_lr}, nsamples={args.fq_nsamples}, "
+                f"diag={args.fq_add_diag}, lwc={args.fq_lwc}, lac={args.fq_lac}"
             )
             preprocess_summary = (
-                f"flat_quant(beta={args.flat_quant_beta}, "
-                f"flatten_strength={args.flat_quant_flatten_strength})"
+                f"flat_quant(w{args.fq_w_bits}a{args.fq_a_bits}, "
+                f"epochs={args.fq_epochs}, lr={args.fq_lr})"
             )
 
-            logger.info("Calibrating FlatQuant activation statistics...")
-            flat_stats = calibrate_flat_stats(
+            logger.info("Applying FlatQuant wrappers to model...")
+            model = apply_flatquant_to_model(
                 model,
-                pre_loader,
-                num_batches=args.flat_quant_batches,
-                device=device,
+                w_bits=args.fq_w_bits,
+                a_bits=args.fq_a_bits,
+                add_diag=args.fq_add_diag,
+                lwc=args.fq_lwc,
+                lac=args.fq_lac,
             )
 
-            if args.flat_quant_reload_path:
-                logger.info(f"Loading FlatQuant transforms from {args.flat_quant_reload_path}")
-                transforms = torch.load(args.flat_quant_reload_path, map_location="cpu")
+            if args.fq_reload_path:
+                logger.info(f"Loading pre-trained FlatQuant transforms from {args.fq_reload_path}")
+                model = load_flat_transforms(model, args.fq_reload_path)
             else:
-                linears_by_name = {
-                    name: module
-                    for name, module in model.named_modules()
-                    if isinstance(module, nn.Linear)
-                    and "embed_tokens" not in name
-                    and "lm_head" not in name
-                }
-                transforms = fit_flat_transforms(
-                    act_stats=flat_stats,
-                    linears_by_name=linears_by_name,
-                    beta=args.flat_quant_beta,
-                    flatten_strength=args.flat_quant_flatten_strength,
+                logger.info("Starting FlatQuant layer-by-layer calibration...")
+                model = calibrate_flat_quant(
+                    model,
+                    dataloader=pre_loader,
+                    device=device,
+                    nsamples=args.fq_nsamples,
+                    cali_bsz=args.fq_cali_bsz,
+                    epochs=args.fq_epochs,
+                    flat_lr=args.fq_lr,
+                    diag_alpha=args.fq_diag_alpha,
+                    add_diag=args.fq_add_diag,
+                    lwc=args.fq_lwc,
+                    lac=args.fq_lac,
                 )
 
-            logger.info("Applying FlatQuant transforms...")
-            applied_scales = apply_flat_quant(model, transforms)
-
-            if use_wandb:
-                for group_key, scales in applied_scales.items():
-                    wandb.log({
-                        f"flat_quant/{group_key}/scale_mean": scales.mean().item(),
-                        f"flat_quant/{group_key}/scale_std": scales.std().item(),
-                        f"flat_quant/{group_key}/scale_min": scales.min().item(),
-                        f"flat_quant/{group_key}/scale_max": scales.max().item(),
-                    })
-
-            if args.flat_quant_save_transforms:
+            if args.fq_save_transforms:
                 os.makedirs(args.output_dir, exist_ok=True)
                 transforms_path = os.path.join(args.output_dir, "flat_quant_transforms.pt")
-                torch.save(transforms, transforms_path)
-                logger.info(f"Saved FlatQuant transforms to: {transforms_path}")
+                save_flat_transforms(model, transforms_path)
                 if use_wandb:
-                    wandb.run.summary["flat_quant_transforms_path"] = transforms_path
+                    wandb.run.summary["fq_transforms_path"] = transforms_path
+
+            logger.info("Reparameterizing FlatQuant transforms into weights...")
+            model = fq_reparameterize_model(model)
+
+            logger.info("Stripping FlatQuant wrappers (back to plain nn.Linear)...")
+            model = strip_flatquant_wrappers(model)
 
             logger.info("=" * 80)
             logger.info("FlatQuant preprocessing complete")

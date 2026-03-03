@@ -3,9 +3,12 @@
 #
 # Runs extra diagnostics on top of the normal FlatQuant + ADC PTQ pipeline:
 #   1. FP16 baseline perplexity (before any changes)
-#   2. FlatQuant preprocessing
+#   2. FlatQuant preprocessing (learnable transforms, layer-by-layer MSE training)
 #   3. Quantization + Tiling WITHOUT ADC (isolates quantization error)
 #   4. Full pipeline WITH ADC
+#
+# Reference: Sun et al., "FlatQuant: Flatness Matters for LLM Quantization", ICML 2025
+# Official: https://github.com/ruikangliu/FlatQuant
 
 # ============================================================
 # MODEL CONFIGURATION
@@ -16,11 +19,18 @@ OUTPUT_DIR="./ADC/llama/checkpoints/outputs_llama_flat_quant_adc_ptq"
 # ============================================================
 # FlatQuant Configuration
 # ============================================================
-FLAT_QUANT_BATCHES=64
-FLAT_QUANT_BETA=0.5
-FLAT_QUANT_FLATTEN_STRENGTH=0.25
-FLAT_QUANT_SAVE_TRANSFORMS=true
-FLAT_QUANT_RELOAD_PATH=""
+FQ_W_BITS=8
+FQ_A_BITS=8
+FQ_NSAMPLES=128
+FQ_CALI_BSZ=4
+FQ_EPOCHS=15
+FQ_LR=0.005
+FQ_DIAG_ALPHA=0.5
+FQ_ADD_DIAG=true
+FQ_LWC=true
+FQ_LAC=true
+FQ_SAVE_TRANSFORMS=true
+FQ_RELOAD_PATH=""
 
 # ============================================================
 # ADC Hardware Configuration
@@ -60,19 +70,19 @@ MAX_EVAL_SAMPLES=1000
 TORCH_DTYPE="float16"
 WANDB_PROJECT="llama-flat-quant-adc-ptq"
 MODEL_SHORT_NAME=$(echo $MODEL_NAME | sed 's/.*\///')
-WANDB_RUN_NAME="debug_fq_${MODEL_SHORT_NAME}_b${FLAT_QUANT_BETA}_fs${FLAT_QUANT_FLATTEN_STRENGTH}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
+WANDB_RUN_NAME="debug_fq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
 SEED=42
 
 echo "========================================"
 echo "LLaMA FlatQuant + ADC PTQ — DEBUG MODE"
 echo "========================================"
 echo "Model:        $MODEL_NAME"
-echo "FlatQuant:    Batches=$FLAT_QUANT_BATCHES  Beta=$FLAT_QUANT_BETA  Flatten=$FLAT_QUANT_FLATTEN_STRENGTH"
+echo "FlatQuant:    W${FQ_W_BITS}A${FQ_A_BITS}  epochs=${FQ_EPOCHS}  lr=${FQ_LR}  diag=${FQ_ADD_DIAG}  lwc=${FQ_LWC}  lac=${FQ_LAC}"
 echo "ADC Config:   BX=$BX  BW=$BW  BA=$BA  K=$K  MVM=$MVM_LIMIT"
 echo ""
 echo "Extra diagnostics enabled:"
 echo "  [1] FP16 baseline perplexity          (--check_baseline)"
-echo "  [2] FlatQuant preprocessing            (--preprocess_method flat_quant)"
+echo "  [2] FlatQuant preprocessing           (learnable transforms, MSE training)"
 echo "  [3] Quant+Tiling WITHOUT ADC          (--run_no_adc_eval)"
 echo "  [4] Full FlatQuant+ADC pipeline       (always)"
 echo "========================================"
@@ -82,9 +92,13 @@ CMD="python ADC/llama/runs/llama_smooth_quant_adc_ptq.py \
     --model_name \"$MODEL_NAME\" \
     --output_dir \"$OUTPUT_DIR\" \
     --preprocess_method flat_quant \
-    --flat_quant_batches $FLAT_QUANT_BATCHES \
-    --flat_quant_beta $FLAT_QUANT_BETA \
-    --flat_quant_flatten_strength $FLAT_QUANT_FLATTEN_STRENGTH \
+    --fq_w_bits $FQ_W_BITS \
+    --fq_a_bits $FQ_A_BITS \
+    --fq_nsamples $FQ_NSAMPLES \
+    --fq_cali_bsz $FQ_CALI_BSZ \
+    --fq_epochs $FQ_EPOCHS \
+    --fq_lr $FQ_LR \
+    --fq_diag_alpha $FQ_DIAG_ALPHA \
     --bx $BX \
     --bw $BW \
     --ba $BA \
@@ -115,12 +129,30 @@ if [ "$ASHIFT" = true ]; then
     CMD="$CMD --ashift"
 fi
 
-if [ "$FLAT_QUANT_SAVE_TRANSFORMS" = true ]; then
-    CMD="$CMD --flat_quant_save_transforms"
+if [ "$FQ_ADD_DIAG" = true ]; then
+    CMD="$CMD --fq_add_diag"
+else
+    CMD="$CMD --fq_no_diag"
 fi
 
-if [ -n "$FLAT_QUANT_RELOAD_PATH" ]; then
-    CMD="$CMD --flat_quant_reload_path \"$FLAT_QUANT_RELOAD_PATH\""
+if [ "$FQ_LWC" = true ]; then
+    CMD="$CMD --fq_lwc"
+else
+    CMD="$CMD --fq_no_lwc"
+fi
+
+if [ "$FQ_LAC" = true ]; then
+    CMD="$CMD --fq_lac"
+else
+    CMD="$CMD --fq_no_lac"
+fi
+
+if [ "$FQ_SAVE_TRANSFORMS" = true ]; then
+    CMD="$CMD --fq_save_transforms"
+fi
+
+if [ -n "$FQ_RELOAD_PATH" ]; then
+    CMD="$CMD --fq_reload_path \"$FQ_RELOAD_PATH\""
 fi
 
 echo "Running FlatQuant + ADC PTQ with diagnostics..."

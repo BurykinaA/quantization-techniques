@@ -1,6 +1,13 @@
 #!/bin/bash
 # FlatQuant + ADC Post-Training Quantization (PTQ) for LLaMA models
-# Pipeline: FlatQuant -> ADC Convert -> Calibrate -> Evaluate -> Visualize
+# Pipeline: FlatQuant (learnable transforms) -> ADC Convert -> Calibrate -> Evaluate
+#
+# FlatQuant trains Kronecker-decomposed orthogonal transforms + diagonal scaling
+# + learnable weight/activation clipping layer-by-layer using MSE loss, then
+# folds transforms into weights before ADC conversion.
+#
+# Reference: Sun et al., "FlatQuant: Flatness Matters for LLM Quantization", ICML 2025
+# Official: https://github.com/ruikangliu/FlatQuant
 #
 # Supports: meta-llama/Llama-3.1-8B, meta-llama/Llama-3.2-3B, meta-llama/Llama-3.2-1B
 
@@ -13,13 +20,20 @@ MODEL_NAME="meta-llama/Llama-3.2-1B"
 OUTPUT_DIR="./ADC/llama/checkpoints/outputs_llama_flat_quant_adc_ptq"
 
 # ============================================================
-# FlatQuant Configuration (W4A4-first)
+# FlatQuant Configuration
 # ============================================================
-FLAT_QUANT_BATCHES=64
-FLAT_QUANT_BETA=0.5
-FLAT_QUANT_FLATTEN_STRENGTH=0.25
-FLAT_QUANT_SAVE_TRANSFORMS=true
-FLAT_QUANT_RELOAD_PATH=""
+FQ_W_BITS=8               # Weight quantizer bits during FQ calibration
+FQ_A_BITS=8               # Activation quantizer bits during FQ calibration
+FQ_NSAMPLES=128            # Calibration samples for FQ training
+FQ_CALI_BSZ=4              # Batch size for layer-by-layer calibration
+FQ_EPOCHS=15               # Training epochs per layer
+FQ_LR=0.005                # AdamW learning rate for transforms
+FQ_DIAG_ALPHA=0.5          # Diagonal scale init (SQ-style)
+FQ_ADD_DIAG=true           # Per-channel diagonal scaling
+FQ_LWC=true                # Learnable weight clipping
+FQ_LAC=true                # Learnable activation clipping
+FQ_SAVE_TRANSFORMS=true    # Save trained transforms
+FQ_RELOAD_PATH=""          # Load pre-trained transforms (skip training)
 
 # ============================================================
 # ADC Hardware Configuration
@@ -64,7 +78,7 @@ VISUALIZE_LAYERS="layers.0.self_attn.q_proj layers.0.mlp.down_proj layers.15.mlp
 TORCH_DTYPE="float16"
 WANDB_PROJECT="llama-flat-quant-adc-ptq"
 MODEL_SHORT_NAME=$(echo $MODEL_NAME | sed 's/.*\///')
-WANDB_RUN_NAME="fq_ptq_${MODEL_SHORT_NAME}_b${FLAT_QUANT_BETA}_fs${FLAT_QUANT_FLATTEN_STRENGTH}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
+WANDB_RUN_NAME="fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
 SEED=42
 
 echo "========================================"
@@ -74,14 +88,11 @@ echo "Model:             $MODEL_NAME"
 echo "Output:            $OUTPUT_DIR"
 echo ""
 echo "FlatQuant Configuration:"
-echo "  Batches=$FLAT_QUANT_BATCHES  Beta=$FLAT_QUANT_BETA  Flatten=$FLAT_QUANT_FLATTEN_STRENGTH"
-if [ "$FLAT_QUANT_SAVE_TRANSFORMS" = true ]; then
-    echo "  Save transforms: enabled"
-else
-    echo "  Save transforms: disabled"
-fi
-if [ -n "$FLAT_QUANT_RELOAD_PATH" ]; then
-    echo "  Reload transforms: $FLAT_QUANT_RELOAD_PATH"
+echo "  Internal quant:  W${FQ_W_BITS}A${FQ_A_BITS}"
+echo "  Training:        epochs=${FQ_EPOCHS}  lr=${FQ_LR}  samples=${FQ_NSAMPLES}  bsz=${FQ_CALI_BSZ}"
+echo "  Features:        diag=${FQ_ADD_DIAG}  lwc=${FQ_LWC}  lac=${FQ_LAC}"
+if [ -n "$FQ_RELOAD_PATH" ]; then
+    echo "  Reload:          $FQ_RELOAD_PATH"
 fi
 echo ""
 echo "ADC Configuration:"
@@ -104,9 +115,13 @@ CMD="python ADC/llama/runs/llama_smooth_quant_adc_ptq.py \
     --model_name \"$MODEL_NAME\" \
     --output_dir \"$OUTPUT_DIR\" \
     --preprocess_method flat_quant \
-    --flat_quant_batches $FLAT_QUANT_BATCHES \
-    --flat_quant_beta $FLAT_QUANT_BETA \
-    --flat_quant_flatten_strength $FLAT_QUANT_FLATTEN_STRENGTH \
+    --fq_w_bits $FQ_W_BITS \
+    --fq_a_bits $FQ_A_BITS \
+    --fq_nsamples $FQ_NSAMPLES \
+    --fq_cali_bsz $FQ_CALI_BSZ \
+    --fq_epochs $FQ_EPOCHS \
+    --fq_lr $FQ_LR \
+    --fq_diag_alpha $FQ_DIAG_ALPHA \
     --bx $BX \
     --bw $BW \
     --ba $BA \
@@ -135,12 +150,30 @@ if [ "$ASHIFT" = true ]; then
     CMD="$CMD --ashift"
 fi
 
-if [ "$FLAT_QUANT_SAVE_TRANSFORMS" = true ]; then
-    CMD="$CMD --flat_quant_save_transforms"
+if [ "$FQ_ADD_DIAG" = true ]; then
+    CMD="$CMD --fq_add_diag"
+else
+    CMD="$CMD --fq_no_diag"
 fi
 
-if [ -n "$FLAT_QUANT_RELOAD_PATH" ]; then
-    CMD="$CMD --flat_quant_reload_path \"$FLAT_QUANT_RELOAD_PATH\""
+if [ "$FQ_LWC" = true ]; then
+    CMD="$CMD --fq_lwc"
+else
+    CMD="$CMD --fq_no_lwc"
+fi
+
+if [ "$FQ_LAC" = true ]; then
+    CMD="$CMD --fq_lac"
+else
+    CMD="$CMD --fq_no_lac"
+fi
+
+if [ "$FQ_SAVE_TRANSFORMS" = true ]; then
+    CMD="$CMD --fq_save_transforms"
+fi
+
+if [ -n "$FQ_RELOAD_PATH" ]; then
+    CMD="$CMD --fq_reload_path \"$FQ_RELOAD_PATH\""
 fi
 
 echo "Running FlatQuant + ADC PTQ..."
@@ -159,7 +192,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo "Plots:"
     echo "  ADC Before:     $OUTPUT_DIR/viz_before/"
     echo "  ADC After:      $OUTPUT_DIR/viz_after/"
-    if [ "$FLAT_QUANT_SAVE_TRANSFORMS" = true ]; then
+    if [ "$FQ_SAVE_TRANSFORMS" = true ]; then
         echo "  Transforms:     $OUTPUT_DIR/flat_quant_transforms.pt"
     fi
     echo "WandB:    https://wandb.ai/your-username/$WANDB_PROJECT"
@@ -168,7 +201,7 @@ else
     echo "========================================"
     echo ""
     echo "Common issues:"
-    echo "  - OOM: Reduce MAX_LENGTH or CALIBRATION_BATCH_SIZE"
+    echo "  - OOM: Reduce FQ_NSAMPLES, FQ_CALI_BSZ, MAX_LENGTH, or CALIBRATION_BATCH_SIZE"
     echo "  - Auth: Run 'huggingface-cli login' for gated models"
     echo "  - CUDA: Check GPU availability with 'nvidia-smi'"
 fi
