@@ -152,11 +152,15 @@ def _get_decompose_dim(n: int) -> tuple[int, int]:
 
 
 def _random_orthogonal(size: int) -> torch.Tensor:
-    """Random orthogonal matrix via QR decomposition (Haar measure)."""
-    h = torch.randn(size, size)
+    """Random orthogonal matrix via QR decomposition (Haar measure).
+
+    Computed in float64 for numerical precision (matching upstream which
+    uses numpy/scipy), then converted to float32.
+    """
+    h = torch.randn(size, size, dtype=torch.float64)
     q, r = torch.linalg.qr(h)
     q = q @ torch.diag(torch.sign(torch.diag(r)))
-    return q
+    return q.float()
 
 
 class KroneckerTransform(nn.Module):
@@ -178,15 +182,17 @@ class KroneckerTransform(nn.Module):
         self.dim = dim
 
         # Left Kronecker factor:  U_L @ diag(s_L) @ V_L^T
+        # Using matrix_exp (not cayley) for the orthogonal map to avoid
+        # singularity issues in torch.linalg.solve that cayley can hit.
         self.u_left = nn.Linear(left_size, left_size, bias=False, dtype=torch.float32)
         self.u_left.weight.data = _random_orthogonal(left_size)
         self.u_left = nn.utils.parametrizations.orthogonal(
-            self.u_left, orthogonal_map="cayley", use_trivialization=False,
+            self.u_left, orthogonal_map="matrix_exp", use_trivialization=False,
         )
         self.v_left = nn.Linear(left_size, left_size, bias=False, dtype=torch.float32)
         self.v_left.weight.data = _random_orthogonal(left_size)
         self.v_left = nn.utils.parametrizations.orthogonal(
-            self.v_left, orthogonal_map="cayley", use_trivialization=False,
+            self.v_left, orthogonal_map="matrix_exp", use_trivialization=False,
         )
         self.diag_left = nn.Parameter(torch.ones(left_size, dtype=torch.float32))
 
@@ -194,12 +200,12 @@ class KroneckerTransform(nn.Module):
         self.u_right = nn.Linear(right_size, right_size, bias=False, dtype=torch.float32)
         self.u_right.weight.data = _random_orthogonal(right_size)
         self.u_right = nn.utils.parametrizations.orthogonal(
-            self.u_right, orthogonal_map="cayley", use_trivialization=False,
+            self.u_right, orthogonal_map="matrix_exp", use_trivialization=False,
         )
         self.v_right = nn.Linear(right_size, right_size, bias=False, dtype=torch.float32)
         self.v_right.weight.data = _random_orthogonal(right_size)
         self.v_right = nn.utils.parametrizations.orthogonal(
-            self.v_right, orthogonal_map="cayley", use_trivialization=False,
+            self.v_right, orthogonal_map="matrix_exp", use_trivialization=False,
         )
         self.diag_right = nn.Parameter(torch.ones(right_size, dtype=torch.float32))
 
