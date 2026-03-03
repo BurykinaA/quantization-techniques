@@ -184,15 +184,18 @@ class KroneckerTransform(nn.Module):
         # Left Kronecker factor:  U_L @ diag(s_L) @ V_L^T
         # Using matrix_exp (not cayley) for the orthogonal map to avoid
         # singularity issues in torch.linalg.solve that cayley can hit.
+        # use_trivialization=True ensures the initial weight IS the random
+        # orthogonal matrix we set (Q₀ @ exp(0) = Q₀) and that small
+        # parameter updates ≈ small rotations from Q₀.
         self.u_left = nn.Linear(left_size, left_size, bias=False, dtype=torch.float32)
         self.u_left.weight.data = _random_orthogonal(left_size)
         self.u_left = nn.utils.parametrizations.orthogonal(
-            self.u_left, orthogonal_map="matrix_exp", use_trivialization=False,
+            self.u_left, orthogonal_map="matrix_exp", use_trivialization=True,
         )
         self.v_left = nn.Linear(left_size, left_size, bias=False, dtype=torch.float32)
         self.v_left.weight.data = _random_orthogonal(left_size)
         self.v_left = nn.utils.parametrizations.orthogonal(
-            self.v_left, orthogonal_map="matrix_exp", use_trivialization=False,
+            self.v_left, orthogonal_map="matrix_exp", use_trivialization=True,
         )
         self.diag_left = nn.Parameter(torch.ones(left_size, dtype=torch.float32))
 
@@ -200,12 +203,12 @@ class KroneckerTransform(nn.Module):
         self.u_right = nn.Linear(right_size, right_size, bias=False, dtype=torch.float32)
         self.u_right.weight.data = _random_orthogonal(right_size)
         self.u_right = nn.utils.parametrizations.orthogonal(
-            self.u_right, orthogonal_map="matrix_exp", use_trivialization=False,
+            self.u_right, orthogonal_map="matrix_exp", use_trivialization=True,
         )
         self.v_right = nn.Linear(right_size, right_size, bias=False, dtype=torch.float32)
         self.v_right.weight.data = _random_orthogonal(right_size)
         self.v_right = nn.utils.parametrizations.orthogonal(
-            self.v_right, orthogonal_map="matrix_exp", use_trivialization=False,
+            self.v_right, orthogonal_map="matrix_exp", use_trivialization=True,
         )
         self.diag_right = nn.Parameter(torch.ones(right_size, dtype=torch.float32))
 
@@ -218,9 +221,17 @@ class KroneckerTransform(nn.Module):
         self._eval_mode = False
 
     def forward(self, x: torch.Tensor, inv_t: bool = False) -> torch.Tensor:
-        """Apply forward (*inv_t=False*) or inverse (*inv_t=True*) transform."""
+        """Apply forward (*inv_t=False*) or inverse (*inv_t=True*) transform.
+
+        All computation is done in float32 to prevent overflow/NaN in float16
+        AMP contexts (diag_scale can have large values after init_diag_scale,
+        which would overflow float16 max ~65504).
+        """
+        orig_dtype = x.dtype
+        x = x.float()
+
         if self.add_diag and self.use_diag:
-            x = x / self.diag_scale.to(x) if inv_t else x * self.diag_scale.to(x)
+            x = x / self.diag_scale if inv_t else x * self.diag_scale
 
         if not self._eval_mode:
             dl = 1.0 / self.diag_left if inv_t else self.diag_left
@@ -233,7 +244,7 @@ class KroneckerTransform(nn.Module):
             else:
                 mat_l, mat_r = self.matrix_left, self.matrix_right
 
-        return _kronecker_matmul(x, mat_l.to(x), mat_r.to(x))
+        return _kronecker_matmul(x, mat_l, mat_r).to(orig_dtype)
 
     def to_eval_mode(self) -> None:
         """Pre-compute and cache forward / inverse matrices, free SVD params."""
@@ -824,8 +835,8 @@ def calibrate_flat_quant(
         torch.cuda.empty_cache()
 
     # ── Step 2: layer-by-layer calibration ─────────────────────────
-    fp_inps = inps
-    fp_outs = torch.zeros_like(inps)
+    fp_inps = inps.float()
+    fp_outs = torch.zeros_like(fp_inps)
     loss_func = nn.MSELoss()
 
     num_layers = len(layers)
@@ -894,6 +905,7 @@ def calibrate_flat_quant(
         )
 
         # (d) Train transforms via MSE loss ─────────────────────────
+        nan_detected = False
         for epoch in range(epochs):
             epoch_mse = 0.0
             with traincast():
@@ -902,6 +914,16 @@ def calibrate_flat_quant(
                     out = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
                     quant_out = out[0] if isinstance(out, tuple) else out
                     loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
+                    if torch.isnan(loss) or torch.isinf(loss):
+                        if not nan_detected:
+                            nan_detected = True
+                            logger.warning(
+                                f"  layer {i} NaN/Inf loss at epoch {epoch}, batch {j}. "
+                                f"quant_out has NaN: {torch.isnan(quant_out).any().item()}, "
+                                f"fp_outs slice has NaN: {torch.isnan(fp_outs[idx:idx+cali_bsz]).any().item()}"
+                            )
+                        scheduler.step()
+                        continue
                     epoch_mse += loss.detach().item()
                     normalized_loss = loss / loss.clone().detach()
                     optimizer.zero_grad()
