@@ -365,12 +365,25 @@ class FlatQuantLlamaMLP(nn.Module):
             self.down_trans.use_diag = False
 
 
+class _QuantProjectionWrapper(nn.Module):
+    """Temporary drop-in replacement for nn.Linear that routes through
+    FlatQuantLinear.train_forward during calibration."""
+
+    def __init__(self, fq_linear: FlatQuantLinear, qa_trans: KroneckerTransform | None = None):
+        super().__init__()
+        self._fq = fq_linear
+        self._qa = qa_trans
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self._fq.train_forward(x, qa_trans=self._qa)
+
+
 class FlatQuantLlamaAttention(nn.Module):
     """LLaMA self-attention wrapped with FlatQuant transforms.
 
-    Only handles the linear projections and their transforms; the rest of the
-    attention math is delegated to the original module during layer-level
-    calibration.
+    Delegates the full attention computation (RoPE, masking, etc.) to the
+    original HuggingFace module and only intercepts the linear projections
+    for quantization-aware transform training.
     """
 
     def __init__(
@@ -393,34 +406,51 @@ class FlatQuantLlamaAttention(nn.Module):
         if self._collect_smax:
             self._ln_smax = torch.ones(in_dim, device="cpu") * 1e-5
 
-    def forward_after_ln(
-        self, hidden_states: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    # ------------------------------------------------------------------
+    # Main forward — called by LlamaDecoderLayer
+    # ------------------------------------------------------------------
+    def forward(self, *args, **kwargs):
         if self._ori_mode:
-            return self._ori_forward_after_ln(hidden_states)
-        return self._trans_forward_after_ln(hidden_states)
+            return self._ori_forward(*args, **kwargs)
+        return self._train_forward(*args, **kwargs)
 
-    def _ori_forward_after_ln(
-        self, hidden_states: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        if self._collect_smax and hasattr(self, "_ln_smax"):
+    def _ori_forward(self, *args, **kwargs):
+        """FP reference path: collect activation stats, delegate to original attn."""
+        hs = args[0] if args else kwargs.get("hidden_states")
+        if hs is not None and self._collect_smax and hasattr(self, "_ln_smax"):
             self._ln_smax = torch.maximum(
-                self._ln_smax.to(hidden_states.device),
-                hidden_states.reshape(-1, hidden_states.shape[-1]).abs().amax(dim=0).detach(),
+                self._ln_smax.to(hs.device),
+                hs.reshape(-1, hs.shape[-1]).abs().amax(dim=0).detach(),
             )
-        q = self.q_proj.ori_forward(hidden_states)
-        k = self.k_proj.ori_forward(hidden_states)
-        v = self.v_proj.ori_forward(hidden_states)
-        return q, k, v
+        return self._orig_attn(*args, **kwargs)
 
-    def _trans_forward_after_ln(
-        self, hidden_states: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        h = self.ln_trans(hidden_states)
-        q = self.q_proj.train_forward(h, qa_trans=self.ln_trans)
-        k = self.k_proj.train_forward(h, qa_trans=self.ln_trans)
-        v = self.v_proj.train_forward(h, qa_trans=self.ln_trans)
-        return q, k, v
+    def _train_forward(self, *args, **kwargs):
+        """Quantized training path: apply transform, swap projections, delegate."""
+        if args:
+            hs = self.ln_trans(args[0])
+            args = (hs,) + args[1:]
+        elif "hidden_states" in kwargs:
+            kwargs["hidden_states"] = self.ln_trans(kwargs["hidden_states"])
+
+        saved = (
+            self._orig_attn.q_proj,
+            self._orig_attn.k_proj,
+            self._orig_attn.v_proj,
+            self._orig_attn.o_proj,
+        )
+        try:
+            self._orig_attn.q_proj = _QuantProjectionWrapper(self.q_proj, self.ln_trans)
+            self._orig_attn.k_proj = _QuantProjectionWrapper(self.k_proj, self.ln_trans)
+            self._orig_attn.v_proj = _QuantProjectionWrapper(self.v_proj, self.ln_trans)
+            self._orig_attn.o_proj = _QuantProjectionWrapper(self.o_proj, None)
+            return self._orig_attn(*args, **kwargs)
+        finally:
+            (
+                self._orig_attn.q_proj,
+                self._orig_attn.k_proj,
+                self._orig_attn.v_proj,
+                self._orig_attn.o_proj,
+            ) = saved
 
     def init_diag_scale(self, alpha: float = 0.5) -> None:
         if not hasattr(self, "_ln_smax"):
