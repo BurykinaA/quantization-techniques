@@ -620,7 +620,7 @@ def calibrate_flat_quant(
     # Capture inputs to first layer
     inps = torch.zeros((nsamples, model.config.max_position_embeddings if hasattr(model.config, 'max_position_embeddings') else 2048, hidden_size), dtype=dtype, device=device)
 
-    cache = {"i": 0, "attention_mask": None, "position_ids": None}
+    cache = {"i": 0, "layer_kwargs": None}
 
     class _Catcher(nn.Module):
         def __init__(self, module):
@@ -632,9 +632,8 @@ def calibrate_flat_quant(
                 seq_len = inp.shape[1]
                 inps[cache["i"], :seq_len, :] = inp[0]
                 cache["i"] += 1
-                if cache["attention_mask"] is None:
-                    cache["attention_mask"] = kwargs.get("attention_mask")
-                    cache["position_ids"] = kwargs.get("position_ids")
+                if cache["layer_kwargs"] is None:
+                    cache["layer_kwargs"] = kwargs
             raise ValueError("catch")
 
     layers[0] = _Catcher(layers[0])
@@ -652,8 +651,8 @@ def calibrate_flat_quant(
     logger.info(f"Captured {actual_nsamples} calibration samples")
     inps = inps[:actual_nsamples]
 
-    position_ids = cache["position_ids"]
-    attention_mask = cache["attention_mask"]
+    layer_kwargs = cache["layer_kwargs"] or {}
+    attention_mask = layer_kwargs.get("attention_mask")
     if attention_mask is not None:
         attention_mask_batch = attention_mask.repeat(cali_bsz, 1, 1, 1).float()
     else:
@@ -686,11 +685,10 @@ def calibrate_flat_quant(
         layer.mlp._ori_mode = True
         with torch.no_grad():
             for j in range(actual_nsamples):
-                fp_outs[j] = layer(
-                    fp_inps[j].unsqueeze(0),
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                )[0]
+                out = layer(fp_inps[j].unsqueeze(0), **layer_kwargs)
+                if isinstance(out, tuple):
+                    out = out[0]
+                fp_outs[j] = out.squeeze(0)
         layer.self_attn._ori_mode = False
         layer.mlp._ori_mode = False
 
@@ -732,16 +730,19 @@ def calibrate_flat_quant(
             optimizer, T_max=max(total_steps, 1), eta_min=flat_lr * 1e-3,
         )
 
+        batch_kwargs = dict(layer_kwargs)
+        if attention_mask_batch is not None:
+            batch_kwargs["attention_mask"] = attention_mask_batch
+        elif "attention_mask" in batch_kwargs:
+            del batch_kwargs["attention_mask"]
+
         for epoch in range(epochs):
             epoch_mse = 0.0
             with traincast():
                 for j in range(actual_nsamples // cali_bsz):
                     idx = j * cali_bsz
-                    quant_out = layer(
-                        fp_inps[idx:idx + cali_bsz],
-                        attention_mask=attention_mask_batch,
-                        position_ids=position_ids,
-                    )[0]
+                    out = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
+                    quant_out = out[0] if isinstance(out, tuple) else out
                     loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
                     epoch_mse += loss.detach().item()
                     normalized_loss = loss / loss.clone().detach()

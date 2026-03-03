@@ -21,8 +21,8 @@ OUTPUT_DIR="./ADC/llama/checkpoints/outputs_llama_flat_quant_adc_ptq"
 # ============================================================
 FQ_W_BITS=8
 FQ_A_BITS=8
-FQ_NSAMPLES=128
-FQ_CALI_BSZ=4
+FQ_NSAMPLES=32
+FQ_CALI_BSZ=2
 FQ_EPOCHS=15
 FQ_LR=0.005
 FQ_DIAG_ALPHA=0.5
