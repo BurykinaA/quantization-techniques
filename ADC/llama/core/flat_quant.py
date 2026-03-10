@@ -921,12 +921,32 @@ def calibrate_flat_quant(
 
         # (d) Train transforms via MSE loss ─────────────────────────
         n_batches = actual_nsamples // cali_bsz
+
+        # Attach forward hooks to catch the first NaN-producing tensor (only
+        # on the first NaN batch so we don't spam the log).
+        _nan_found: list[str] = []
+
+        def _make_nan_hook(tag: str) -> callable:
+            def _hook(module, inp, out):
+                if _nan_found:          # already reported once, stop checking
+                    return
+                t = out[0] if isinstance(out, (tuple, list)) else out
+                if isinstance(t, torch.Tensor) and (torch.isnan(t).any() or torch.isinf(t).any()):
+                    _nan_found.append(tag)
+                    logger.warning(f"Layer {i}: first NaN/Inf tensor → {tag}  shape={list(t.shape)}")
+            return _hook
+
+        _hooks = []
+        for name, mod in layer.named_modules():
+            _hooks.append(mod.register_forward_hook(_make_nan_hook(name)))
+
         for epoch in range(epochs):
             epoch_mse = 0.0
             nan_count = 0
             with traincast():
                 for j in range(n_batches):
                     idx = j * cali_bsz
+                    _nan_found.clear()
                     out = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
                     quant_out = out[0] if isinstance(out, tuple) else out
                     loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
@@ -967,6 +987,8 @@ def calibrate_flat_quant(
                 f"  layer {i} epoch {epoch}, lr={lr:.8f}, "
                 f"mse={epoch_mse:.4e}, ok_batches={ok}/{n_batches}"
             )
+        for h in _hooks:
+            h.remove()
 
         # Feed this layer's output as the next layer's input
         fp_inps, fp_outs = fp_outs, fp_inps
