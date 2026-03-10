@@ -868,6 +868,16 @@ def calibrate_flat_quant(
         layer.self_attn._ori_mode = False
         layer.mlp._ori_mode = False
 
+        # Sanity-check: warn if FP reference data contains NaN/Inf
+        _inp_bad = torch.isnan(fp_inps[:actual_nsamples]).any() or torch.isinf(fp_inps[:actual_nsamples]).any()
+        _out_bad = torch.isnan(fp_outs[:actual_nsamples]).any() or torch.isinf(fp_outs[:actual_nsamples]).any()
+        if _inp_bad:
+            logger.warning(f"Layer {i}: fp_inps contains NaN/Inf — skipping calibration")
+            fp_inps, fp_outs = fp_outs, fp_inps
+            continue
+        if _out_bad:
+            logger.warning(f"Layer {i}: fp_outs (FP reference) contains NaN/Inf — training may be unstable")
+
         # (b) Initialise diagonal scales from activation / weight stats
         if add_diag:
             layer.self_attn.init_diag_scale(alpha=diag_alpha)
@@ -928,14 +938,24 @@ def calibrate_flat_quant(
                     normalized_loss = loss / loss.clone().detach()
                     optimizer.zero_grad()
                     normalized_loss.backward()
-                    # Clip gradients to prevent explosion through 1/diag paths
-                    torch.nn.utils.clip_grad_norm_(
-                        [p for g in optimizer.param_groups for p in g["params"]],
-                        max_norm=1.0,
+                    # Guard: skip step if any gradient is NaN/Inf.
+                    # clip_grad_norm_ with a NaN grad returns NaN norm,
+                    # which then poisons ALL gradients and all parameters.
+                    all_params = [p for g in optimizer.param_groups for p in g["params"]]
+                    has_nan_grad = any(
+                        p.grad is not None
+                        and (torch.isnan(p.grad).any() or torch.isinf(p.grad).any())
+                        for p in all_params
                     )
+                    if has_nan_grad:
+                        nan_count += 1
+                        optimizer.zero_grad()
+                        scheduler.step()
+                        continue
+                    # Clip gradients to prevent explosion through 1/diag paths
+                    torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
                     optimizer.step()
-                    # Project diag_left/right to stay strictly positive so
-                    # 1/diag stays bounded and U,V parameters don't blow up
+                    # Project diag parameters to stay strictly positive
                     with torch.no_grad():
                         for name, param in layer.named_parameters():
                             if "diag_left" in name or "diag_right" in name or "diag_scale" in name:
