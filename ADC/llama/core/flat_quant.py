@@ -968,6 +968,24 @@ def calibrate_flat_quant(
                         for p in all_params
                     )
                     if has_nan_grad:
+                        # Log which parameter has NaN/Inf gradient
+                        param_name_map = {id(lp): n for n, lp in layer.named_parameters()}
+                        for g in optimizer.param_groups:
+                            for p in g["params"]:
+                                if p.grad is not None and (torch.isnan(p.grad).any() or torch.isinf(p.grad).any()):
+                                    pname = param_name_map.get(id(p), "<unknown>")
+                                    finite_mask = ~torch.isnan(p.grad) & ~torch.isinf(p.grad)
+                                    if finite_mask.any():
+                                        gmin = p.grad[finite_mask].min().item()
+                                        gmax = p.grad[finite_mask].max().item()
+                                    else:
+                                        gmin = gmax = float("nan")
+                                    n_nan = torch.isnan(p.grad).sum().item()
+                                    n_inf = torch.isinf(p.grad).sum().item()
+                                    logger.warning(
+                                        f"Layer {i} batch {j}: NaN/Inf grad in '{pname}'  "
+                                        f"nan={n_nan} inf={n_inf}  finite_range=[{gmin:.3e}, {gmax:.3e}]"
+                                    )
                         nan_count += 1
                         optimizer.zero_grad()
                         scheduler.step()
