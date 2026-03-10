@@ -961,7 +961,8 @@ def calibrate_flat_quant(
                 loss_f32 = loss.float()
                 normalized_loss = loss_f32 / loss_f32.clone().detach()
                 optimizer.zero_grad()
-                normalized_loss.backward()
+                with torch.autograd.detect_anomaly(check_nan_inf=True):
+                    normalized_loss.backward()
                 # Guard: skip step if any gradient is NaN/Inf.
                 # clip_grad_norm_ with a NaN grad returns NaN norm,
                 # which then poisons ALL gradients and all parameters.
