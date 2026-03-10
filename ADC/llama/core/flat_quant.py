@@ -927,7 +927,18 @@ def calibrate_flat_quant(
                     normalized_loss = loss / loss.clone().detach()
                     optimizer.zero_grad()
                     normalized_loss.backward()
+                    # Clip gradients to prevent explosion through 1/diag paths
+                    torch.nn.utils.clip_grad_norm_(
+                        [p for g in optimizer.param_groups for p in g["params"]],
+                        max_norm=1.0,
+                    )
                     optimizer.step()
+                    # Project diag_left/right to stay strictly positive so
+                    # 1/diag stays bounded and U,V parameters don't blow up
+                    with torch.no_grad():
+                        for name, param in layer.named_parameters():
+                            if "diag_left" in name or "diag_right" in name:
+                                param.data.clamp_(min=1e-4)
                     scheduler.step()
             lr = optimizer.param_groups[0]["lr"]
             ok = n_batches - nan_count
