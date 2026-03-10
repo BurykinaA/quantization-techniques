@@ -231,11 +231,13 @@ class KroneckerTransform(nn.Module):
         x = x.float()
 
         if self.add_diag and self.use_diag:
-            x = x / self.diag_scale if inv_t else x * self.diag_scale
+            x = x / self.diag_scale.clamp(min=1e-8) if inv_t else x * self.diag_scale
 
         if not self._eval_mode:
-            dl = 1.0 / self.diag_left if inv_t else self.diag_left
-            dr = 1.0 / self.diag_right if inv_t else self.diag_right
+            _dl = self.diag_left.abs().clamp(min=1e-6)
+            _dr = self.diag_right.abs().clamp(min=1e-6)
+            dl = 1.0 / _dl if inv_t else _dl
+            dr = 1.0 / _dr if inv_t else _dr
             mat_l = self.u_left.weight @ torch.diag(dl) @ self.v_left.weight.T
             mat_r = self.u_right.weight @ torch.diag(dr) @ self.v_right.weight.T
         else:
@@ -251,10 +253,12 @@ class KroneckerTransform(nn.Module):
         if self._eval_mode:
             return
         with torch.no_grad():
-            mat_l = self.u_left.weight @ torch.diag(self.diag_left) @ self.v_left.weight.T
-            mat_r = self.u_right.weight @ torch.diag(self.diag_right) @ self.v_right.weight.T
-            mat_l_inv = self.u_left.weight @ torch.diag(1.0 / self.diag_left) @ self.v_left.weight.T
-            mat_r_inv = self.u_right.weight @ torch.diag(1.0 / self.diag_right) @ self.v_right.weight.T
+            _dl = self.diag_left.abs().clamp(min=1e-6)
+            _dr = self.diag_right.abs().clamp(min=1e-6)
+            mat_l = self.u_left.weight @ torch.diag(_dl) @ self.v_left.weight.T
+            mat_r = self.u_right.weight @ torch.diag(_dr) @ self.v_right.weight.T
+            mat_l_inv = self.u_left.weight @ torch.diag(1.0 / _dl) @ self.v_left.weight.T
+            mat_r_inv = self.u_right.weight @ torch.diag(1.0 / _dr) @ self.v_right.weight.T
         self.matrix_left = nn.Parameter(mat_l, requires_grad=False)
         self.matrix_right = nn.Parameter(mat_r, requires_grad=False)
         self.matrix_left_inv = nn.Parameter(mat_l_inv, requires_grad=False)
@@ -905,23 +909,18 @@ def calibrate_flat_quant(
         )
 
         # (d) Train transforms via MSE loss ─────────────────────────
-        nan_detected = False
+        n_batches = actual_nsamples // cali_bsz
         for epoch in range(epochs):
             epoch_mse = 0.0
+            nan_count = 0
             with traincast():
-                for j in range(actual_nsamples // cali_bsz):
+                for j in range(n_batches):
                     idx = j * cali_bsz
                     out = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
                     quant_out = out[0] if isinstance(out, tuple) else out
                     loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
                     if torch.isnan(loss) or torch.isinf(loss):
-                        if not nan_detected:
-                            nan_detected = True
-                            logger.warning(
-                                f"  layer {i} NaN/Inf loss at epoch {epoch}, batch {j}. "
-                                f"quant_out has NaN: {torch.isnan(quant_out).any().item()}, "
-                                f"fp_outs slice has NaN: {torch.isnan(fp_outs[idx:idx+cali_bsz]).any().item()}"
-                            )
+                        nan_count += 1
                         scheduler.step()
                         continue
                     epoch_mse += loss.detach().item()
@@ -931,7 +930,11 @@ def calibrate_flat_quant(
                     optimizer.step()
                     scheduler.step()
             lr = optimizer.param_groups[0]["lr"]
-            logger.info(f"  layer {i} epoch {epoch}, lr={lr:.8f}, mse={epoch_mse:.8f}")
+            ok = n_batches - nan_count
+            logger.info(
+                f"  layer {i} epoch {epoch}, lr={lr:.8f}, "
+                f"mse={epoch_mse:.4e}, ok_batches={ok}/{n_batches}"
+            )
 
         # Feed this layer's output as the next layer's input
         fp_inps, fp_outs = fp_outs, fp_inps
