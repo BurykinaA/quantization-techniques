@@ -1009,17 +1009,18 @@ def calibrate_flat_quant(
                 # Clip gradients to prevent explosion through 1/diag paths
                 torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
                 optimizer.step()
-                # Project diag parameters to stay positive.
-                # diag_left/diag_right: keep ≥ 0.1 so T⁻¹ amplifies weights
-                # by at most 10× (old min=1e-4 allowed 10000×, blowing up
-                # per-tile activation scales and destroying quantization).
-                # diag_scale: softer bound is fine (absorbed into LayerNorm).
+                # Project diag parameters to stay in safe range.
+                # diag_left/diag_right: ≥ 0.1 → T⁻¹ amplifies weights ≤ 10×.
+                # diag_scale: absorbed into LayerNorm at reparameterize time,
+                #   so large values create large inference activations → huge
+                #   per-tile act_scale → typical activations round to 0.
+                #   Clamp to [1e-4, 10] to keep inference activation scales sane.
                 with torch.no_grad():
                     for name, param in layer.named_parameters():
                         if "diag_left" in name or "diag_right" in name:
                             param.data.clamp_(min=0.1)
                         elif "diag_scale" in name:
-                            param.data.clamp_(min=1e-4)
+                            param.data.clamp_(min=1e-4, max=10.0)
                 scheduler.step()
                 batch_bar.set_postfix(
                     loss=f"{loss.item():.3e}",
@@ -1033,6 +1034,15 @@ def calibrate_flat_quant(
                 f"  layer {i} epoch {epoch}, lr={lr:.8f}, "
                 f"mse={epoch_mse:.4e}, ok_batches={ok}/{n_batches}"
             )
+        # Log diag parameter ranges to catch blow-up early
+        for name, param in layer.named_parameters():
+            if "diag_scale" in name or "diag_left" in name or "diag_right" in name:
+                with torch.no_grad():
+                    p = param.data
+                    logger.info(
+                        f"  layer {i} [{name}] "
+                        f"min={p.min():.4f} max={p.max():.4f} mean={p.mean():.4f}"
+                    )
         for h in _hooks:
             h.remove()
 
