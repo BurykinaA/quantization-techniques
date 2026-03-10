@@ -851,7 +851,9 @@ def calibrate_flat_quant(
     loss_func = nn.MSELoss()
 
     num_layers = len(layers)
-    for i in range(num_layers):
+    layer_bar = tqdm(range(num_layers), desc="FlatQuant layers", unit="layer")
+    for i in layer_bar:
+        layer_bar.set_postfix(layer=i)
         logger.info(f"========= FlatQuant calibration: Layer {i}/{num_layers - 1} =========")
         layer = layers[i].to(device)
 
@@ -946,10 +948,12 @@ def calibrate_flat_quant(
         for name, mod in layer.named_modules():
             _hooks.append(mod.register_forward_hook(_make_nan_hook(name)))
 
-        for epoch in range(epochs):
+        epoch_bar = tqdm(range(epochs), desc=f"  L{i} epochs", unit="ep", leave=False)
+        for epoch in epoch_bar:
             epoch_mse = 0.0
             nan_count = 0
-            for j in range(n_batches):
+            batch_bar = tqdm(range(n_batches), desc=f"    L{i} E{epoch} batches", unit="batch", leave=False)
+            for j in batch_bar:
                 idx = j * cali_bsz
                 _nan_found.clear()
                 # Forward only under autocast — backward must run in float32
@@ -960,6 +964,7 @@ def calibrate_flat_quant(
                     loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
                 if torch.isnan(loss) or torch.isinf(loss):
                     nan_count += 1
+                    batch_bar.set_postfix(loss="NaN", nan=nan_count)
                     scheduler.step()
                     continue
                 epoch_mse += loss.detach().item()
@@ -997,6 +1002,7 @@ def calibrate_flat_quant(
                                     f"nan={n_nan} inf={n_inf}  finite_range=[{gmin:.3e}, {gmax:.3e}]"
                                 )
                     nan_count += 1
+                    batch_bar.set_postfix(loss="NaN/grad", nan=nan_count)
                     optimizer.zero_grad()
                     scheduler.step()
                     continue
@@ -1009,8 +1015,14 @@ def calibrate_flat_quant(
                         if "diag_left" in name or "diag_right" in name or "diag_scale" in name:
                             param.data.clamp_(min=1e-4)
                 scheduler.step()
+                batch_bar.set_postfix(
+                    loss=f"{loss.item():.3e}",
+                    mse=f"{epoch_mse / (j + 1 - nan_count):.3e}" if (j + 1 - nan_count) > 0 else "N/A",
+                    nan=nan_count,
+                )
             lr = optimizer.param_groups[0]["lr"]
             ok = n_batches - nan_count
+            epoch_bar.set_postfix(lr=f"{lr:.2e}", mse=f"{epoch_mse:.3e}", ok=f"{ok}/{n_batches}")
             logger.info(
                 f"  layer {i} epoch {epoch}, lr={lr:.8f}, "
                 f"mse={epoch_mse:.4e}, ok_batches={ok}/{n_batches}"
