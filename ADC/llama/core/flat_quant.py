@@ -946,22 +946,25 @@ def calibrate_flat_quant(
             for j in range(n_batches):
                 idx = j * cali_bsz
                 _nan_found.clear()
-                # Forward only under autocast — backward must run in float32
-                # to avoid float16 overflow (1/loss can exceed float16 max).
-                with traincast():
-                    out = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
-                    quant_out = out[0] if isinstance(out, tuple) else out
-                    loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
-                if torch.isnan(loss) or torch.isinf(loss):
-                    nan_count += 1
-                    scheduler.step()
-                    continue
-                epoch_mse += loss.detach().item()
-                # Cast to float32 before backward so 1/loss doesn't overflow
-                loss_f32 = loss.float()
-                normalized_loss = loss_f32 / loss_f32.clone().detach()
-                optimizer.zero_grad()
+                # Wrap the FULL forward+backward in detect_anomaly so PyTorch
+                # records forward stack traces and can report which op's
+                # backward produces NaN.
                 with torch.autograd.detect_anomaly():
+                    # Forward only under autocast — backward must run in float32
+                    # to avoid float16 overflow (1/loss can exceed float16 max).
+                    with traincast():
+                        out = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
+                        quant_out = out[0] if isinstance(out, tuple) else out
+                        loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
+                    if torch.isnan(loss) or torch.isinf(loss):
+                        nan_count += 1
+                        scheduler.step()
+                        continue
+                    epoch_mse += loss.detach().item()
+                    # Cast to float32 before backward so 1/loss doesn't overflow
+                    loss_f32 = loss.float()
+                    normalized_loss = loss_f32 / loss_f32.clone().detach()
+                    optimizer.zero_grad()
                     normalized_loss.backward()
                 # Guard: skip step if any gradient is NaN/Inf.
                 # clip_grad_norm_ with a NaN grad returns NaN norm,
