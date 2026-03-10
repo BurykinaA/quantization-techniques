@@ -44,6 +44,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from ADC.llama.core.grad_functions import floor_ste, round_ste
+
 logger = logging.getLogger(__name__)
 
 
@@ -301,12 +303,14 @@ class FlatQuantLinear(nn.Module):
         a_bits: int = 8,
         lwc: bool = False,
         lac: bool = False,
+        adc_config: dict | None = None,
     ):
         super().__init__()
         self.linear = linear
         self.w_quantizer = _WeightQuantizer(bits=w_bits)
         self.a_quantizer = _ActivationQuantizer(bits=a_bits, lac=lac)
         self.lwc = lwc
+        self._adc_config = adc_config
         if lwc:
             out_features = linear.weight.shape[0]
             self.clip_factor_w_max = nn.Parameter(
@@ -333,7 +337,16 @@ class FlatQuantLinear(nn.Module):
         x: torch.Tensor,
         qa_trans: KroneckerTransform | None = None,
     ) -> torch.Tensor:
-        """Quantised forward with optional transform (calibration path)."""
+        """Quantised forward with optional transform (calibration path).
+
+        When ``self._adc_config`` is set, simulates the full
+        TiledLinearADC pipeline (integer MVM + ADC floor/clamp) so the
+        Kronecker transforms learn to minimise ADC quantisation error.
+        Otherwise falls back to simple INT8 fake-quant.
+        """
+        if self._adc_config is not None:
+            return self._train_forward_adc(x, qa_trans)
+
         weight = self.linear.weight.data
         if qa_trans is not None:
             weight = qa_trans(weight, inv_t=True)
@@ -343,6 +356,95 @@ class FlatQuantLinear(nn.Module):
         weight = self.w_quantizer(weight)
         x = self.a_quantizer(x)
         return F.linear(x, weight, self.linear.bias)
+
+    def _train_forward_adc(
+        self,
+        x: torch.Tensor,
+        qa_trans: KroneckerTransform | None = None,
+    ) -> torch.Tensor:
+        """ADC-aware forward: mirrors TiledLinearADC tile-by-tile.
+
+        Steps per tile (matching QATLinearADC.forward):
+          1. Quantize activations → integer codes
+          2. Quantize weights → integer codes (per output channel)
+          3. Integer MVM in code domain
+          4. ADC quantization: floor(y / Δ).clamp(na, pa) * Δ  (Eq 2-3)
+          5. Dequantize: multiply by activation and weight scales
+        """
+        cfg = self._adc_config
+        bx: int = cfg["bx"]
+        bw: int = cfg["bw"]
+        ba: int = cfg["ba"]
+        k: int  = cfg["k"]
+        mvm_limit: int = cfg["mvm_limit"]
+        signed: bool   = cfg.get("signed_activations", True)
+
+        # Quantization bounds (matching QATLinearADC)
+        if signed:
+            qmax_x = 2 ** (bx - 1) - 1
+            qmin_x = -(2 ** (bx - 1))
+        else:
+            qmax_x = 2 ** bx - 1
+            qmin_x = 0
+        act_levels = float(qmax_x)  # 127 (signed) or 255 (unsigned)
+
+        qmax_w = 2 ** (bw - 1) - 1
+        qmin_w = -(2 ** (bw - 1))
+        w_levels = float(qmax_w)    # 127
+
+        na = -(2 ** (ba - 1))
+        pa = 2 ** (ba - 1) - 1
+
+        # Tiling — same logic as TiledLinearADC.__init__
+        in_features = self.linear.in_features
+        tile_in = in_features
+        while tile_in > mvm_limit and tile_in % 2 == 0:
+            tile_in //= 2
+        n_tiles = in_features // tile_in
+
+        # ADC step size (Eq. 3 from paper)
+        delta = 2.0 * tile_in * act_levels * w_levels / (float(2 ** ba) * k)
+
+        # Get (optionally transformed) weight in float32
+        weight = self.linear.weight.data
+        if qa_trans is not None:
+            weight = qa_trans(weight, inv_t=True)
+        if self.lwc:
+            weight = self._apply_wclip(weight)
+        w_f32 = weight.float()
+
+        x_f32 = x.float()
+        orig_shape = x_f32.shape
+        x2d = x_f32.reshape(-1, in_features)                # [B, in_features]
+
+        y2d = torch.zeros(
+            x2d.shape[0], self.linear.out_features,
+            device=x2d.device, dtype=x2d.dtype,
+        )
+
+        for i in range(n_tiles):
+            xi = x2d[:, i * tile_in:(i + 1) * tile_in]     # [B, tile_in]
+            wi = w_f32[:, i * tile_in:(i + 1) * tile_in]   # [out, tile_in]
+
+            # Per-channel weight quantization for this tile
+            s_wi = wi.abs().amax(dim=1, keepdim=True).clamp(min=1e-8) / w_levels
+            code_wi = round_ste(wi / s_wi).clamp(qmin_w, qmax_w)
+
+            # Per-token activation quantization for this tile
+            s_xi = xi.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
+            code_xi = round_ste(xi / s_xi).clamp(qmin_x, qmax_x)
+
+            # Integer MVM → ADC quantization (Eq. 2-3)
+            y_int  = F.linear(code_xi, code_wi)                      # [B, out]
+            y_adc  = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
+
+            # Dequantize: s_xi [B,1] × s_wi.T [out] → [B, out]
+            y2d = y2d + y_adc * s_xi * s_wi.squeeze(1)
+
+        y = y2d.reshape(*orig_shape[:-1], self.linear.out_features)
+        if self.linear.bias is not None:
+            y = y + self.linear.bias
+        return y.to(x.dtype)
 
     def reparameterize(
         self, qa_trans: KroneckerTransform | None = None,
@@ -387,13 +489,14 @@ class FlatQuantLlamaMLP(nn.Module):
     def __init__(
         self, mlp: nn.Module, w_bits: int, a_bits: int,
         add_diag: bool, lwc: bool, lac: bool,
+        adc_config: dict | None = None,
     ):
         super().__init__()
         self.act_fn = mlp.act_fn
 
-        self.gate_proj = FlatQuantLinear(mlp.gate_proj, w_bits, a_bits, lwc, lac)
-        self.up_proj = FlatQuantLinear(mlp.up_proj, w_bits, a_bits, lwc, lac)
-        self.down_proj = FlatQuantLinear(mlp.down_proj, w_bits, a_bits, lwc, lac)
+        self.gate_proj = FlatQuantLinear(mlp.gate_proj, w_bits, a_bits, lwc, lac, adc_config)
+        self.up_proj   = FlatQuantLinear(mlp.up_proj,   w_bits, a_bits, lwc, lac, adc_config)
+        self.down_proj = FlatQuantLinear(mlp.down_proj, w_bits, a_bits, lwc, lac, adc_config)
 
         in_dim = mlp.up_proj.weight.shape[1]
         intermediate_dim = mlp.down_proj.weight.shape[1]
@@ -523,15 +626,16 @@ class FlatQuantLlamaAttention(nn.Module):
     def __init__(
         self, attn: nn.Module, w_bits: int, a_bits: int,
         add_diag: bool, lwc: bool, lac: bool,
+        adc_config: dict | None = None,
     ):
         super().__init__()
         self._orig_attn = attn
         in_dim = attn.q_proj.weight.shape[1]
 
-        self.q_proj = FlatQuantLinear(attn.q_proj, w_bits, a_bits, lwc, lac)
-        self.k_proj = FlatQuantLinear(attn.k_proj, w_bits, a_bits, lwc, lac)
-        self.v_proj = FlatQuantLinear(attn.v_proj, w_bits, a_bits, lwc, lac)
-        self.o_proj = FlatQuantLinear(attn.o_proj, w_bits, a_bits, lwc, lac)
+        self.q_proj = FlatQuantLinear(attn.q_proj, w_bits, a_bits, lwc, lac, adc_config)
+        self.k_proj = FlatQuantLinear(attn.k_proj, w_bits, a_bits, lwc, lac, adc_config)
+        self.v_proj = FlatQuantLinear(attn.v_proj, w_bits, a_bits, lwc, lac, adc_config)
+        self.o_proj = FlatQuantLinear(attn.o_proj, w_bits, a_bits, lwc, lac, adc_config)
 
         self.ln_trans = KroneckerTransform(in_dim, add_diag=add_diag)
 
@@ -621,16 +725,25 @@ def apply_flatquant_to_model(
     add_diag: bool = True,
     lwc: bool = True,
     lac: bool = True,
+    adc_config: dict | None = None,
 ) -> nn.Module:
-    """Replace LLaMA attention and MLP with FlatQuant-wrapped versions."""
+    """Replace LLaMA attention and MLP with FlatQuant-wrapped versions.
+
+    Args:
+        adc_config: When provided, ``train_forward`` simulates the full
+            ADC pipeline (tiled integer MVM + ``floor_ste`` + delta clamp)
+            instead of simple INT8 fake-quant.  Expected keys::
+
+                {bx, bw, ba, k, mvm_limit, signed_activations}
+    """
     layers = model.model.layers
     for i in tqdm(range(len(layers)), desc="Applying FlatQuant wrappers"):
         layer = layers[i]
         layers[i].self_attn = FlatQuantLlamaAttention(
-            layer.self_attn, w_bits, a_bits, add_diag, lwc, lac,
+            layer.self_attn, w_bits, a_bits, add_diag, lwc, lac, adc_config,
         )
         layers[i].mlp = FlatQuantLlamaMLP(
-            layer.mlp, w_bits, a_bits, add_diag, lwc, lac,
+            layer.mlp, w_bits, a_bits, add_diag, lwc, lac, adc_config,
         )
     return model
 

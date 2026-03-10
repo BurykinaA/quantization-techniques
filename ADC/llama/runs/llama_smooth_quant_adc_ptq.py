@@ -1527,6 +1527,23 @@ def main():
             )
 
             logger.info("Applying FlatQuant wrappers to model...")
+            # signed_activations: None → True when ashift=False (default)
+            fq_signed = signed_activations if signed_activations is not None else (not args.ashift)
+            fq_adc_config = {
+                "bx": args.bx,
+                "bw": args.bw,
+                "ba": args.ba,
+                "k":  args.k,
+                "mvm_limit": args.mvm_limit,
+                "signed_activations": fq_signed,
+            }
+            logger.info(
+                f"FlatQuant ADC config: bx={fq_adc_config['bx']}, bw={fq_adc_config['bw']}, "
+                f"ba={fq_adc_config['ba']}, k={fq_adc_config['k']}, "
+                f"mvm_limit={fq_adc_config['mvm_limit']}, "
+                f"signed={fq_adc_config['signed_activations']}, "
+                f"delta≈{2.0 * min(args.mvm_limit, 256) * (127 if fq_signed else 255) * 127 / (2**args.ba * args.k):.1f}"
+            )
             model = apply_flatquant_to_model(
                 model,
                 w_bits=args.fq_w_bits,
@@ -1534,6 +1551,7 @@ def main():
                 add_diag=args.fq_add_diag,
                 lwc=args.fq_lwc,
                 lac=args.fq_lac,
+                adc_config=fq_adc_config,
             )
 
             if args.fq_reload_path:
