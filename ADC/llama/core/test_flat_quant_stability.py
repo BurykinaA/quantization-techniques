@@ -86,6 +86,28 @@ def test_forward_diag_scale_near_zero_no_nan():
     print("PASS  test_forward_diag_scale_near_zero_no_nan")
 
 
+def test_forward_negative_diag_scale_no_nan():
+    """
+    Root cause of 'ok_batches=1/16 → 0/16':
+    After one optimizer step diag_scale can go negative (e.g. -0.5).
+    Old code: diag_scale.clamp(min=1e-8) = 1e-8  →  weight / 1e-8 = weight×1e8 → overflow → NaN.
+    Fixed by: diag_scale.abs().clamp(min=1e-8) in both forward and inverse paths.
+    """
+    trans = _make_transform(dim=32, add_diag=True)
+    with torch.no_grad():
+        trans.diag_scale.fill_(-0.5)   # negative after optimizer step
+
+    x = torch.randn(4, 32)
+    out_inv = trans(x, inv_t=True)
+    out_fwd = trans(x, inv_t=False)
+
+    assert not torch.isnan(out_inv).any(), "NaN in inverse transform with negative diag_scale"
+    assert not torch.isinf(out_inv).any(), "Inf in inverse transform with negative diag_scale"
+    assert not torch.isnan(out_fwd).any(), "NaN in forward transform with negative diag_scale"
+    assert not torch.isinf(out_fwd).any(), "Inf in forward transform with negative diag_scale"
+    print("PASS  test_forward_negative_diag_scale_no_nan")
+
+
 # ===========================================================================
 # Fix 2: to_eval_mode() must not store NaN/Inf matrices
 # ===========================================================================
@@ -263,6 +285,7 @@ if __name__ == "__main__":
         test_forward_negative_diag_no_nan,
         test_forward_zero_diag_no_nan,
         test_forward_diag_scale_near_zero_no_nan,
+        test_forward_negative_diag_scale_no_nan,
         test_to_eval_mode_near_zero_diag_finite_matrices,
         test_to_eval_mode_forward_consistent,
         test_gradient_clipping_prevents_explosion,

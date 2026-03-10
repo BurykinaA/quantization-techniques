@@ -231,7 +231,8 @@ class KroneckerTransform(nn.Module):
         x = x.float()
 
         if self.add_diag and self.use_diag:
-            x = x / self.diag_scale.clamp(min=1e-8) if inv_t else x * self.diag_scale
+            _ds = self.diag_scale.abs().clamp(min=1e-8)
+            x = x / _ds if inv_t else x * _ds
 
         if not self._eval_mode:
             _dl = self.diag_left.abs().clamp(min=1e-6)
@@ -937,7 +938,7 @@ def calibrate_flat_quant(
                     # 1/diag stays bounded and U,V parameters don't blow up
                     with torch.no_grad():
                         for name, param in layer.named_parameters():
-                            if "diag_left" in name or "diag_right" in name:
+                            if "diag_left" in name or "diag_right" in name or "diag_scale" in name:
                                 param.data.clamp_(min=1e-4)
                     scheduler.step()
             lr = optimizer.param_groups[0]["lr"]
