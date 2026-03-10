@@ -1009,10 +1009,16 @@ def calibrate_flat_quant(
                 # Clip gradients to prevent explosion through 1/diag paths
                 torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
                 optimizer.step()
-                # Project diag parameters to stay strictly positive
+                # Project diag parameters to stay positive.
+                # diag_left/diag_right: keep ≥ 0.1 so T⁻¹ amplifies weights
+                # by at most 10× (old min=1e-4 allowed 10000×, blowing up
+                # per-tile activation scales and destroying quantization).
+                # diag_scale: softer bound is fine (absorbed into LayerNorm).
                 with torch.no_grad():
                     for name, param in layer.named_parameters():
-                        if "diag_left" in name or "diag_right" in name or "diag_scale" in name:
+                        if "diag_left" in name or "diag_right" in name:
+                            param.data.clamp_(min=0.1)
+                        elif "diag_scale" in name:
                             param.data.clamp_(min=1e-4)
                 scheduler.step()
                 batch_bar.set_postfix(
