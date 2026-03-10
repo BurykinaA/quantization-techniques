@@ -190,7 +190,7 @@ def test_mini_training_loop_no_nan():
     linear = nn.Linear(dim_in, dim_out, bias=False)
     fq_linear = FlatQuantLinear(
         linear, w_bits=8, a_bits=8,
-        add_diag=False, lwc=True, lac=True,
+        lwc=True, lac=True,
     )
 
     trans = KroneckerTransform(dim=dim_in, add_diag=False)
