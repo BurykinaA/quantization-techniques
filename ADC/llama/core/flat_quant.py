@@ -943,62 +943,66 @@ def calibrate_flat_quant(
         for epoch in range(epochs):
             epoch_mse = 0.0
             nan_count = 0
-            with traincast():
-                for j in range(n_batches):
-                    idx = j * cali_bsz
-                    _nan_found.clear()
+            for j in range(n_batches):
+                idx = j * cali_bsz
+                _nan_found.clear()
+                # Forward only under autocast — backward must run in float32
+                # to avoid float16 overflow (1/loss can exceed float16 max).
+                with traincast():
                     out = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
                     quant_out = out[0] if isinstance(out, tuple) else out
                     loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
-                    if torch.isnan(loss) or torch.isinf(loss):
-                        nan_count += 1
-                        scheduler.step()
-                        continue
-                    epoch_mse += loss.detach().item()
-                    normalized_loss = loss / loss.clone().detach()
-                    optimizer.zero_grad()
-                    normalized_loss.backward()
-                    # Guard: skip step if any gradient is NaN/Inf.
-                    # clip_grad_norm_ with a NaN grad returns NaN norm,
-                    # which then poisons ALL gradients and all parameters.
-                    all_params = [p for g in optimizer.param_groups for p in g["params"]]
-                    has_nan_grad = any(
-                        p.grad is not None
-                        and (torch.isnan(p.grad).any() or torch.isinf(p.grad).any())
-                        for p in all_params
-                    )
-                    if has_nan_grad:
-                        # Log which parameter has NaN/Inf gradient
-                        param_name_map = {id(lp): n for n, lp in layer.named_parameters()}
-                        for g in optimizer.param_groups:
-                            for p in g["params"]:
-                                if p.grad is not None and (torch.isnan(p.grad).any() or torch.isinf(p.grad).any()):
-                                    pname = param_name_map.get(id(p), "<unknown>")
-                                    finite_mask = ~torch.isnan(p.grad) & ~torch.isinf(p.grad)
-                                    if finite_mask.any():
-                                        gmin = p.grad[finite_mask].min().item()
-                                        gmax = p.grad[finite_mask].max().item()
-                                    else:
-                                        gmin = gmax = float("nan")
-                                    n_nan = torch.isnan(p.grad).sum().item()
-                                    n_inf = torch.isinf(p.grad).sum().item()
-                                    logger.warning(
-                                        f"Layer {i} batch {j}: NaN/Inf grad in '{pname}'  "
-                                        f"nan={n_nan} inf={n_inf}  finite_range=[{gmin:.3e}, {gmax:.3e}]"
-                                    )
-                        nan_count += 1
-                        optimizer.zero_grad()
-                        scheduler.step()
-                        continue
-                    # Clip gradients to prevent explosion through 1/diag paths
-                    torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
-                    optimizer.step()
-                    # Project diag parameters to stay strictly positive
-                    with torch.no_grad():
-                        for name, param in layer.named_parameters():
-                            if "diag_left" in name or "diag_right" in name or "diag_scale" in name:
-                                param.data.clamp_(min=1e-4)
+                if torch.isnan(loss) or torch.isinf(loss):
+                    nan_count += 1
                     scheduler.step()
+                    continue
+                epoch_mse += loss.detach().item()
+                # Cast to float32 before backward so 1/loss doesn't overflow
+                loss_f32 = loss.float()
+                normalized_loss = loss_f32 / loss_f32.clone().detach()
+                optimizer.zero_grad()
+                normalized_loss.backward()
+                # Guard: skip step if any gradient is NaN/Inf.
+                # clip_grad_norm_ with a NaN grad returns NaN norm,
+                # which then poisons ALL gradients and all parameters.
+                all_params = [p for g in optimizer.param_groups for p in g["params"]]
+                has_nan_grad = any(
+                    p.grad is not None
+                    and (torch.isnan(p.grad).any() or torch.isinf(p.grad).any())
+                    for p in all_params
+                )
+                if has_nan_grad:
+                    # Log which parameter has NaN/Inf gradient
+                    param_name_map = {id(lp): n for n, lp in layer.named_parameters()}
+                    for g in optimizer.param_groups:
+                        for p in g["params"]:
+                            if p.grad is not None and (torch.isnan(p.grad).any() or torch.isinf(p.grad).any()):
+                                pname = param_name_map.get(id(p), "<unknown>")
+                                finite_mask = ~torch.isnan(p.grad) & ~torch.isinf(p.grad)
+                                if finite_mask.any():
+                                    gmin = p.grad[finite_mask].min().item()
+                                    gmax = p.grad[finite_mask].max().item()
+                                else:
+                                    gmin = gmax = float("nan")
+                                n_nan = torch.isnan(p.grad).sum().item()
+                                n_inf = torch.isinf(p.grad).sum().item()
+                                logger.warning(
+                                    f"Layer {i} batch {j}: NaN/Inf grad in '{pname}'  "
+                                    f"nan={n_nan} inf={n_inf}  finite_range=[{gmin:.3e}, {gmax:.3e}]"
+                                )
+                    nan_count += 1
+                    optimizer.zero_grad()
+                    scheduler.step()
+                    continue
+                # Clip gradients to prevent explosion through 1/diag paths
+                torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
+                optimizer.step()
+                # Project diag parameters to stay strictly positive
+                with torch.no_grad():
+                    for name, param in layer.named_parameters():
+                        if "diag_left" in name or "diag_right" in name or "diag_scale" in name:
+                            param.data.clamp_(min=1e-4)
+                scheduler.step()
             lr = optimizer.param_groups[0]["lr"]
             ok = n_batches - nan_count
             logger.info(
