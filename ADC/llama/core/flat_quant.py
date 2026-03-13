@@ -259,7 +259,6 @@ class KroneckerTransform(nn.Module):
 
     def to_eval_mode(self) -> None:
         """Pre-compute and cache forward / inverse / transpose matrices, free SVD params."""
-        """Pre-compute and cache forward / inverse / transpose matrices, free SVD params."""
         if self._eval_mode:
             return
         with torch.no_grad():
@@ -272,38 +271,15 @@ class KroneckerTransform(nn.Module):
             # L^T = V @ D @ U^T  (used in reparameterize to cancel Kron^{-T})
             mat_l_T = self.v_left.weight @ torch.diag(_dl) @ self.u_left.weight.T
             mat_r_T = self.v_right.weight @ torch.diag(_dr) @ self.u_right.weight.T
-            # L^T = V @ D @ U^T  (used in reparameterize to cancel Kron^{-T})
-            mat_l_T = self.v_left.weight @ torch.diag(_dl) @ self.u_left.weight.T
-            mat_r_T = self.v_right.weight @ torch.diag(_dr) @ self.u_right.weight.T
         self.matrix_left = nn.Parameter(mat_l, requires_grad=False)
         self.matrix_right = nn.Parameter(mat_r, requires_grad=False)
         self.matrix_left_inv = nn.Parameter(mat_l_inv, requires_grad=False)
         self.matrix_right_inv = nn.Parameter(mat_r_inv, requires_grad=False)
         self.matrix_left_T = nn.Parameter(mat_l_T, requires_grad=False)
         self.matrix_right_T = nn.Parameter(mat_r_T, requires_grad=False)
-        self.matrix_left_T = nn.Parameter(mat_l_T, requires_grad=False)
-        self.matrix_right_T = nn.Parameter(mat_r_T, requires_grad=False)
         del self.u_left, self.v_left, self.diag_left
         del self.u_right, self.v_right, self.diag_right
         self._eval_mode = True
-
-    def apply_kron_transpose(self, x: torch.Tensor) -> torch.Tensor:
-        """Apply Kron^T = kron(V_L D_L U_L^T, V_R D_R U_R^T) to x (no diag_scale).
-
-        Used in reparameterize() to cancel the Kron^{-T} already folded into the
-        weight, so that the stored weight = w / diag (correct for strip-mode inference
-        where Kron is no longer applied to activations).
-        """
-        orig_dtype = x.dtype
-        x = x.float()
-        if not self._eval_mode:
-            _dl = self.diag_left.abs().clamp(min=1e-6)
-            _dr = self.diag_right.abs().clamp(min=1e-6)
-            mat_l = self.v_left.weight @ torch.diag(_dl) @ self.u_left.weight.T
-            mat_r = self.v_right.weight @ torch.diag(_dr) @ self.u_right.weight.T
-        else:
-            mat_l, mat_r = self.matrix_left_T, self.matrix_right_T
-        return _kronecker_matmul(x, mat_l, mat_r).to(orig_dtype)
 
     def apply_kron_transpose(self, x: torch.Tensor) -> torch.Tensor:
         """Apply Kron^T = kron(V_L D_L U_L^T, V_R D_R U_R^T) to x (no diag_scale).
@@ -358,6 +334,7 @@ class FlatQuantLinear(nn.Module):
         self.a_quantizer = _ActivationQuantizer(bits=a_bits, lac=lac)
         self.lwc = lwc
         self._adc_config = adc_config
+        self._reparameterized = False  # set True after reparameterize(); skips weight transform
         if lwc:
             out_features = linear.weight.shape[0]
             self.clip_factor_w_max = nn.Parameter(
@@ -386,11 +363,19 @@ class FlatQuantLinear(nn.Module):
     ) -> torch.Tensor:
         """Quantised forward with optional transform (calibration path).
 
+        When ``self._reparameterized`` is True (after reparameterize()), the
+        weight transform is already baked in and the Kronecker transform is
+        applied to activations at a higher level — just delegate to self.linear
+        directly (which may be nn.Linear or TiledLinearADC after ADC conversion).
+
         When ``self._adc_config`` is set, simulates the full
         TiledLinearADC pipeline (integer MVM + ADC floor/clamp) so the
         Kronecker transforms learn to minimise ADC quantisation error.
         Otherwise falls back to simple INT8 fake-quant.
         """
+        if self._reparameterized:
+            return self.linear(x)
+
         if self._adc_config is not None:
             return self._train_forward_adc(x, qa_trans)
 
@@ -498,31 +483,26 @@ class FlatQuantLinear(nn.Module):
     ) -> None:
         """Fold transform + clipping into weights permanently.
 
-        Correct weight for strip-mode inference (no Kron on activations):
-          W_stored = clip(w / diag @ Kron^{-T}) @ Kron^T = clip(w / diag)
-        The Kron^{-T} and Kron^T cancel (since U,V are orthogonal), leaving
-        w / diag — exactly what's needed when only diag is in LayerNorm.
-        """
-        """Fold transform + clipping into weights permanently.
+        Stores W_stored = clip(w / diag @ Kron^{-T}) — matching the official
+        FlatQuant approach.  The Kronecker transform is still applied to
+        activations at inference time (via up_gate_trans / ln_trans in the
+        MLP/Attention wrappers), so the full product is correct:
 
-        Correct weight for strip-mode inference (no Kron on activations):
-          W_stored = clip(w / diag @ Kron^{-T}) @ Kron^T = clip(w / diag)
-        The Kron^{-T} and Kron^T cancel (since U,V are orthogonal), leaving
-        w / diag — exactly what's needed when only diag is in LayerNorm.
+            (x * D @ Kron) @ (W/D @ Kron^{-T})^T = x @ W^T  ✓
+
+        After this call, _reparameterized=True makes train_forward() bypass
+        all weight transforms and delegate directly to self.linear (which may
+        later be replaced by TiledLinearADC by the ADC converter).
         """
         weight = self.linear.weight.data
         ori_dtype = weight.dtype
         weight = weight.to(torch.float64)
         if qa_trans is not None:
             weight = qa_trans(weight, inv_t=True)  # w / diag @ Kron^{-T}
-            weight = qa_trans(weight, inv_t=True)  # w / diag @ Kron^{-T}
         if self.lwc:
             weight = self._apply_wclip(weight)
-        if qa_trans is not None:
-            weight = qa_trans.apply_kron_transpose(weight)  # @ Kron^T → w / diag
-        if qa_trans is not None:
-            weight = qa_trans.apply_kron_transpose(weight)  # @ Kron^T → w / diag
         self.linear.weight.data = weight.to(ori_dtype)
+        self._reparameterized = True
 
 
 # =========================================================================

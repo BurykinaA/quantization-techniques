@@ -1583,8 +1583,12 @@ def main():
             logger.info("Reparameterizing FlatQuant transforms into weights...")
             model = fq_reparameterize_model(model)
 
-            logger.info("Stripping FlatQuant wrappers (back to plain nn.Linear)...")
-            model = strip_flatquant_wrappers(model)
+            # NOTE: We intentionally do NOT call strip_flatquant_wrappers() here.
+            # The Kronecker transform must remain active on activations at inference
+            # so that W_stored = W/D @ Kron^{-T} (baked into weights) is used
+            # correctly: (x * D @ Kron) @ (W/D @ Kron^{-T})^T = x @ W^T.
+            # FlatQuantLinear._reparameterized=True ensures train_forward() delegates
+            # directly to self.linear (nn.Linear or TiledLinearADC after conversion).
 
             logger.info("=" * 80)
             logger.info("FlatQuant preprocessing complete")
