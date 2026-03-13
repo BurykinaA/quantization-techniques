@@ -467,7 +467,11 @@ class FlatQuantLinear(nn.Module):
             code_xi = round_ste(xi / s_xi).clamp(qmin_x, qmax_x)
 
             # Integer MVM → ADC quantization (Eq. 2-3)
-            y_int  = F.linear(code_xi, code_wi)                      # [B, out]
+            # y_int can reach tile_in * 127^2 ≈ 4M, which overflows float16
+            # (~65504) when running under float16 autocast.  Force float32.
+            _dev_type = "cuda" if code_xi.is_cuda else "cpu"
+            with torch.amp.autocast(device_type=_dev_type, enabled=False):
+                y_int = F.linear(code_xi.float(), code_wi.float())       # [B, out], float32
             y_adc  = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
 
             # Dequantize: s_xi [B,1] × s_wi.T [out] → [B, out]
