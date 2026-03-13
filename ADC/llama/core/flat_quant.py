@@ -1211,16 +1211,6 @@ def calibrate_flat_quant(
                         f"  layer {i} [{name}] "
                         f"min={p.min():.4f} max={p.max():.4f} mean={p.mean():.4f}"
                     )
-            )
-        # Log diag parameter ranges to catch blow-up early
-        for name, param in layer.named_parameters():
-            if "diag_scale" in name or "diag_left" in name or "diag_right" in name:
-                with torch.no_grad():
-                    p = param.data
-                    logger.info(
-                        f"  layer {i} [{name}] "
-                        f"min={p.min():.4f} max={p.max():.4f} mean={p.mean():.4f}"
-                    )
         for h in _hooks:
             h.remove()
 
