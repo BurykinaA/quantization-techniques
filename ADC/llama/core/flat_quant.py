@@ -258,7 +258,7 @@ class KroneckerTransform(nn.Module):
         return _kronecker_matmul(x, mat_l, mat_r).to(orig_dtype)
 
     def to_eval_mode(self) -> None:
-        """Pre-compute and cache forward / inverse matrices, free SVD params."""
+        """Pre-compute and cache forward / inverse / transpose matrices, free SVD params."""
         if self._eval_mode:
             return
         with torch.no_grad():
@@ -268,13 +268,36 @@ class KroneckerTransform(nn.Module):
             mat_r = self.u_right.weight @ torch.diag(_dr) @ self.v_right.weight.T
             mat_l_inv = self.u_left.weight @ torch.diag(1.0 / _dl) @ self.v_left.weight.T
             mat_r_inv = self.u_right.weight @ torch.diag(1.0 / _dr) @ self.v_right.weight.T
+            # L^T = V @ D @ U^T  (used in reparameterize to cancel Kron^{-T})
+            mat_l_T = self.v_left.weight @ torch.diag(_dl) @ self.u_left.weight.T
+            mat_r_T = self.v_right.weight @ torch.diag(_dr) @ self.u_right.weight.T
         self.matrix_left = nn.Parameter(mat_l, requires_grad=False)
         self.matrix_right = nn.Parameter(mat_r, requires_grad=False)
         self.matrix_left_inv = nn.Parameter(mat_l_inv, requires_grad=False)
         self.matrix_right_inv = nn.Parameter(mat_r_inv, requires_grad=False)
+        self.matrix_left_T = nn.Parameter(mat_l_T, requires_grad=False)
+        self.matrix_right_T = nn.Parameter(mat_r_T, requires_grad=False)
         del self.u_left, self.v_left, self.diag_left
         del self.u_right, self.v_right, self.diag_right
         self._eval_mode = True
+
+    def apply_kron_transpose(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply Kron^T = kron(V_L D_L U_L^T, V_R D_R U_R^T) to x (no diag_scale).
+
+        Used in reparameterize() to cancel the Kron^{-T} already folded into the
+        weight, so that the stored weight = w / diag (correct for strip-mode inference
+        where Kron is no longer applied to activations).
+        """
+        orig_dtype = x.dtype
+        x = x.float()
+        if not self._eval_mode:
+            _dl = self.diag_left.abs().clamp(min=1e-6)
+            _dr = self.diag_right.abs().clamp(min=1e-6)
+            mat_l = self.v_left.weight @ torch.diag(_dl) @ self.u_left.weight.T
+            mat_r = self.v_right.weight @ torch.diag(_dr) @ self.u_right.weight.T
+        else:
+            mat_l, mat_r = self.matrix_left_T, self.matrix_right_T
+        return _kronecker_matmul(x, mat_l, mat_r).to(orig_dtype)
 
 
 # =========================================================================
@@ -449,14 +472,22 @@ class FlatQuantLinear(nn.Module):
     def reparameterize(
         self, qa_trans: KroneckerTransform | None = None,
     ) -> None:
-        """Fold transform + clipping into weights permanently."""
+        """Fold transform + clipping into weights permanently.
+
+        Correct weight for strip-mode inference (no Kron on activations):
+          W_stored = clip(w / diag @ Kron^{-T}) @ Kron^T = clip(w / diag)
+        The Kron^{-T} and Kron^T cancel (since U,V are orthogonal), leaving
+        w / diag — exactly what's needed when only diag is in LayerNorm.
+        """
         weight = self.linear.weight.data
         ori_dtype = weight.dtype
         weight = weight.to(torch.float64)
         if qa_trans is not None:
-            weight = qa_trans(weight, inv_t=True)
+            weight = qa_trans(weight, inv_t=True)  # w / diag @ Kron^{-T}
         if self.lwc:
             weight = self._apply_wclip(weight)
+        if qa_trans is not None:
+            weight = qa_trans.apply_kron_transpose(weight)  # @ Kron^T → w / diag
         self.linear.weight.data = weight.to(ori_dtype)
 
 
@@ -1122,11 +1153,18 @@ def calibrate_flat_quant(
                 # Clip gradients to prevent explosion through 1/diag paths
                 torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
                 optimizer.step()
-                # Project diag parameters to stay strictly positive
+                # Project diag parameters to stay in safe range.
+                # diag_left/diag_right: ≥ 0.1 → T⁻¹ amplifies weights ≤ 10×.
+                # diag_scale: absorbed into LayerNorm at reparameterize time,
+                #   so large values create large inference activations → huge
+                #   per-tile act_scale → typical activations round to 0.
+                #   Clamp to [1e-4, 10] to keep inference activation scales sane.
                 with torch.no_grad():
                     for name, param in layer.named_parameters():
-                        if "diag_left" in name or "diag_right" in name or "diag_scale" in name:
-                            param.data.clamp_(min=1e-4)
+                        if "diag_left" in name or "diag_right" in name:
+                            param.data.clamp_(min=0.1)
+                        elif "diag_scale" in name:
+                            param.data.clamp_(min=1e-4, max=10.0)
                 scheduler.step()
                 batch_bar.set_postfix(
                     loss=f"{loss.item():.3e}",
@@ -1140,6 +1178,15 @@ def calibrate_flat_quant(
                 f"  layer {i} epoch {epoch}, lr={lr:.8f}, "
                 f"mse={epoch_mse:.4e}, ok_batches={ok}/{n_batches}"
             )
+        # Log diag parameter ranges to catch blow-up early
+        for name, param in layer.named_parameters():
+            if "diag_scale" in name or "diag_left" in name or "diag_right" in name:
+                with torch.no_grad():
+                    p = param.data
+                    logger.info(
+                        f"  layer {i} [{name}] "
+                        f"min={p.min():.4f} max={p.max():.4f} mean={p.mean():.4f}"
+                    )
         for h in _hooks:
             h.remove()
 
