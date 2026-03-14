@@ -929,16 +929,10 @@ def _generate_adc_visualizations(model, sample_input, layer_patterns, title_pref
                 act_q = module.activation_quantizer
                 w_q = module.weight_quantizer
 
-                s_x = act_q.scale.to(x.device)
-                if act_q.symmetric:
-                    code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
-                else:
-                    zp_x = act_q.zero_point.to(x.device)
-                    code_x_temp = torch.clamp(torch.round(x / s_x + zp_x), 0, act_q.qmax)
-                    if hasattr(module, 'ashift') and module.ashift:
-                        code_x = code_x_temp - module.C
-                    else:
-                        code_x = code_x_temp - zp_x
+                # Per-token dynamic scale — mirrors QATLinearADC.forward() exactly.
+                act_levels = float(act_q.qmax)  # 127 (signed) or 255 (unsigned)
+                s_x = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
+                code_x = torch.clamp(torch.round(x / s_x), act_q.qmin, act_q.qmax)
                 x_dequant = code_x * s_x
 
                 s_w_vec = w_q.scale.to(w.device)
@@ -965,7 +959,7 @@ def _generate_adc_visualizations(model, sample_input, layer_patterns, title_pref
                     'y_quant': y_quant.detach().cpu().numpy(),
                     'y_int_before_adc': y_int.detach().cpu().numpy(),
                     'y_adc_codes': y_adc_codes.detach().cpu().numpy(),
-                    's_x': s_x.detach().cpu().item(),
+                    's_x': s_x.detach().cpu().mean().item(),  # mean per-token scale for viz
                     's_w': s_w_vec.detach().cpu().numpy(),
                     'act_qmin': act_q.qmin,
                     'act_qmax': act_q.qmax,
@@ -1104,8 +1098,18 @@ def _plot_adc_pipeline(data: dict, layer_name: str, title_prefix: str, filepath:
 
     ax = axes[2, 1]
     ax.hist(y_quant, bins=bins, alpha=0.8, color='orange', edgecolor='black', linewidth=0.3)
+    # ADC saturation limits in dequantized-output space:
+    #   limit = adc_code * delta * s_x * mean(s_w)
+    delta = data['delta']
+    na, pa = data['na'], data['pa']
+    s_w_mean = float(np.mean(np.abs(s_w)))
+    adc_min_out = na * delta * s_x * s_w_mean
+    adc_max_out = pa * delta * s_x * s_w_mean
+    ax.axvline(adc_min_out, color='red', ls='--', lw=1.5, label=f'ADC min ({na})')
+    ax.axvline(adc_max_out, color='red', ls='--', lw=1.5, label=f'ADC max ({pa})')
     ax.set_title(f"10. Quantized Output\nMean: {y_quant.mean():.4f}", fontsize=9)
     ax.set_xlabel('Value'); ax.set_ylabel('Count')
+    ax.legend(fontsize=7)
 
     ax = axes[2, 2]
     subsample = min(len(y_fp), 500)
