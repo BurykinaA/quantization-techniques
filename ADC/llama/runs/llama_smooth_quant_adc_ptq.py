@@ -1589,10 +1589,16 @@ def main():
                 if use_wandb:
                     wandb.run.summary["fq_transforms_path"] = transforms_path
 
-            # E3: capture calibration-path outputs BEFORE reparameterize
+            # E3: capture calibration-path outputs BEFORE reparameterize.
+            # After layer-by-layer FlatQuant calibration the model is partially
+            # offloaded (each layer was moved to GPU then left scattered).
+            # Move everything to device now — it will stay there for all
+            # subsequent steps (reparameterize, ADC conversion, calibration).
             e3_calib_outputs = None
             e3_sample = None
             if args.run_e3_check:
+                logger.info("E3: moving model to device for capture...")
+                model = model.to(device)
                 logger.info("E3: capturing calibration-path layer outputs (before reparameterize)...")
                 e3_sample = {
                     "input_ids": torch.randint(0, model.config.vocab_size, (1, 64), device=device),
