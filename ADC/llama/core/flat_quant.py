@@ -1254,7 +1254,119 @@ def _get_params_by_pattern(
 
 
 # =========================================================================
-# Part 6 — Save / Load Transforms
+# Part 6 — E3 Sanity-check helpers
+# =========================================================================
+
+def capture_layer_outputs(
+    model: nn.Module,
+    sample_input: dict,
+    device: torch.device,
+) -> dict:
+    """Capture per-layer FlatQuant wrapper outputs for a fixed sample.
+
+    Registers forward hooks on every ``FlatQuantLlamaMLP`` and
+    ``FlatQuantLlamaAttention`` instance and runs a single no-grad forward
+    pass.  Returns::
+
+        {layer_idx: {'mlp': tensor_cpu, 'attn': tensor_cpu}}
+
+    Works regardless of whether the model is in calibration mode or
+    inference mode, so you can call it before *and* after
+    ``reparameterize_model()`` + ADC conversion to compare the outputs.
+    """
+    outputs: dict = {}
+    hooks: list = []
+
+    for i, layer in enumerate(model.model.layers):
+        outputs[i] = {}
+
+        if isinstance(layer.mlp, FlatQuantLlamaMLP):
+            def _mlp_hook(__m, __inp, out, idx=i):  # noqa: ARG001
+                outputs[idx]["mlp"] = out.detach().cpu()
+            hooks.append(layer.mlp.register_forward_hook(_mlp_hook))
+
+        if isinstance(layer.self_attn, FlatQuantLlamaAttention):
+            def _attn_hook(__m, __inp, out, idx=i):  # noqa: ARG001
+                # attention forward returns (hidden_state, past_kv, ...)
+                tensor = out[0] if isinstance(out, (tuple, list)) else out
+                outputs[idx]["attn"] = tensor.detach().cpu()
+            hooks.append(layer.self_attn.register_forward_hook(_attn_hook))
+
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            input_ids = sample_input["input_ids"].to(device)
+            attn_mask = sample_input.get("attention_mask")
+            kwargs = {}
+            if attn_mask is not None:
+                kwargs["attention_mask"] = attn_mask.to(device)
+            model(input_ids=input_ids, **kwargs)
+    finally:
+        for h in hooks:
+            h.remove()
+        if was_training:
+            model.train()
+
+    return outputs
+
+
+def compare_layer_outputs(
+    before: dict,
+    after: dict,
+    log: "logging.Logger | None" = None,
+) -> dict:
+    """Compare per-layer outputs from two :func:`capture_layer_outputs` calls.
+
+    Args:
+        before: Outputs captured in calibration/FlatQuant mode.
+        after:  Outputs captured in inference/ADC mode.
+        log:    Optional logger; if *None* the module-level logger is used.
+
+    Returns:
+        Nested dict ``{layer_idx: {part: {'mse': float, 'rel_error': float}}}``
+        where *part* is ``'mlp'`` or ``'attn'``.
+    """
+    if log is None:
+        log = logger
+
+    results: dict = {}
+    all_mse: list = []
+    all_rel: list = []
+
+    for i in sorted(before.keys()):
+        results[i] = {}
+        for part in ("mlp", "attn"):
+            b_dict = before.get(i, {})
+            a_dict = after.get(i, {})
+            if part not in b_dict or part not in a_dict:
+                continue
+            b = b_dict[part].float()
+            a = a_dict[part].float()
+            mse = float((b - a).pow(2).mean())
+            ref = float(b.pow(2).mean())
+            rel = mse / (ref + 1e-10)
+            results[i][part] = {"mse": mse, "rel_error": rel}
+            all_mse.append(mse)
+            all_rel.append(rel)
+            log.debug(f"  Layer {i:3d} {part}: MSE={mse:.4e}  rel={rel:.3%}")
+
+    if all_mse:
+        log.info(
+            "E3 Sanity Check — calibration vs inference mismatch:\n"
+            f"  Mean MSE:       {sum(all_mse) / len(all_mse):.4e}\n"
+            f"  Max  MSE:       {max(all_mse):.4e}\n"
+            f"  Mean rel error: {sum(all_rel) / len(all_rel):.3%}\n"
+            f"  Max  rel error: {max(all_rel):.3%}"
+        )
+    else:
+        log.warning("E3: no layer outputs were captured — check model wrapping")
+
+    return results
+
+
+# =========================================================================
+# Part 7 — Save / Load Transforms
 # =========================================================================
 
 def save_flat_transforms(model: nn.Module, path: str) -> None:

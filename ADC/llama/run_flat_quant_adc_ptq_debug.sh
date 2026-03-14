@@ -85,6 +85,7 @@ echo "  [1] FP16 baseline perplexity          (--check_baseline)"
 echo "  [2] FlatQuant preprocessing           (learnable transforms, MSE training)"
 echo "  [3] Quant+Tiling WITHOUT ADC          (--run_no_adc_eval)"
 echo "  [4] Full FlatQuant+ADC pipeline       (always)"
+echo "  [E3] Calib vs inference mismatch      (--run_e3_check)"
 echo "========================================"
 echo ""
 
@@ -119,7 +120,8 @@ CMD="python ADC/llama/runs/llama_smooth_quant_adc_ptq.py \
     --wandb_run_name \"$WANDB_RUN_NAME\" \
     --disable_visualizations \
     --check_baseline \
-    --run_no_adc_eval"
+    --run_no_adc_eval \
+    --run_e3_check"
 
 if [ -n "$STRIDE" ]; then
     CMD="$CMD --stride $STRIDE"
@@ -171,6 +173,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo "  baseline/perplexity             — FP16 (no quantization, no FlatQuant)"
     echo "  diagnostic/no_adc_perplexity    — FlatQuant + Quant + Tiling (no ADC)"
     echo "  final perplexity                — Full FlatQuant + ADC pipeline"
+    echo "  e3/mean_mse, e3/max_rel_error   — Calib vs inference per-layer mismatch"
 else
     echo "Debug FlatQuant + ADC PTQ Failed (exit code $EXIT_CODE)"
     echo "========================================"

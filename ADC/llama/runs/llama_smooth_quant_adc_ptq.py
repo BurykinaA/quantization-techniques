@@ -45,6 +45,8 @@ from ADC.llama.core.flat_quant import (
     strip_flatquant_wrappers,
     save_flat_transforms,
     load_flat_transforms,
+    capture_layer_outputs,
+    compare_layer_outputs,
 )
 
 import wandb
@@ -1250,6 +1252,9 @@ def main():
                         help="Run FP16 baseline perplexity BEFORE any changes")
     parser.add_argument("--run_no_adc_eval", action="store_true",
                         help="Run extra evaluation WITHOUT ADC to isolate quantization vs ADC error")
+    parser.add_argument("--run_e3_check", action="store_true",
+                        help="E3 sanity-check: compare per-layer outputs of calibration path vs "
+                             "inference path (after reparameterize + ADC conversion) on one sample")
 
     args = parser.parse_args()
     set_seed(args.seed)
@@ -1584,6 +1589,18 @@ def main():
                 if use_wandb:
                     wandb.run.summary["fq_transforms_path"] = transforms_path
 
+            # E3: capture calibration-path outputs BEFORE reparameterize
+            e3_calib_outputs = None
+            e3_sample = None
+            if args.run_e3_check:
+                logger.info("E3: capturing calibration-path layer outputs (before reparameterize)...")
+                e3_sample = {
+                    "input_ids": torch.randint(0, model.config.vocab_size, (1, 64)),
+                    "attention_mask": torch.ones(1, 64, dtype=torch.long),
+                }
+                e3_calib_outputs = capture_layer_outputs(model, e3_sample, device)
+                logger.info(f"E3: captured outputs for {len(e3_calib_outputs)} layers")
+
             logger.info("Reparameterizing FlatQuant transforms into weights...")
             model = fq_reparameterize_model(model)
 
@@ -1725,6 +1742,29 @@ def main():
             if hasattr(module, 'set_quantizer_mode'):
                 module.set_quantizer_mode('fixed')
     logger.info("Quantizers set to 'fixed' mode after calibration")
+
+    # E3: capture inference-path outputs and compare with calibration-path
+    if args.run_e3_check and e3_calib_outputs is not None and e3_sample is not None:
+        logger.info("=" * 80)
+        logger.info("E3 SANITY CHECK: calibration path vs inference path")
+        logger.info("=" * 80)
+        e3_inf_outputs = capture_layer_outputs(model, e3_sample, device)
+        e3_results = compare_layer_outputs(e3_calib_outputs, e3_inf_outputs)
+        if use_wandb:
+            flat = {}
+            for layer_idx, parts in e3_results.items():
+                for part, stats in parts.items():
+                    flat[f"e3/{layer_idx}/{part}/mse"] = stats["mse"]
+                    flat[f"e3/{layer_idx}/{part}/rel_error"] = stats["rel_error"]
+            if flat:
+                all_mse = [v for k, v in flat.items() if k.endswith("/mse")]
+                all_rel = [v for k, v in flat.items() if k.endswith("/rel_error")]
+                flat["e3/mean_mse"] = sum(all_mse) / len(all_mse)
+                flat["e3/max_mse"] = max(all_mse)
+                flat["e3/mean_rel_error"] = sum(all_rel) / len(all_rel)
+                flat["e3/max_rel_error"] = max(all_rel)
+                wandb.log(flat)
+        logger.info("=" * 80)
 
     # Run diagnostics
     diag = diagnose_quantized_model(model, tokenizer, device)
