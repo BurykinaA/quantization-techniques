@@ -1292,15 +1292,23 @@ def capture_layer_outputs(
                 outputs[idx]["attn"] = tensor.detach().cpu()
             hooks.append(layer.self_attn.register_forward_hook(_attn_hook))
 
+    # Use the device the model's embedding table actually lives on —
+    # after FlatQuant layer-by-layer calibration the model may still be on CPU
+    # even if `device` is cuda.
+    try:
+        actual_device = next(model.parameters()).device
+    except StopIteration:
+        actual_device = device
+
     was_training = model.training
     model.eval()
     try:
         with torch.no_grad():
-            input_ids = sample_input["input_ids"].to(device)
+            input_ids = sample_input["input_ids"].to(actual_device)
             attn_mask = sample_input.get("attention_mask")
             kwargs = {}
             if attn_mask is not None:
-                kwargs["attention_mask"] = attn_mask.to(device)
+                kwargs["attention_mask"] = attn_mask.to(actual_device)
             model(input_ids=input_ids, **kwargs)
     finally:
         for h in hooks:
