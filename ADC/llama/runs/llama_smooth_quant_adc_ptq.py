@@ -748,6 +748,190 @@ def diagnose_quantized_model(model, tokenizer, device, num_layers_to_print: int 
 
 
 # =========================================================================
+# ADC Layer Diagnostics
+# =========================================================================
+
+def collect_adc_layer_diagnostics(
+    model: nn.Module,
+    dataloader,
+    num_batches: int,
+    device: torch.device,
+) -> dict:
+    """Collect per-tile ADC quantization diagnostics over *num_batches* batches.
+
+    Metrics per ``QATLinearADC`` tile
+    ----------------------------------
+    dead_rate            fraction of outputs where floor(y_int/Δ) == 0
+                         (positive y_int < Δ → ADC sees nothing)
+    clip_rate            fraction clipped by ADC clamp(na, pa)
+    std_z                std of z = y_int / Δ  (1.0 = one ADC step on average)
+    mean_z               mean of z
+    bin_usage            fraction of 2^ba ADC bins actually used
+    act_sat_rate         fraction of activation codes at ±qmax
+    w_sat_rate           fraction of weight codes at ±qmax (static, from weights)
+    reconstruction_mse   MSE(y_quantized, y_fp16) per tile element
+    reconstruction_rel   reconstruction_mse / mean(y_fp16²)
+    """
+    tile_stats: dict = {}
+    hooks: list = []
+
+    def _make_hook(tile_name: str):
+        def _hook(module, inp, output):
+            x = inp[0].detach().float()
+            w = module.weight.detach().float()
+
+            # FP reference output (no quantization)
+            with torch.no_grad():
+                bias = module.bias.float() if module.bias is not None else None
+                y_fp = F.linear(x, w, bias)
+
+            # Recompute activation codes (per-token dynamic scale)
+            act_q = module.activation_quantizer
+            act_levels = float(act_q.qmax)
+            s_x = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
+            code_x = torch.round(x / s_x).clamp(act_q.qmin, act_q.qmax)
+
+            # Recompute weight codes
+            w_q = module.weight_quantizer
+            s_w = w_q.scale.detach().float().view(-1, 1)
+            code_w = torch.round(w / s_w).clamp(w_q.qmin, w_q.qmax)
+
+            # Integer MVM
+            dev_type = "cuda" if x.is_cuda else "cpu"
+            with torch.amp.autocast(dev_type, enabled=False):
+                y_int = F.linear(code_x.float(), code_w.float())
+
+            delta = float(module.delta)
+            na, pa = int(module.na), int(module.pa)
+            z = y_int / delta
+            adc_codes = z.floor().long().clamp(na, pa)
+
+            n = y_int.numel()
+            dead = int((adc_codes == 0).sum())
+            clipped = int(((z.floor() < na) | (z.floor() > pa)).sum())
+            z_flat = z.reshape(-1)
+
+            y_q = output.detach().float()
+            diff = y_q - y_fp
+
+            if tile_name not in tile_stats:
+                tile_stats[tile_name] = {
+                    "dead": 0, "clip": 0, "total": 0,
+                    "z_sum": 0.0, "z_sq_sum": 0.0,
+                    "diff_sq_sum": 0.0, "fp_sq_sum": 0.0,
+                    "act_sat": 0, "act_n": 0,
+                    "bins": set(),
+                    "na": na, "pa": pa,
+                }
+            s = tile_stats[tile_name]
+            s["dead"] += dead
+            s["clip"] += clipped
+            s["total"] += n
+            s["z_sum"] += float(z_flat.sum())
+            s["z_sq_sum"] += float((z_flat ** 2).sum())
+            s["diff_sq_sum"] += float((diff ** 2).sum())
+            s["fp_sq_sum"] += float((y_fp ** 2).sum())
+            s["act_sat"] += int((code_x.abs() == act_levels).sum())
+            s["act_n"] += code_x.numel()
+            s["bins"].update(adc_codes.unique().tolist())
+        return _hook
+
+    for name, module in model.named_modules():
+        if isinstance(module, QATLinearADC):
+            hooks.append(module.register_forward_hook(_make_hook(name)))
+
+    # Weight saturation (static — computed once from current weights)
+    w_sat: dict = {}
+    for name, module in model.named_modules():
+        if isinstance(module, QATLinearADC):
+            w = module.weight.detach().float()
+            s_w = module.weight_quantizer.scale.detach().float().view(-1, 1)
+            code_w = torch.round(w / s_w).clamp(
+                module.weight_quantizer.qmin, module.weight_quantizer.qmax
+            )
+            w_sat[name] = float((code_w.abs() == float(module.weight_quantizer.qmax)).float().mean())
+
+    model.eval()
+    with torch.no_grad():
+        for i, batch in enumerate(dataloader):
+            if i >= num_batches:
+                break
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                     for k, v in batch.items()}
+            try:
+                model(**batch)
+            except Exception as e:
+                logger.warning(f"ADC diagnostics batch {i}: {e}")
+
+    for h in hooks:
+        h.remove()
+
+    # Aggregate per-tile stats
+    results: dict = {}
+    for name, s in tile_stats.items():
+        n = max(s["total"], 1)
+        mean_z = s["z_sum"] / n
+        var_z = max(s["z_sq_sum"] / n - mean_z ** 2, 0.0)
+        n_bins = s["pa"] - s["na"] + 1
+        fp_sq = max(s["fp_sq_sum"], 1e-10)
+        results[name] = {
+            "dead_rate":           s["dead"] / n,
+            "clip_rate":           s["clip"] / n,
+            "std_z":               var_z ** 0.5,
+            "mean_z":              mean_z,
+            "bin_usage":           len(s["bins"]) / n_bins,
+            "act_sat_rate":        s["act_sat"] / max(s["act_n"], 1),
+            "w_sat_rate":          w_sat.get(name, 0.0),
+            "reconstruction_mse":  s["diff_sq_sum"] / n,
+            "reconstruction_rel":  s["diff_sq_sum"] / fp_sq,
+        }
+    return results
+
+
+def log_adc_diagnostics(results: dict, use_wandb: bool = False) -> None:
+    """Log aggregated ADC diagnostics to logger and optionally to WandB."""
+    if not results:
+        logger.warning("ADC diagnostics: no results collected")
+        return
+
+    metrics = [
+        "dead_rate", "clip_rate", "std_z", "mean_z",
+        "bin_usage", "act_sat_rate", "w_sat_rate",
+        "reconstruction_mse", "reconstruction_rel",
+    ]
+
+    agg: dict = {}
+    for m in metrics:
+        vals = [r[m] for r in results.values() if m in r]
+        if not vals:
+            continue
+        agg[m] = {"mean": float(np.mean(vals)), "max": float(np.max(vals)),
+                  "min": float(np.min(vals)), "vals": vals}
+
+    logger.info("=" * 80)
+    logger.info("ADC LAYER DIAGNOSTICS")
+    logger.info("=" * 80)
+    for m, a in agg.items():
+        logger.info(f"  {m:25s}  mean={a['mean']:.4f}  max={a['max']:.4f}  min={a['min']:.4f}")
+
+    # Worst 3 layers by dead_rate and reconstruction_rel
+    for sort_key in ("dead_rate", "reconstruction_rel"):
+        ranked = sorted(results.items(), key=lambda x: x[1].get(sort_key, 0), reverse=True)[:3]
+        logger.info(f"  Top-3 by {sort_key}:")
+        for name, r in ranked:
+            logger.info(f"    {name}: {r.get(sort_key, 0):.4f}")
+    logger.info("=" * 80)
+
+    if use_wandb and wandb.run is not None:
+        log_dict: dict = {}
+        for m, a in agg.items():
+            log_dict[f"adc_diag/mean_{m}"] = a["mean"]
+            log_dict[f"adc_diag/max_{m}"] = a["max"]
+            log_dict[f"adc_diag/{m}_hist"] = wandb.Histogram(a["vals"])
+        wandb.log(log_dict)
+
+
+# =========================================================================
 # SmoothQuant 3D Visualization
 # =========================================================================
 
@@ -1782,6 +1966,14 @@ def main():
 
     if diag["n_default_act"] > 0:
         logger.warning(f"{diag['n_default_act']} layers have uncalibrated activation scales!")
+
+    # ADC layer diagnostics (always runs)
+    logger.info("Collecting ADC layer diagnostics...")
+    adc_diag_batches = min(32, args.num_calibration_batches)
+    adc_diag_results = collect_adc_layer_diagnostics(
+        model, calibration_loader, adc_diag_batches, device
+    )
+    log_adc_diagnostics(adc_diag_results, use_wandb=use_wandb)
 
     # Visualize AFTER calibration
     viz_after = None
