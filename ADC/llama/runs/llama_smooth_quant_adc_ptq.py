@@ -1551,7 +1551,7 @@ def main():
                 add_diag=args.fq_add_diag,
                 lwc=args.fq_lwc,
                 lac=args.fq_lac,
-                adc_config=fq_adc_config,
+                adc_config=None,  # Use simple INT8 during training; ADC is added later by replace_linear_with_adc
             )
 
             if args.fq_reload_path:

@@ -303,36 +303,26 @@ class QATLinearADC(nn.Linear):
         input_dtype = x.dtype
         x = x.float()
 
-        # 1) Build activation codes (per-tensor quantizer)
+        # 1) Build activation codes — dynamic per-token scale, matching
+        #    FlatQuantLinear._train_forward_adc which the Kronecker transforms
+        #    were trained against.  activation_quantizer.scale (per-tensor,
+        #    calibrated in STEP 2) is intentionally NOT used for the forward
+        #    computation; it is still calibrated so that calibration diagnostics
+        #    remain valid.
         act_q = self.activation_quantizer
-        s_x = act_q.scale
-        
-        if act_q.symmetric:
-            # Signed path (no A-shift): symmetric quantization
-            # Use safe_divide for gradient clipping, round_ste for STE
-            code_x = round_ste(safe_divide(x, s_x))
-            qmin_x, qmax_x = act_q.qmin, act_q.qmax
-            code_x = torch.clamp(code_x, qmin_x, qmax_x)
-        else:
-            # Unsigned path: quantize to [0, 2^bx - 1] using zero_point offset
-            zp_x = act_q.zero_point
-            # Use safe_divide for gradient clipping, round_ste for STE
-            code_x_temp = round_ste(safe_divide(x, s_x) + zp_x)
-            code_x_temp = torch.clamp(code_x_temp, 0, act_q.qmax)
-            
-            if self.ashift:
-                # A-shift: subtract fixed C instead of learned zp_x
-                code_x = code_x_temp - self.C
-            else:
-                # Standard asymmetric: subtract learned zero_point to center
-                code_x = code_x_temp - zp_x
+        qmin_x, qmax_x = act_q.qmin, act_q.qmax
+        act_levels = float(qmax_x)  # 127 (signed) or 255 (unsigned)
+
+        # amax over the feature dimension → one scale per token [B, 1]
+        s_x = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
+        code_x = round_ste(x / s_x).clamp(qmin_x, qmax_x)
 
         # 2) Build weight codes (per-channel symmetric, channel_dim=0)
         w_q = self.weight_quantizer
         s_w_vec = w_q.scale  # Use original scale (gradient clipping happens in safe_divide)
         # Broadcast scales to weight shape for division
         s_w_b = s_w_vec.view(-1, 1)
-        
+
         # Use safe_divide for gradient clipping, round_ste for STE
         code_w = round_ste(safe_divide(self.weight, s_w_b))
         qmin_w, qmax_w = w_q.qmin, w_q.qmax
@@ -361,27 +351,8 @@ class QATLinearADC(nn.Linear):
         else:
             self._last_kurtosis_loss = torch.tensor(0.0, device=adc_output.device, dtype=adc_output.dtype)
 
-        # 5) Dequantize back to real domain
-        # y_real = adc_output * s_x * s_w (per out channel)
-        y_real = adc_output * s_x
-        y_real = y_real * s_w_vec  # broadcast over out_features
-
-        # Corrections for asymmetric quantization
-        if not act_q.symmetric:
-            # For asymmetric, we quantized with +zp_x but subtracted different offsets
-            # This leaves a residual offset: (zp_x - offset) that must be corrected
-            wq_sum = code_w.sum(dim=1)  # shape: (out_features,)
-            
-            if self.ashift:
-                # A-shift: we subtracted C, so residual is (zp_x - C)
-                # Correction: subtract zp_x contribution, add back C contribution
-                zp_x = act_q.zero_point
-                y_real = y_real - (zp_x * s_x) * (s_w_vec * wq_sum)  # remove zp offset
-                y_real = y_real + (self.C * s_x) * (s_w_vec * wq_sum)  # add back C offset
-            else:
-                # Standard asymmetric: we subtracted zp_x, so residual is (zp_x - zp_x) = 0
-                # No correction needed - the offsets cancel perfectly
-                pass
+        # 4) Dequantize: s_x [B,1] * s_w_vec [out] → [B, out]
+        y_real = adc_output * s_x * s_w_vec
 
         if self.bias is not None:
             y_real = y_real + self.bias
