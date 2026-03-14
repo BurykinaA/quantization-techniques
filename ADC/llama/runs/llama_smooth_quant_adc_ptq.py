@@ -1595,8 +1595,8 @@ def main():
             if args.run_e3_check:
                 logger.info("E3: capturing calibration-path layer outputs (before reparameterize)...")
                 e3_sample = {
-                    "input_ids": torch.randint(0, model.config.vocab_size, (1, 64)),
-                    "attention_mask": torch.ones(1, 64, dtype=torch.long),
+                    "input_ids": torch.randint(0, model.config.vocab_size, (1, 64), device=device),
+                    "attention_mask": torch.ones(1, 64, dtype=torch.long, device=device),
                 }
                 e3_calib_outputs = capture_layer_outputs(model, e3_sample, device)
                 logger.info(f"E3: captured outputs for {len(e3_calib_outputs)} layers")
