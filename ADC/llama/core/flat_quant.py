@@ -387,7 +387,7 @@ class FlatQuantLinear(nn.Module):
         self.w_quantizer.find_params(weight)
         weight = self.w_quantizer(weight)
         x = self.a_quantizer(x)
-        return F.linear(x, weight, self.linear.bias)
+        return F.linear(x, weight.to(x.dtype), self.linear.bias)
 
     def _train_forward_adc(
         self,
