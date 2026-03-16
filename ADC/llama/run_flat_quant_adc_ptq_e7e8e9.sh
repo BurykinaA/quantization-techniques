@@ -94,7 +94,8 @@ FQ_LAMBDA_CLIP=0.0
 FQ_LAMBDA_DEAD=0.0
 FQ_CLIP_MARGIN=1.0
 FQ_DEAD_THRESHOLD=1.0
-FQ_PENALTY_PROJECTIONS="o_proj down_proj"
+# FQ_PENALTY_PROJECTIONS="o_proj down_proj"
+FQ_PENALTY_PROJECTIONS="o_proj down_proj q_proj k_proj v_proj gate_proj up_proj"
 
 # Resolve intensity → lambda_dead + dead_threshold (used by e8/e9)
 case "$INTENSITY" in
@@ -147,9 +148,9 @@ esac
 # Build run name (mirrors Python default_run_name logic)
 MODEL_SHORT_NAME=$(echo $MODEL_NAME | sed 's/.*\///')
 if [[ "$EXPERIMENT" == "e8" || "$EXPERIMENT" == "e9" ]]; then
-    WANDB_RUN_NAME="fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}_tau${FQ_DEAD_THRESHOLD}_${INTENSITY}"
+    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}_tau${FQ_DEAD_THRESHOLD}_${INTENSITY}"
 else
-    WANDB_RUN_NAME="fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}"
+    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}"
 fi
 
 echo "========================================"
