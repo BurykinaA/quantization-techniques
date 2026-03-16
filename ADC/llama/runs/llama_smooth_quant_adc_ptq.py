@@ -748,6 +748,68 @@ def diagnose_quantized_model(model, tokenizer, device, num_layers_to_print: int 
 
 
 # =========================================================================
+# Latency Measurement
+# =========================================================================
+
+def measure_latency(
+    model: nn.Module,
+    input_ids: torch.Tensor,
+    n_warmup: int = 5,
+    n_runs: int = 20,
+) -> dict:
+    """Measure forward-pass latency in milliseconds.
+
+    Uses CUDA events on GPU (accurate, accounts for async kernel launch),
+    falls back to ``time.perf_counter`` on CPU.
+
+    Returns mean, std, p50, p95 latency in ms, plus tokens/sec throughput.
+    """
+    import time
+
+    device = input_ids.device
+    use_cuda = device.type == "cuda"
+    seq_len = input_ids.shape[1]
+    batch_size = input_ids.shape[0]
+    n_tokens = batch_size * seq_len
+
+    model.eval()
+    with torch.no_grad():
+        # Warmup
+        for _ in range(n_warmup):
+            _ = model(input_ids=input_ids)
+        if use_cuda:
+            torch.cuda.synchronize(device)
+
+        # Timed runs
+        latencies_ms = []
+        for _ in range(n_runs):
+            if use_cuda:
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
+                start.record()
+                _ = model(input_ids=input_ids)
+                end.record()
+                torch.cuda.synchronize(device)
+                latencies_ms.append(start.elapsed_time(end))
+            else:
+                t0 = time.perf_counter()
+                _ = model(input_ids=input_ids)
+                latencies_ms.append((time.perf_counter() - t0) * 1000.0)
+
+    arr = np.array(latencies_ms)
+    mean_ms = float(arr.mean())
+    return {
+        "latency_mean_ms":   mean_ms,
+        "latency_std_ms":    float(arr.std()),
+        "latency_p50_ms":    float(np.percentile(arr, 50)),
+        "latency_p95_ms":    float(np.percentile(arr, 95)),
+        "throughput_tok_s":  float(n_tokens / (mean_ms / 1000.0)),
+        "batch_size":        batch_size,
+        "seq_len":           seq_len,
+    }
+
+
+# =========================================================================
 # ADC Layer Diagnostics
 # =========================================================================
 
@@ -1974,6 +2036,21 @@ def main():
         model, calibration_loader, adc_diag_batches, device
     )
     log_adc_diagnostics(adc_diag_results, use_wandb=use_wandb)
+
+    # Latency measurement
+    logger.info("Measuring forward-pass latency...")
+    _lat_ids = torch.randint(
+        0, model.config.vocab_size, (1, min(512, args.calibration_max_length)), device=device
+    )
+    lat = measure_latency(model, _lat_ids, n_warmup=5, n_runs=20)
+    logger.info(
+        f"Latency (bs=1, seq={lat['seq_len']}):  "
+        f"mean={lat['latency_mean_ms']:.1f}ms  "
+        f"p95={lat['latency_p95_ms']:.1f}ms  "
+        f"throughput={lat['throughput_tok_s']:.0f} tok/s"
+    )
+    if use_wandb:
+        wandb.log({f"latency/{k}": v for k, v in lat.items()})
 
     # Visualize AFTER calibration
     viz_after = None
