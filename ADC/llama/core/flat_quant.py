@@ -333,8 +333,17 @@ class FlatQuantLinear(nn.Module):
         self.w_quantizer = _WeightQuantizer(bits=w_bits)
         self.a_quantizer = _ActivationQuantizer(bits=a_bits, lac=lac)
         self.lwc = lwc
-        self._adc_config = adc_config
+        self._adc_config = dict(adc_config) if adc_config is not None else None
         self._reparameterized = False  # set True after reparameterize(); skips weight transform
+        # Penalty attrs — training-only, not part of adc_config
+        self._penalty_lambda_clip    = 0.0
+        self._penalty_lambda_dead    = 0.0
+        self._penalty_clip_margin    = 1.0
+        self._penalty_dead_threshold = 1.0
+        self._penalty_enabled        = False
+        # Last computed penalties (mean over tiles, set during forward)
+        self._last_clip_penalty: torch.Tensor | None = None
+        self._last_dead_penalty: torch.Tensor | None = None
         if lwc:
             out_features = linear.weight.shape[0]
             self.clip_factor_w_max = nn.Parameter(
@@ -454,6 +463,11 @@ class FlatQuantLinear(nn.Module):
             device=x2d.device, dtype=x2d.dtype,
         )
 
+        # Penalty accumulators — initialised on the same device as x
+        clip_acc = x2d.new_zeros(()).float()
+        dead_acc = x2d.new_zeros(()).float()
+        n_tiles_eff = 0
+
         for i in range(n_tiles):
             xi = x2d[:, i * tile_in:(i + 1) * tile_in]     # [B, tile_in]
             wi = w_f32[:, i * tile_in:(i + 1) * tile_in]   # [out, tile_in]
@@ -474,8 +488,19 @@ class FlatQuantLinear(nn.Module):
                 y_int = F.linear(code_xi.float(), code_wi.float())       # [B, out], float32
             y_adc  = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
 
+            # Accumulate clip / dead-zone penalties (only when enabled)
+            if self._penalty_enabled:
+                z = y_int / delta   # normalised ADC input, same shape as y_int
+                clip_acc = clip_acc + F.relu(z.abs() - (float(pa) - self._penalty_clip_margin)).pow(2).mean()
+                dead_acc = dead_acc + F.relu(self._penalty_dead_threshold - z.abs()).mean()
+                n_tiles_eff += 1
+
             # Dequantize: s_xi [B,1] × s_wi.T [out] → [B, out]
             y2d = y2d + y_adc * s_xi * s_wi.squeeze(1)
+
+        # Store per-tile mean penalties for the training loop
+        self._last_clip_penalty = clip_acc / max(n_tiles_eff, 1)
+        self._last_dead_penalty = dead_acc / max(n_tiles_eff, 1)
 
         y = y2d.reshape(*orig_shape[:-1], self.linear.out_features)
         if self.linear.bias is not None:
@@ -875,6 +900,11 @@ def calibrate_flat_quant(
     add_diag: bool = True,
     lwc: bool = True,
     lac: bool = True,
+    lambda_clip: float = 0.0,
+    lambda_dead: float = 0.0,
+    clip_margin: float = 1.0,
+    dead_threshold: float = 1.0,
+    penalty_projections: list[str] | None = None,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1083,6 +1113,17 @@ def calibrate_flat_quant(
                 "lr": flat_lr * 10,
             })
 
+        # Inject penalty attrs — separate from adc_config, not mutating shared dict
+        _penalty_projs = penalty_projections or ["o_proj", "down_proj"]
+        for _name, _m in layer.named_modules():
+            if isinstance(_m, FlatQuantLinear) and _m._adc_config is not None:
+                _is_target = any(p in _name for p in _penalty_projs)
+                _m._penalty_enabled       = _is_target and (lambda_clip > 0.0 or lambda_dead > 0.0)
+                _m._penalty_lambda_clip   = lambda_clip
+                _m._penalty_lambda_dead   = lambda_dead
+                _m._penalty_clip_margin   = clip_margin
+                _m._penalty_dead_threshold = dead_threshold
+
         optimizer = torch.optim.AdamW(trained_params)
         total_steps = epochs * (actual_nsamples // cali_bsz)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -1124,6 +1165,20 @@ def calibrate_flat_quant(
                     out = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
                     quant_out = out[0] if isinstance(out, tuple) else out
                     loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
+                    if lambda_clip > 0.0 or lambda_dead > 0.0:
+                        _clip_acc = loss.new_zeros(())
+                        _dead_acc = loss.new_zeros(())
+                        _n_pen = 0
+                        for _, _m in layer.named_modules():
+                            if (isinstance(_m, FlatQuantLinear)
+                                    and _m._penalty_enabled
+                                    and _m._last_clip_penalty is not None):
+                                _clip_acc = _clip_acc + _m._last_clip_penalty.to(loss.device)
+                                _dead_acc = _dead_acc + _m._last_dead_penalty.to(loss.device)
+                                _n_pen += 1
+                        if _n_pen > 0:
+                            loss = loss + lambda_clip * _clip_acc / _n_pen \
+                                       + lambda_dead * _dead_acc / _n_pen
                 if torch.isnan(loss) or torch.isinf(loss):
                     nan_count += 1
                     batch_bar.set_postfix(loss="NaN", nan=nan_count)
@@ -1194,11 +1249,16 @@ def calibrate_flat_quant(
                         elif "diag_scale" in name:
                             param.data.clamp_(min=1e-4, max=10.0)
                 scheduler.step()
-                batch_bar.set_postfix(
+                _pf: dict = dict(
                     loss=f"{loss.item():.3e}",
                     mse=f"{epoch_mse / (j + 1 - nan_count):.3e}" if (j + 1 - nan_count) > 0 else "N/A",
                     nan=nan_count,
                 )
+                if lambda_clip > 0.0 or lambda_dead > 0.0:
+                    if _n_pen > 0:
+                        _pf["clip"] = f"{(_clip_acc / _n_pen).item():.3e}"
+                        _pf["dead"] = f"{(_dead_acc / _n_pen).item():.3e}"
+                batch_bar.set_postfix(**_pf)
             lr = optimizer.param_groups[0]["lr"]
             ok = n_batches - nan_count
             epoch_bar.set_postfix(lr=f"{lr:.2e}", mse=f"{epoch_mse:.3e}", ok=f"{ok}/{n_batches}")

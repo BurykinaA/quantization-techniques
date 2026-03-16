@@ -1442,6 +1442,17 @@ def main():
                         help="Enable learnable activation clipping")
     parser.add_argument("--fq_no_lac", dest="fq_lac", action="store_false",
                         help="Disable learnable activation clipping")
+    parser.add_argument("--fq_lambda_clip", type=float, default=0.0,
+                        help="Penalty weight for ADC clip loss (E7/E9)")
+    parser.add_argument("--fq_lambda_dead", type=float, default=0.0,
+                        help="Penalty weight for ADC dead-zone loss (E8/E9)")
+    parser.add_argument("--fq_clip_margin", type=float, default=1.0,
+                        help="Clip margin m: penalise |z| > pa - m")
+    parser.add_argument("--fq_dead_threshold", type=float, default=1.0,
+                        help="Dead-zone threshold τ: penalise |z| < τ")
+    parser.add_argument("--fq_penalty_projections", nargs="+",
+                        default=["o_proj", "down_proj"],
+                        help="Projection names to apply ADC penalties to")
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
     parser.add_argument("--fq_reload_path", type=str, default=None,
@@ -1554,6 +1565,7 @@ def main():
             default_run_name = (
                 f"fq_ptq_{model_short_name}_w{args.fq_w_bits}a{args.fq_a_bits}_e{args.fq_epochs}_"
                 f"bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}_{args.calibration_method}"
+                f"_lc{args.fq_lambda_clip}_ld{args.fq_lambda_dead}"
             )
         else:
             default_run_name = (
@@ -1826,6 +1838,11 @@ def main():
                     add_diag=args.fq_add_diag,
                     lwc=args.fq_lwc,
                     lac=args.fq_lac,
+                    lambda_clip=args.fq_lambda_clip,
+                    lambda_dead=args.fq_lambda_dead,
+                    clip_margin=args.fq_clip_margin,
+                    dead_threshold=args.fq_dead_threshold,
+                    penalty_projections=args.fq_penalty_projections,
                 )
 
             if args.fq_save_transforms:
