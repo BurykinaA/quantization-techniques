@@ -83,7 +83,7 @@ VISUALIZE_LAYERS="layers.0.self_attn.q_proj layers.0.mlp.down_proj layers.15.mlp
 # ============================================================
 # Other
 # ============================================================
-TORCH_DTYPE="float16"
+TORCH_DTYPE="float32"
 WANDB_PROJECT="llama-flat-quant-adc-ptq-blocks"
 SEED=42
 

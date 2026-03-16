@@ -1154,6 +1154,9 @@ def calibrate_flat_quant(
         epoch_bar = tqdm(range(epochs), desc=f"  L{i} epochs", unit="ep", leave=False)
         for epoch in epoch_bar:
             epoch_mse = 0.0
+            epoch_dead = 0.0
+            epoch_clip = 0.0
+            epoch_pen_count = 0
             nan_count = 0
             batch_bar = tqdm(range(n_batches), desc=f"    L{i} E{epoch} batches", unit="batch", leave=False)
             for j in batch_bar:
@@ -1179,6 +1182,9 @@ def calibrate_flat_quant(
                         if _n_pen > 0:
                             loss = loss + lambda_clip * _clip_acc / _n_pen \
                                        + lambda_dead * _dead_acc / _n_pen
+                            epoch_clip += (_clip_acc / _n_pen).item()
+                            epoch_dead += (_dead_acc / _n_pen).item()
+                            epoch_pen_count += 1
                 if torch.isnan(loss) or torch.isinf(loss):
                     nan_count += 1
                     batch_bar.set_postfix(loss="NaN", nan=nan_count)
@@ -1261,10 +1267,19 @@ def calibrate_flat_quant(
                 batch_bar.set_postfix(**_pf)
             lr = optimizer.param_groups[0]["lr"]
             ok = n_batches - nan_count
-            epoch_bar.set_postfix(lr=f"{lr:.2e}", mse=f"{epoch_mse:.3e}", ok=f"{ok}/{n_batches}")
+            _epf = dict(lr=f"{lr:.2e}", mse=f"{epoch_mse:.3e}", ok=f"{ok}/{n_batches}")
+            _log_extra = ""
+            if epoch_pen_count > 0:
+                _mean_dead = epoch_dead / epoch_pen_count
+                _mean_clip = epoch_clip / epoch_pen_count
+                _epf["dead"] = f"{_mean_dead:.3e}"
+                if lambda_clip > 0.0:
+                    _epf["clip"] = f"{_mean_clip:.3e}"
+                _log_extra = f", dead={_mean_dead:.4e}, clip={_mean_clip:.4e}"
+            epoch_bar.set_postfix(**_epf)
             logger.info(
                 f"  layer {i} epoch {epoch}, lr={lr:.8f}, "
-                f"mse={epoch_mse:.4e}, ok_batches={ok}/{n_batches}"
+                f"mse={epoch_mse:.4e}, ok_batches={ok}/{n_batches}{_log_extra}"
             )
         # Log diag parameter ranges to catch blow-up early
         for name, param in layer.named_parameters():
