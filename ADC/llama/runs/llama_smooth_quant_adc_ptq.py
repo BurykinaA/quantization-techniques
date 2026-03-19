@@ -876,14 +876,23 @@ def collect_adc_layer_diagnostics(
             y_q = output.detach().float()
             diff = y_q - y_fp
 
+            # Z-distribution buckets (by |z|)
+            abs_z = z_flat.abs()
+            z_b0 = int((abs_z < 1).sum())            # dead zone
+            z_b1 = int(((abs_z >= 1)   & (abs_z < 10)).sum())
+            z_b2 = int(((abs_z >= 10)  & (abs_z < 50)).sum())
+            z_b3 = int(((abs_z >= 50)  & (abs_z < 128)).sum())
+            z_b4 = int((abs_z >= 128).sum())          # clipping zone
+
             if tile_name not in tile_stats:
                 tile_stats[tile_name] = {
                     "dead": 0, "clip": 0, "total": 0,
-                    "z_sum": 0.0, "z_sq_sum": 0.0,
+                    "z_sum": 0.0, "z_sq_sum": 0.0, "z_quad_sum": 0.0,
                     "diff_sq_sum": 0.0, "fp_sq_sum": 0.0,
                     "act_sat": 0, "act_n": 0,
                     "bins": set(),
                     "na": na, "pa": pa,
+                    "zb0": 0, "zb1": 0, "zb2": 0, "zb3": 0, "zb4": 0,
                 }
             s = tile_stats[tile_name]
             s["dead"] += dead
@@ -891,11 +900,17 @@ def collect_adc_layer_diagnostics(
             s["total"] += n
             s["z_sum"] += float(z_flat.sum())
             s["z_sq_sum"] += float((z_flat ** 2).sum())
+            s["z_quad_sum"] += float((z_flat ** 4).sum())
             s["diff_sq_sum"] += float((diff ** 2).sum())
             s["fp_sq_sum"] += float((y_fp ** 2).sum())
             s["act_sat"] += int((code_x.abs() == act_levels).sum())
             s["act_n"] += code_x.numel()
             s["bins"].update(adc_codes.unique().tolist())
+            s["zb0"] += z_b0
+            s["zb1"] += z_b1
+            s["zb2"] += z_b2
+            s["zb3"] += z_b3
+            s["zb4"] += z_b4
         return _hook
 
     for name, module in model.named_modules():
@@ -946,6 +961,14 @@ def collect_adc_layer_diagnostics(
             "w_sat_rate":          w_sat.get(name, 0.0),
             "reconstruction_mse":  s["diff_sq_sum"] / n,
             "reconstruction_rel":  s["diff_sq_sum"] / fp_sq,
+            # Z distribution buckets (fraction of values in each |z| range)
+            "z_frac_dead":   s["zb0"] / n,               # |z| < 1   (ADC = 0)
+            "z_frac_low":    s["zb1"] / n,               # 1 ≤ |z| < 10
+            "z_frac_mid":    s["zb2"] / n,               # 10 ≤ |z| < 50
+            "z_frac_high":   s["zb3"] / n,               # 50 ≤ |z| < 128
+            "z_frac_clip":   s["zb4"] / n,               # |z| ≥ 128 (clipped)
+            # Excess kurtosis of z: 0 = normal, >0 = heavy-tailed peak at 0
+            "kurtosis_z":    (s["z_quad_sum"] / n) / max(var_z ** 2, 1e-10) - 3.0,
         }
     return results
 
@@ -960,6 +983,8 @@ def log_adc_diagnostics(results: dict, use_wandb: bool = False) -> None:
         "dead_rate", "clip_rate", "std_z", "mean_z",
         "bin_usage", "act_sat_rate", "w_sat_rate",
         "reconstruction_mse", "reconstruction_rel",
+        "kurtosis_z",
+        "z_frac_dead", "z_frac_low", "z_frac_mid", "z_frac_high", "z_frac_clip",
     ]
 
     agg: dict = {}
@@ -976,8 +1001,22 @@ def log_adc_diagnostics(results: dict, use_wandb: bool = False) -> None:
     for m, a in agg.items():
         logger.info(f"  {m:25s}  mean={a['mean']:.4f}  max={a['max']:.4f}  min={a['min']:.4f}")
 
+    # Z-distribution bucket summary (mean across all tiles)
+    if "z_frac_dead" in agg:
+        logger.info("  Z-distribution buckets (mean fraction across tiles):")
+        logger.info(f"    |z|<1   (dead):    {agg['z_frac_dead']['mean']:.3f}  ← ADC outputs 0")
+        logger.info(f"    1≤|z|<10 (low):   {agg['z_frac_low']['mean']:.3f}  ← coarse resolution")
+        logger.info(f"    10≤|z|<50 (mid):  {agg['z_frac_mid']['mean']:.3f}")
+        logger.info(f"    50≤|z|<128 (high):{agg['z_frac_high']['mean']:.3f}")
+        logger.info(f"    |z|≥128 (clip):   {agg['z_frac_clip']['mean']:.3f}")
+    if "kurtosis_z" in agg:
+        k = agg["kurtosis_z"]["mean"]
+        interp = "≈normal" if abs(k) < 1 else ("heavy-tailed peak at 0 → dead zones" if k > 0 else "flat")
+        logger.info(f"  Kurtosis z:  mean={k:.2f}  ({interp})")
+        logger.info(f"               max={agg['kurtosis_z']['max']:.2f}  min={agg['kurtosis_z']['min']:.2f}")
+
     # Worst 3 layers by dead_rate and reconstruction_rel
-    for sort_key in ("dead_rate", "reconstruction_rel"):
+    for sort_key in ("dead_rate", "reconstruction_rel", "kurtosis_z"):
         ranked = sorted(results.items(), key=lambda x: x[1].get(sort_key, 0), reverse=True)[:3]
         logger.info(f"  Top-3 by {sort_key}:")
         for name, r in ranked:
@@ -1406,7 +1445,7 @@ def _run_layer_ablation(model, tokenizer, device, args, use_wandb):
     logger.info("=" * 80)
     logger.info(f"LAYER ABLATION: bypass ADC one decoder layer at a time ({n_layers} layers, "
                 f"~{args.layer_ablation_max_windows} windows each)")
-    logger.info("Interpretation: lower PPL when layer i bypassed → layer i is a bottleneck")
+    logger.info("Interpretation: lower PPL when layer i bypassed → that layer hurts most in ADC mode")
     logger.info("=" * 80)
 
     results = {}
@@ -1439,15 +1478,92 @@ def _run_layer_ablation(model, tokenizer, device, args, use_wandb):
 
     best = min(results, key=lambda x: results[x])
     logger.info("=" * 80)
-    logger.info("LAYER ABLATION SUMMARY (sorted by PPL improvement)")
+    logger.info("LAYER ABLATION SUMMARY")
+    logger.info("  Sorted by PPL when bypassed (lower = bigger improvement = worse ADC layer):")
     for i in sorted(results, key=lambda x: results[x]):
-        logger.info(f"  Layer {i:2d}: PPL = {results[i]:.4f}")
-    logger.info(f"  → Biggest bottleneck: layer {best} (PPL={results[best]:.4f} when bypassed)")
+        improvement = 0.0  # baseline not tracked here, just show PPL
+        logger.info(f"  Layer {i:2d}: PPL = {results[i]:.4f} when bypassed")
+    logger.info(f"  → Worst ADC layer: layer {best} "
+                f"(PPL drops to {results[best]:.4f} when bypassed = biggest improvement)")
     logger.info("=" * 80)
 
     if use_wandb:
         wandb.log({"layer_ablation/best_layer": best,
                    "layer_ablation/best_layer_ppl": results[best]})
+    return results
+
+
+# =========================================================================
+# Projection-type ablation helper
+# =========================================================================
+
+_PROJ_TYPES = ["q_proj", "k_proj", "v_proj", "o_proj",
+               "gate_proj", "up_proj", "down_proj"]
+
+def _run_proj_ablation(model, tokenizer, device, args, use_wandb):
+    """
+    For each projection type (q_proj, k_proj, …, down_proj): bypass ADC in
+    ALL tiles of that type across all layers → eval perplexity → restore.
+    Shows which projection type contributes most to ADC error.
+    """
+    enc = load_and_tokenize_for_sliding_window(
+        args.eval_datasets[0], args.eval_split, tokenizer,
+    )
+    _eff_stride = args.stride if args.stride is not None else args.max_length // 2
+    _max_tokens = args.layer_ablation_max_windows * _eff_stride + args.max_length
+    if enc["input_ids"].size(1) > _max_tokens:
+        enc = {
+            "input_ids": enc["input_ids"][:, :_max_tokens],
+            "attention_mask": enc["attention_mask"][:, :_max_tokens],
+        }
+
+    logger.info("=" * 80)
+    logger.info("PROJECTION ABLATION: bypass ADC by projection type across all layers")
+    logger.info("Interpretation: lower PPL when proj X bypassed → that proj type hurts most in ADC mode")
+    logger.info("=" * 80)
+
+    results = {}
+    for proj in _PROJ_TYPES:
+        bypassed = []
+        for name, m in model.named_modules():
+            if isinstance(m, TiledLinearADC) and f".{proj}." in name:
+                m.set_bypass_all(True)
+                bypassed.append(name)
+
+        if not bypassed:
+            logger.info(f"  {proj:12s}: no tiles found, skipping")
+            continue
+
+        metrics = compute_perplexity_sliding_window(
+            model, enc, device,
+            max_length=args.max_length, stride=args.stride,
+            desc=f"Proj ablation [{proj}]",
+        )
+        ppl = metrics["perplexity"]
+        results[proj] = ppl
+        logger.info(f"  {proj:12s} bypassed ({len(bypassed):3d} tiles) → PPL = {ppl:.4f}")
+
+        if use_wandb:
+            wandb.log({f"proj_ablation/{proj}/perplexity": ppl,
+                       f"proj_ablation/{proj}/n_tiles": len(bypassed)})
+
+        for name, m in model.named_modules():
+            if isinstance(m, TiledLinearADC) and f".{proj}." in name:
+                m.set_bypass_all(False)
+
+    if results:
+        best = min(results, key=lambda x: results[x])
+        logger.info("=" * 80)
+        logger.info("PROJECTION ABLATION SUMMARY")
+        logger.info("  Sorted by PPL when bypassed (lower = bigger improvement = worse ADC proj):")
+        for p in sorted(results, key=lambda x: results[x]):
+            logger.info(f"  {p:12s}: PPL = {results[p]:.4f} when bypassed")
+        logger.info(f"  → Worst ADC proj: {best} "
+                    f"(PPL drops to {results[best]:.4f} when bypassed = biggest improvement)")
+        logger.info("=" * 80)
+        if use_wandb:
+            wandb.log({"proj_ablation/best_proj": best,
+                       "proj_ablation/best_proj_ppl": results[best]})
     return results
 
 
@@ -1620,6 +1736,10 @@ def main():
                              "and eval perplexity. Pinpoints which layer contributes most to ADC error.")
     parser.add_argument("--layer_ablation_max_windows", type=int, default=20,
                         help="Max sliding-window chunks per layer in ablation (default 20)")
+    parser.add_argument("--proj_ablation", action="store_true",
+                        help="Projection-type ablation: bypass ADC for each proj type "
+                             "(q/k/v/o/gate/up/down) across all layers. Shows which projection "
+                             "type is the bottleneck. Reuses layer_ablation_max_windows.")
 
     args = parser.parse_args()
     set_seed(args.seed)
@@ -2226,6 +2346,12 @@ def main():
     # =========================================================================
     if args.layer_ablation:
         _run_layer_ablation(model, tokenizer, device, args, use_wandb)
+
+    # =========================================================================
+    # Projection-type ablation (optional)
+    # =========================================================================
+    if args.proj_ablation:
+        _run_proj_ablation(model, tokenizer, device, args, use_wandb)
 
     # Visualize AFTER calibration
     viz_after = None

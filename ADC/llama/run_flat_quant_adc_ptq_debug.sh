@@ -163,7 +163,8 @@ CMD="python ADC/llama/runs/llama_smooth_quant_adc_ptq.py \
     --stage_eval_max_windows $STAGE_EVAL_MAX_WINDOWS \
     --run_no_adc_eval \
     --layer_ablation \
-    --layer_ablation_max_windows $LAYER_ABLATION_MAX_WINDOWS"
+    --layer_ablation_max_windows $LAYER_ABLATION_MAX_WINDOWS \
+    --proj_ablation"
 
 if [ -n "$STRIDE" ]; then
     CMD="$CMD --stride $STRIDE"
