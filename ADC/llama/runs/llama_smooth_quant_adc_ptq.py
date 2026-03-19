@@ -1383,6 +1383,75 @@ def _plot_adc_pipeline(data: dict, layer_name: str, title_prefix: str, filepath:
 
 
 # =========================================================================
+# Layer-by-layer ablation helper
+# =========================================================================
+
+def _run_layer_ablation(model, tokenizer, device, args, use_wandb):
+    """
+    For each decoder layer i: bypass ADC in that layer → eval perplexity → restore.
+    High perplexity improvement when bypassing layer i means that layer is the bottleneck.
+    """
+    enc = load_and_tokenize_for_sliding_window(
+        args.eval_datasets[0], args.eval_split, tokenizer,
+    )
+    _eff_stride = args.stride if args.stride is not None else args.max_length // 2
+    _max_tokens = args.layer_ablation_max_windows * _eff_stride + args.max_length
+    if enc["input_ids"].size(1) > _max_tokens:
+        enc = {
+            "input_ids": enc["input_ids"][:, :_max_tokens],
+            "attention_mask": enc["attention_mask"][:, :_max_tokens],
+        }
+
+    n_layers = model.config.num_hidden_layers
+    logger.info("=" * 80)
+    logger.info(f"LAYER ABLATION: bypass ADC one decoder layer at a time ({n_layers} layers, "
+                f"~{args.layer_ablation_max_windows} windows each)")
+    logger.info("Interpretation: lower PPL when layer i bypassed → layer i is a bottleneck")
+    logger.info("=" * 80)
+
+    results = {}
+    for i in range(n_layers):
+        pattern = f"layers.{i}."
+        bypassed = []
+        for name, m in model.named_modules():
+            if isinstance(m, TiledLinearADC) and pattern in name:
+                m.set_bypass_all(True)
+                bypassed.append(name)
+
+        metrics = compute_perplexity_sliding_window(
+            model, enc, device,
+            max_length=args.max_length, stride=args.stride,
+            desc=f"Ablation layer {i:2d}/{n_layers-1}",
+        )
+        ppl = metrics["perplexity"]
+        results[i] = ppl
+        logger.info(f"  Layer {i:2d} bypassed → PPL = {ppl:.4f}  ({len(bypassed)} tiles bypassed)")
+
+        if use_wandb:
+            wandb.log({
+                f"layer_ablation/layer_{i:02d}/perplexity": ppl,
+                f"layer_ablation/layer_{i:02d}/n_bypassed_tiles": len(bypassed),
+            })
+
+        for name, m in model.named_modules():
+            if isinstance(m, TiledLinearADC) and pattern in name:
+                m.set_bypass_all(False)
+
+    best = min(results, key=lambda x: results[x])
+    logger.info("=" * 80)
+    logger.info("LAYER ABLATION SUMMARY (sorted by PPL improvement)")
+    for i in sorted(results, key=lambda x: results[x]):
+        logger.info(f"  Layer {i:2d}: PPL = {results[i]:.4f}")
+    logger.info(f"  → Biggest bottleneck: layer {best} (PPL={results[best]:.4f} when bypassed)")
+    logger.info("=" * 80)
+
+    if use_wandb:
+        wandb.log({"layer_ablation/best_layer": best,
+                   "layer_ablation/best_layer_ppl": results[best]})
+    return results
+
+
+# =========================================================================
 # Stage-by-stage diagnostic helper
 # =========================================================================
 
@@ -1546,6 +1615,11 @@ def main():
                              "the pipeline degrades.")
     parser.add_argument("--stage_eval_max_windows", type=int, default=50,
                         help="Max sliding-window chunks for each stage_eval pass (default 50, ~fast)")
+    parser.add_argument("--layer_ablation", action="store_true",
+                        help="Layer-by-layer ablation: bypass ADC in one decoder layer at a time "
+                             "and eval perplexity. Pinpoints which layer contributes most to ADC error.")
+    parser.add_argument("--layer_ablation_max_windows", type=int, default=20,
+                        help="Max sliding-window chunks per layer in ablation (default 20)")
 
     args = parser.parse_args()
     set_seed(args.seed)
@@ -2146,6 +2220,12 @@ def main():
     )
     if use_wandb:
         wandb.log({f"latency/{k}": v for k, v in lat.items()})
+
+    # =========================================================================
+    # Layer-by-layer ablation (optional)
+    # =========================================================================
+    if args.layer_ablation:
+        _run_layer_ablation(model, tokenizer, device, args, use_wandb)
 
     # Visualize AFTER calibration
     viz_after = None

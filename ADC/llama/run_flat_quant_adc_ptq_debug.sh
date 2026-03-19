@@ -84,6 +84,12 @@ MAX_EVAL_SAMPLES=1000
 STAGE_EVAL_MAX_WINDOWS=50
 
 # ============================================================
+# Layer ablation: max windows per layer (16 layers × windows)
+# 20 windows × 16 layers ≈ 10-15 min extra
+# ============================================================
+LAYER_ABLATION_MAX_WINDOWS=20
+
+# ============================================================
 # Other
 # ============================================================
 TORCH_DTYPE="float32"
@@ -106,6 +112,7 @@ echo "  [B] Post-FQ-reparameterize (no ADC)   (--stage_eval)"
 echo "  [C] Post-ADC-replace, bypass=FP       (--stage_eval)"
 echo "  [D] Post-ADC-calibration              (main eval)"
 echo "  [+] Tiling+Quant WITHOUT ADC floor    (--run_no_adc_eval)"
+echo "  [L] Layer-by-layer ablation           (--layer_ablation, $LAYER_ABLATION_MAX_WINDOWS windows/layer)"
 echo ""
 echo "WandB metrics to compare:"
 echo "  baseline/perplexity"
@@ -154,7 +161,9 @@ CMD="python ADC/llama/runs/llama_smooth_quant_adc_ptq.py \
     --check_baseline \
     --stage_eval \
     --stage_eval_max_windows $STAGE_EVAL_MAX_WINDOWS \
-    --run_no_adc_eval"
+    --run_no_adc_eval \
+    --layer_ablation \
+    --layer_ablation_max_windows $LAYER_ABLATION_MAX_WINDOWS"
 
 if [ -n "$STRIDE" ]; then
     CMD="$CMD --stride $STRIDE"
@@ -205,11 +214,12 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo "Check WandB run: $WANDB_RUN_NAME"
     echo ""
     echo "Stage perplexity breakdown:"
-    echo "  [A] baseline/perplexity                             — FP (target)"
-    echo "  [B] stage_eval/B_post_fq_reparameterize/perplexity — after FlatQuant"
-    echo "  [C] stage_eval/C_post_adc_replace_bypass/perplexity— ADC structure (FP)"
-    echo "  [+] diagnostic/no_adc_perplexity                   — tiling+quant, no ADC"
-    echo "  [D] eval/wikitext2/perplexity                       — full pipeline"
+    echo "  [A] baseline/perplexity                              — FP (target)"
+    echo "  [B] stage_eval/B_post_fq_reparameterize/perplexity  — after FlatQuant"
+    echo "  [C] stage_eval/C_post_adc_replace_bypass/perplexity — ADC structure (FP)"
+    echo "  [+] diagnostic/no_adc_perplexity                    — tiling+quant, no ADC"
+    echo "  [D] eval/wikitext2/perplexity                        — full pipeline"
+    echo "  [L] layer_ablation/layer_XX/perplexity               — per-layer bottleneck"
     echo ""
     echo "Diagnosis guide:"
     echo "  A≈B          → FlatQuant OK"
