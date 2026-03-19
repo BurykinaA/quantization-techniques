@@ -1470,14 +1470,23 @@ def save_flat_transforms(model: nn.Module, path: str) -> None:
 
 def load_flat_transforms(model: nn.Module, path: str) -> nn.Module:
     """Load pre-trained FlatQuant transforms into an already-wrapped model."""
-    transforms = torch.load(path, map_location="cpu")
+    # Determine model device to place loaded tensors on the correct device
+    try:
+        _device = next(model.parameters()).device
+    except StopIteration:
+        _device = torch.device("cpu")
+
+    transforms = torch.load(path, map_location=_device)
     for i, state in transforms.items():
         layer = model.model.layers[i]
         if "attn_ln_trans" in state and isinstance(layer.self_attn, FlatQuantLlamaAttention):
             layer.self_attn.ln_trans.load_state_dict(state["attn_ln_trans"])
+            layer.self_attn.ln_trans.to(_device)
         if "mlp_up_gate_trans" in state and isinstance(layer.mlp, FlatQuantLlamaMLP):
             layer.mlp.up_gate_trans.load_state_dict(state["mlp_up_gate_trans"])
+            layer.mlp.up_gate_trans.to(_device)
         if "mlp_down_trans" in state:
             layer.mlp.down_trans.load_state_dict(state["mlp_down_trans"])
+            layer.mlp.down_trans.to(_device)
     logger.info(f"Loaded FlatQuant transforms from {path}")
     return model
