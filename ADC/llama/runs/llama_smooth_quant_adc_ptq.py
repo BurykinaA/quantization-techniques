@@ -2119,6 +2119,11 @@ def main():
                 e3_calib_outputs = capture_layer_outputs(model, e3_sample, device)
                 logger.info(f"E3: captured outputs for {len(e3_calib_outputs)} layers")
 
+            # Ensure all parameters (including FlatQuantLinear clip_factor_*) are on
+            # the correct device before reparameterize — especially needed when using
+            # --fq_reload_path, where layer-by-layer calibration never runs and
+            # model.to(device) above is gated on --run_e3_check / --stage_eval flags.
+            model = model.to(device)
             logger.info("Reparameterizing FlatQuant transforms into weights...")
             model = fq_reparameterize_model(model)
 
