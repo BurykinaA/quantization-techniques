@@ -1,36 +1,53 @@
 #!/bin/bash
-# FlatQuant + ADC PTQ Debug Script for LLaMA
+# FlatQuant + ADC PTQ — Stage-by-Stage Debug Script
 #
-# Runs extra diagnostics on top of the normal FlatQuant + ADC PTQ pipeline:
-#   1. FP16 baseline perplexity (before any changes)
-#   2. FlatQuant preprocessing (learnable transforms, layer-by-layer MSE training)
-#   3. Quantization + Tiling WITHOUT ADC (isolates quantization error)
-#   4. Full pipeline WITH ADC
+# Runs perplexity at every key pipeline stage to pinpoint where quality degrades:
 #
-# Reference: Sun et al., "FlatQuant: Flatness Matters for LLM Quantization", ICML 2025
-# Official: https://github.com/ruikangliu/FlatQuant
+#   [A] FP baseline                           (--check_baseline)
+#   [B] After FlatQuant reparameterize        (--stage_eval, stage B)
+#       FP model with trained transforms baked in, no ADC
+#       → if bad: FlatQuant training / reparameterization is broken
+#   [C] After replace_linear_with_adc         (--stage_eval, stage C)
+#       bypass_all=True → FP forward through ADC layer structure
+#       → should match B; divergence means ADC replacement breaks something
+#   [D] After ADC calibration                 (always, main eval)
+#       → final quantized result
+#   [+] Quant+Tiling WITHOUT ADC floor        (--run_no_adc_eval)
+#       → isolates ADC non-linearity from tiling/quant error
+#
+# Usage:
+#   bash ADC/llama/run_flat_quant_adc_ptq_debug.sh
+#   bash ADC/llama/run_flat_quant_adc_ptq_debug.sh --reload /path/to/transforms.pt
+#
+# Pass --reload <path> as first argument to skip FlatQuant training and reuse
+# a previously saved flat_quant_transforms.pt (much faster for ADC debugging).
+
+FQ_RELOAD_PATH="${2}"  # optional: pass transforms path as 2nd arg
+if [ "$1" = "--reload" ]; then
+    FQ_RELOAD_PATH="$2"
+fi
 
 # ============================================================
 # MODEL CONFIGURATION
 # ============================================================
 MODEL_NAME="meta-llama/Llama-3.2-1B"
-OUTPUT_DIR="./ADC/llama/checkpoints/outputs_llama_flat_quant_adc_ptq"
+OUTPUT_DIR="./ADC/llama/checkpoints/outputs_llama_flat_quant_adc_ptq_debug"
 
 # ============================================================
 # FlatQuant Configuration
+# (match production settings from e7e8e9 script)
 # ============================================================
 FQ_W_BITS=8
 FQ_A_BITS=8
-FQ_NSAMPLES=64
+FQ_NSAMPLES=128
 FQ_CALI_BSZ=16
-FQ_EPOCHS=15
+FQ_EPOCHS=30
 FQ_LR=0.005
 FQ_DIAG_ALPHA=0.5
-FQ_ADD_DIAG=true
+FQ_ADD_DIAG=false     # --fq_no_diag (best setting found)
 FQ_LWC=true
 FQ_LAC=true
 FQ_SAVE_TRANSFORMS=true
-FQ_RELOAD_PATH=""
 
 # ============================================================
 # ADC Hardware Configuration
@@ -38,7 +55,7 @@ FQ_RELOAD_PATH=""
 BX=8
 BW=8
 BA=8
-K=4
+K=16
 ASHIFT=false
 MVM_LIMIT=256
 
@@ -51,43 +68,58 @@ CALIBRATION_BATCH_SIZE=4
 CALIBRATION_MAX_LENGTH=512
 
 # ============================================================
-# Dataset Settings
+# Dataset / Evaluation Settings
 # ============================================================
 CALIBRATION_DATASET="wikitext2"
 EVAL_DATASETS="wikitext2"
-
-# ============================================================
-# Evaluation Settings
-# ============================================================
 MAX_LENGTH=2048
 STRIDE=""
 EVAL_SPLIT="test"
 MAX_EVAL_SAMPLES=1000
 
 # ============================================================
-# Other Settings
+# Stage eval: max windows per stage (smaller = faster)
+# 50 windows ≈ 50 * 1024 = 51k tokens, ~30 sec per stage
 # ============================================================
-TORCH_DTYPE="float16"
-WANDB_PROJECT="llama-flat-quant-adc-ptq"
+STAGE_EVAL_MAX_WINDOWS=50
+
+# ============================================================
+# Other
+# ============================================================
+TORCH_DTYPE="float32"
+WANDB_PROJECT="llama-flat-quant-adc-ptq-debug"
 MODEL_SHORT_NAME=$(echo $MODEL_NAME | sed 's/.*\///')
-WANDB_RUN_NAME="debug_fq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
+WANDB_RUN_NAME="debug_stage_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
 SEED=42
 
 echo "========================================"
-echo "LLaMA FlatQuant + ADC PTQ — DEBUG MODE"
+echo "LLaMA FlatQuant + ADC PTQ — STAGE DEBUG"
 echo "========================================"
 echo "Model:        $MODEL_NAME"
-echo "FlatQuant:    W${FQ_W_BITS}A${FQ_A_BITS}  epochs=${FQ_EPOCHS}  lr=${FQ_LR}  diag=${FQ_ADD_DIAG}  lwc=${FQ_LWC}  lac=${FQ_LAC}"
+echo "FlatQuant:    W${FQ_W_BITS}A${FQ_A_BITS}  epochs=${FQ_EPOCHS}  lr=${FQ_LR}"
+echo "              diag=${FQ_ADD_DIAG}  lwc=${FQ_LWC}  lac=${FQ_LAC}"
 echo "ADC Config:   BX=$BX  BW=$BW  BA=$BA  K=$K  MVM=$MVM_LIMIT"
 echo ""
-echo "Extra diagnostics enabled:"
-echo "  [1] FP16 baseline perplexity          (--check_baseline)"
-echo "  [2] FlatQuant preprocessing           (learnable transforms, MSE training)"
-echo "  [3] Quant+Tiling WITHOUT ADC          (--run_no_adc_eval)"
-echo "  [4] Full FlatQuant+ADC pipeline       (always)"
-echo "  [E3] Calib vs inference mismatch      (--run_e3_check)"
+echo "Stage evals enabled (max $STAGE_EVAL_MAX_WINDOWS windows each):"
+echo "  [A] FP baseline perplexity            (--check_baseline)"
+echo "  [B] Post-FQ-reparameterize (no ADC)   (--stage_eval)"
+echo "  [C] Post-ADC-replace, bypass=FP       (--stage_eval)"
+echo "  [D] Post-ADC-calibration              (main eval)"
+echo "  [+] Tiling+Quant WITHOUT ADC floor    (--run_no_adc_eval)"
+echo ""
+echo "WandB metrics to compare:"
+echo "  baseline/perplexity"
+echo "  stage_eval/B_post_fq_reparameterize/perplexity"
+echo "  stage_eval/C_post_adc_replace_bypass/perplexity"
+echo "  diagnostic/no_adc_perplexity"
+echo "  eval/wikitext2/perplexity"
 echo "========================================"
 echo ""
+if [ -n "$FQ_RELOAD_PATH" ]; then
+    echo "Reloading transforms from: $FQ_RELOAD_PATH"
+    echo "(FlatQuant training will be skipped)"
+    echo ""
+fi
 
 CMD="python ADC/llama/runs/llama_smooth_quant_adc_ptq.py \
     --model_name \"$MODEL_NAME\" \
@@ -120,8 +152,9 @@ CMD="python ADC/llama/runs/llama_smooth_quant_adc_ptq.py \
     --wandb_run_name \"$WANDB_RUN_NAME\" \
     --disable_visualizations \
     --check_baseline \
-    --run_no_adc_eval \
-    --run_e3_check"
+    --stage_eval \
+    --stage_eval_max_windows $STAGE_EVAL_MAX_WINDOWS \
+    --run_no_adc_eval"
 
 if [ -n "$STRIDE" ]; then
     CMD="$CMD --stride $STRIDE"
@@ -157,7 +190,7 @@ if [ -n "$FQ_RELOAD_PATH" ]; then
     CMD="$CMD --fq_reload_path \"$FQ_RELOAD_PATH\""
 fi
 
-echo "Running FlatQuant + ADC PTQ with diagnostics..."
+echo "Running stage-by-stage debug..."
 echo ""
 eval $CMD
 
@@ -166,16 +199,36 @@ EXIT_CODE=$?
 echo ""
 echo "========================================"
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "Debug FlatQuant + ADC PTQ Complete!"
+    echo "Stage Debug Complete!"
     echo "========================================"
     echo ""
-    echo "Check WandB for metrics comparison:"
-    echo "  baseline/perplexity             — FP16 (no quantization, no FlatQuant)"
-    echo "  diagnostic/no_adc_perplexity    — FlatQuant + Quant + Tiling (no ADC)"
-    echo "  final perplexity                — Full FlatQuant + ADC pipeline"
-    echo "  e3/mean_mse, e3/max_rel_error   — Calib vs inference per-layer mismatch"
+    echo "Check WandB run: $WANDB_RUN_NAME"
+    echo ""
+    echo "Stage perplexity breakdown:"
+    echo "  [A] baseline/perplexity                             — FP (target)"
+    echo "  [B] stage_eval/B_post_fq_reparameterize/perplexity — after FlatQuant"
+    echo "  [C] stage_eval/C_post_adc_replace_bypass/perplexity— ADC structure (FP)"
+    echo "  [+] diagnostic/no_adc_perplexity                   — tiling+quant, no ADC"
+    echo "  [D] eval/wikitext2/perplexity                       — full pipeline"
+    echo ""
+    echo "Diagnosis guide:"
+    echo "  A≈B          → FlatQuant OK"
+    echo "  B≈C          → ADC layer replacement transparent"
+    echo "  B>>C (B bad) → FlatQuant training or reparameterize broken"
+    echo "  C>>D (C bad) → ADC structure introduces overhead even in bypass"
+    echo "  D>>+         → ADC quantization (floor) is the main source of error"
+    echo "  +≈D          → tiling or quantization range wrong"
+    if [ -n "$OUTPUT_DIR" ]; then
+        echo ""
+        echo "Transforms saved to: $OUTPUT_DIR/flat_quant_transforms.pt"
+        echo "  Rerun faster:  bash run_flat_quant_adc_ptq_debug.sh --reload $OUTPUT_DIR/flat_quant_transforms.pt"
+    fi
 else
-    echo "Debug FlatQuant + ADC PTQ Failed (exit code $EXIT_CODE)"
+    echo "Stage Debug Failed (exit code $EXIT_CODE)"
     echo "========================================"
+    echo ""
+    echo "Common issues:"
+    echo "  - OOM: Reduce FQ_NSAMPLES, FQ_CALI_BSZ, or STAGE_EVAL_MAX_WINDOWS"
+    echo "  - Auth: Run 'huggingface-cli login' for gated models"
 fi
 echo "========================================"

@@ -1383,6 +1383,34 @@ def _plot_adc_pipeline(data: dict, layer_name: str, title_prefix: str, filepath:
 
 
 # =========================================================================
+# Stage-by-stage diagnostic helper
+# =========================================================================
+
+def _run_stage_eval(model, encodings, device, stage_name, args, use_wandb):
+    """Run a quick perplexity eval at one pipeline stage and log to WandB."""
+    logger.info("=" * 80)
+    logger.info(f"STAGE EVAL [{stage_name}]")
+    logger.info("=" * 80)
+    metrics = compute_perplexity_sliding_window(
+        model, encodings, device,
+        max_length=args.max_length, stride=args.stride,
+        desc=f"[{stage_name}]",
+    )
+    logger.info(
+        f"  [{stage_name}] Perplexity: {metrics['perplexity']:.4f}  "
+        f"(Loss: {metrics['avg_loss']:.4f}, Windows: {metrics['num_windows']})"
+    )
+    if use_wandb:
+        wandb.log({
+            f"stage_eval/{stage_name}/perplexity": metrics["perplexity"],
+            f"stage_eval/{stage_name}/avg_loss": metrics["avg_loss"],
+            f"stage_eval/{stage_name}/num_windows": metrics["num_windows"],
+        })
+    logger.info("=" * 80)
+    return metrics
+
+
+# =========================================================================
 # Main pipeline
 # =========================================================================
 
@@ -1512,6 +1540,12 @@ def main():
     parser.add_argument("--run_e3_check", action="store_true",
                         help="E3 sanity-check: compare per-layer outputs of calibration path vs "
                              "inference path (after reparameterize + ADC conversion) on one sample")
+    parser.add_argument("--stage_eval", action="store_true",
+                        help="Stage-by-stage perplexity: FP baseline → post-FQ-reparameterize → "
+                             "post-ADC-replace (bypass FP) → post-calibration. Pinpoints where "
+                             "the pipeline degrades.")
+    parser.add_argument("--stage_eval_max_windows", type=int, default=50,
+                        help="Max sliding-window chunks for each stage_eval pass (default 50, ~fast)")
 
     args = parser.parse_args()
     set_seed(args.seed)
@@ -1669,6 +1703,27 @@ def main():
             wandb.log({"baseline/perplexity": baseline_metrics["perplexity"],
                         "baseline/avg_loss": baseline_metrics["avg_loss"]})
         logger.info("=" * 80)
+
+    # =========================================================================
+    # Pre-load eval encodings for stage_eval (truncated to max_windows for speed)
+    # =========================================================================
+    stage_eval_enc = None
+    if args.stage_eval:
+        logger.info("Stage eval: pre-loading eval encodings...")
+        stage_eval_enc = load_and_tokenize_for_sliding_window(
+            args.eval_datasets[0], args.eval_split, tokenizer,
+        )
+        _eff_stride = args.stride if args.stride is not None else args.max_length // 2
+        _max_tokens = args.stage_eval_max_windows * _eff_stride + args.max_length
+        if stage_eval_enc["input_ids"].size(1) > _max_tokens:
+            stage_eval_enc = {
+                "input_ids": stage_eval_enc["input_ids"][:, :_max_tokens],
+                "attention_mask": stage_eval_enc["attention_mask"][:, :_max_tokens],
+            }
+            logger.info(
+                f"Stage eval: truncated to {_max_tokens} tokens "
+                f"(~{args.stage_eval_max_windows} windows per stage)"
+            )
 
     # =========================================================================
     # STEP 0: OPTIONAL PREPROCESSING (SmoothQuant / FlatQuant / None)
@@ -1880,6 +1935,14 @@ def main():
             # FlatQuantLinear._reparameterized=True ensures train_forward() delegates
             # directly to self.linear (nn.Linear or TiledLinearADC after conversion).
 
+            # Stage eval B: FP model with FlatQuant transforms baked in (no ADC yet).
+            # Good result here means FlatQuant reparameterization is correct.
+            # Bad result here means FlatQuant training itself is broken.
+            if args.stage_eval and stage_eval_enc is not None:
+                model = model.to(device)
+                _run_stage_eval(model, stage_eval_enc, device,
+                                "B_post_fq_reparameterize", args, use_wandb)
+
             logger.info("=" * 80)
             logger.info("FlatQuant preprocessing complete")
             logger.info("=" * 80)
@@ -1910,6 +1973,21 @@ def main():
 
     stats = LlamaADCConverter.count_adc_layers(model)
     logger.info(f"Model: {stats['adc_linear']} ADC layers, {stats['regular_linear']} regular Linear, {stats['total_params']:,} params")
+
+    # Stage eval C: ADC layers present, bypass_all=True → FP forward through ADC structure.
+    # Should match stage B if replace_linear_with_adc is transparent in bypass mode.
+    # Divergence here means the TiledLinearADC replacement itself breaks something.
+    if args.stage_eval and stage_eval_enc is not None:
+        logger.info("Stage eval C: setting bypass_all=True on all TiledLinearADC...")
+        for _, _m in model.named_modules():
+            if isinstance(_m, TiledLinearADC):
+                _m.set_bypass_all(True)
+        _run_stage_eval(model, stage_eval_enc, device,
+                        "C_post_adc_replace_bypass", args, use_wandb)
+        for _, _m in model.named_modules():
+            if isinstance(_m, TiledLinearADC):
+                _m.set_bypass_all(False)
+        logger.info("Stage eval C: bypass_all restored to False")
 
     viz_patterns = args.visualize_layers if not args.disable_visualizations else []
     model_structure_text = show_model_with_adc_hooks(model, viz_patterns)
