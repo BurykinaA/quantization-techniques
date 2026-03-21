@@ -1666,6 +1666,16 @@ def main():
     parser.add_argument("--fq_penalty_projections", nargs="+",
                         default=["o_proj", "down_proj"],
                         help="Projection names to apply ADC penalties to")
+    parser.add_argument("--fq_lambda_band", type=float, default=0.0,
+                        help="Band-occupancy loss weight: encourages z into (tau_lo, tau_hi)")
+    parser.add_argument("--fq_band_tau_lo", type=float, default=1.0,
+                        help="Lower bound of useful ADC band (dead zone boundary)")
+    parser.add_argument("--fq_band_tau_hi", type=float, default=64.0,
+                        help="Upper bound of useful ADC band (clip zone boundary)")
+    parser.add_argument("--fq_band_beta", type=float, default=5.0,
+                        help="Sharpness of sigmoid transitions in band-occupancy loss")
+    parser.add_argument("--fq_freeze_clip", action="store_true",
+                        help="Freeze LWC/LAC clip params during training (prevents dead penalty escaping into weight clipping)")
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
     parser.add_argument("--fq_reload_path", type=str, default=None,
@@ -2092,6 +2102,11 @@ def main():
                     clip_margin=args.fq_clip_margin,
                     dead_threshold=args.fq_dead_threshold,
                     penalty_projections=args.fq_penalty_projections,
+                    lambda_band=args.fq_lambda_band,
+                    band_tau_lo=args.fq_band_tau_lo,
+                    band_tau_hi=args.fq_band_tau_hi,
+                    band_beta=args.fq_band_beta,
+                    freeze_clip=args.fq_freeze_clip,
                 )
 
             if args.fq_save_transforms:

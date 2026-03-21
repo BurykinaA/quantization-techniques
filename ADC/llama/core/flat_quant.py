@@ -344,6 +344,14 @@ class FlatQuantLinear(nn.Module):
         # Last computed penalties (mean over tiles, set during forward)
         self._last_clip_penalty: torch.Tensor | None = None
         self._last_dead_penalty: torch.Tensor | None = None
+        # Band-occupancy penalty: encourages z-mass into (tau_lo, tau_hi)
+        # L_band = 1 - E[σ(β(|z|−τ_lo)) · σ(β(τ_hi−|z|))]
+        self._band_enabled   = False
+        self._band_lambda    = 0.0
+        self._band_tau_lo    = 1.0
+        self._band_tau_hi    = 64.0
+        self._band_beta      = 5.0
+        self._last_band_penalty: torch.Tensor | None = None
         if lwc:
             out_features = linear.weight.shape[0]
             self.clip_factor_w_max = nn.Parameter(
@@ -466,6 +474,7 @@ class FlatQuantLinear(nn.Module):
         # Penalty accumulators — initialised on the same device as x
         clip_acc = x2d.new_zeros(()).float()
         dead_acc = x2d.new_zeros(()).float()
+        band_acc = x2d.new_zeros(()).float()
         n_tiles_eff = 0
 
         for i in range(n_tiles):
@@ -488,11 +497,19 @@ class FlatQuantLinear(nn.Module):
                 y_int = F.linear(code_xi.float(), code_wi.float())       # [B, out], float32
             y_adc  = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
 
-            # Accumulate clip / dead-zone penalties (only when enabled)
-            if self._penalty_enabled:
+            # Accumulate penalties (only when enabled)
+            if self._penalty_enabled or self._band_enabled:
                 z = y_int / delta   # normalised ADC input, same shape as y_int
-                clip_acc = clip_acc + F.relu(z.abs() - (float(pa) - self._penalty_clip_margin)).pow(2).mean()
-                dead_acc = dead_acc + F.relu(self._penalty_dead_threshold - z.abs()).mean()
+                if self._penalty_enabled:
+                    clip_acc = clip_acc + F.relu(z.abs() - (float(pa) - self._penalty_clip_margin)).pow(2).mean()
+                    dead_acc = dead_acc + F.relu(self._penalty_dead_threshold - z.abs()).mean()
+                if self._band_enabled:
+                    # L_band = 1 - E[σ(β(|z|−τ_lo)) · σ(β(τ_hi−|z|))]
+                    # Encourages z-mass into the useful ADC band (tau_lo, tau_hi)
+                    z_abs = z.abs()
+                    in_band = (torch.sigmoid(self._band_beta * (z_abs - self._band_tau_lo))
+                               * torch.sigmoid(self._band_beta * (self._band_tau_hi - z_abs)))
+                    band_acc = band_acc + (1.0 - in_band.mean())
                 n_tiles_eff += 1
 
             # Dequantize: s_xi [B,1] × s_wi.T [out] → [B, out]
@@ -501,6 +518,7 @@ class FlatQuantLinear(nn.Module):
         # Store per-tile mean penalties for the training loop
         self._last_clip_penalty = clip_acc / max(n_tiles_eff, 1)
         self._last_dead_penalty = dead_acc / max(n_tiles_eff, 1)
+        self._last_band_penalty = band_acc / max(n_tiles_eff, 1)
 
         y = y2d.reshape(*orig_shape[:-1], self.linear.out_features)
         if self.linear.bias is not None:
@@ -905,6 +923,11 @@ def calibrate_flat_quant(
     clip_margin: float = 1.0,
     dead_threshold: float = 1.0,
     penalty_projections: list[str] | None = None,
+    lambda_band: float = 0.0,
+    band_tau_lo: float = 1.0,
+    band_tau_hi: float = 64.0,
+    band_beta: float = 5.0,
+    freeze_clip: bool = False,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1102,12 +1125,12 @@ def calibrate_flat_quant(
                 "params": _get_params_by_pattern(layer, ["trans.diag_scale"]),
                 "lr": flat_lr,
             })
-        if lwc:
+        if lwc and not freeze_clip:
             trained_params.append({
                 "params": _get_params_by_pattern(layer, ["clip_factor_w"]),
                 "lr": flat_lr * 10,
             })
-        if lac:
+        if lac and not freeze_clip:
             trained_params.append({
                 "params": _get_params_by_pattern(layer, ["clip_factor_a"]),
                 "lr": flat_lr * 10,
@@ -1118,11 +1141,16 @@ def calibrate_flat_quant(
         for _name, _m in layer.named_modules():
             if isinstance(_m, FlatQuantLinear) and _m._adc_config is not None:
                 _is_target = any(p in _name for p in _penalty_projs)
-                _m._penalty_enabled       = _is_target and (lambda_clip > 0.0 or lambda_dead > 0.0)
-                _m._penalty_lambda_clip   = lambda_clip
-                _m._penalty_lambda_dead   = lambda_dead
-                _m._penalty_clip_margin   = clip_margin
+                _m._penalty_enabled        = _is_target and (lambda_clip > 0.0 or lambda_dead > 0.0)
+                _m._penalty_lambda_clip    = lambda_clip
+                _m._penalty_lambda_dead    = lambda_dead
+                _m._penalty_clip_margin    = clip_margin
                 _m._penalty_dead_threshold = dead_threshold
+                _m._band_enabled           = _is_target and (lambda_band > 0.0)
+                _m._band_lambda            = lambda_band
+                _m._band_tau_lo            = band_tau_lo
+                _m._band_tau_hi            = band_tau_hi
+                _m._band_beta              = band_beta
 
         optimizer = torch.optim.AdamW(trained_params)
         total_steps = epochs * (actual_nsamples // cali_bsz)
@@ -1156,6 +1184,7 @@ def calibrate_flat_quant(
             epoch_mse = 0.0
             epoch_dead = 0.0
             epoch_clip = 0.0
+            epoch_band = 0.0
             epoch_pen_count = 0
             nan_count = 0
             batch_bar = tqdm(range(n_batches), desc=f"    L{i} E{epoch} batches", unit="batch", leave=False)
@@ -1168,23 +1197,34 @@ def calibrate_flat_quant(
                     out = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
                     quant_out = out[0] if isinstance(out, tuple) else out
                     loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
-                    if lambda_clip > 0.0 or lambda_dead > 0.0:
+                    if lambda_clip > 0.0 or lambda_dead > 0.0 or lambda_band > 0.0:
                         _clip_acc = loss.new_zeros(())
                         _dead_acc = loss.new_zeros(())
+                        _band_acc = loss.new_zeros(())
                         _n_pen = 0
                         for _, _m in layer.named_modules():
-                            if (isinstance(_m, FlatQuantLinear)
-                                    and _m._penalty_enabled
-                                    and _m._last_clip_penalty is not None):
-                                _clip_acc = _clip_acc + _m._last_clip_penalty.to(loss.device)
-                                _dead_acc = _dead_acc + _m._last_dead_penalty.to(loss.device)
-                                _n_pen += 1
+                            if isinstance(_m, FlatQuantLinear):
+                                if (_m._penalty_enabled
+                                        and _m._last_clip_penalty is not None):
+                                    _clip_acc = _clip_acc + _m._last_clip_penalty.to(loss.device)
+                                    _dead_acc = _dead_acc + _m._last_dead_penalty.to(loss.device)
+                                    _n_pen += 1
+                                if (_m._band_enabled
+                                        and _m._last_band_penalty is not None):
+                                    _band_acc = _band_acc + _m._last_band_penalty.to(loss.device)
                         if _n_pen > 0:
                             loss = loss + lambda_clip * _clip_acc / _n_pen \
                                        + lambda_dead * _dead_acc / _n_pen
                             epoch_clip += (_clip_acc / _n_pen).item()
                             epoch_dead += (_dead_acc / _n_pen).item()
                             epoch_pen_count += 1
+                        _n_band = sum(
+                            1 for _, _m in layer.named_modules()
+                            if isinstance(_m, FlatQuantLinear) and _m._band_enabled
+                        )
+                        if _n_band > 0:
+                            loss = loss + lambda_band * _band_acc / _n_band
+                            epoch_band += (_band_acc / _n_band).item()
                 if torch.isnan(loss) or torch.isinf(loss):
                     nan_count += 1
                     batch_bar.set_postfix(loss="NaN", nan=nan_count)
@@ -1264,6 +1304,8 @@ def calibrate_flat_quant(
                     if _n_pen > 0:
                         _pf["clip"] = f"{(_clip_acc / _n_pen).item():.3e}"
                         _pf["dead"] = f"{(_dead_acc / _n_pen).item():.3e}"
+                if lambda_band > 0.0 and _n_band > 0:
+                    _pf["band"] = f"{(_band_acc / _n_band).item():.3e}"
                 batch_bar.set_postfix(**_pf)
             lr = optimizer.param_groups[0]["lr"]
             ok = n_batches - nan_count
@@ -1276,6 +1318,10 @@ def calibrate_flat_quant(
                 if lambda_clip > 0.0:
                     _epf["clip"] = f"{_mean_clip:.3e}"
                 _log_extra = f", dead={_mean_dead:.4e}, clip={_mean_clip:.4e}"
+            if lambda_band > 0.0 and n_batches > 0:
+                _mean_band = epoch_band / n_batches
+                _epf["band"] = f"{_mean_band:.3e}"
+                _log_extra += f", band={_mean_band:.4e}"
             epoch_bar.set_postfix(**_epf)
             logger.info(
                 f"  layer {i} epoch {epoch}, lr={lr:.8f}, "
