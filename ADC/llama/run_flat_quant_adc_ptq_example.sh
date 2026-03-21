@@ -34,7 +34,7 @@ FQ_LWC=true                # Learnable weight clipping
 FQ_LAC=true                # Learnable activation clipping
 FQ_SAVE_TRANSFORMS=true    # Save trained transforms
 FQ_RELOAD_PATH=""          # Load pre-trained transforms (skip training)
-FQ_TRAIN_ACT_PERCENTILE=0.99  # match inference percentile calibration (1.0 = max / old behaviour)
+
 
 # ============================================================
 # ADC Hardware Configuration
@@ -79,7 +79,7 @@ VISUALIZE_LAYERS="layers.0.self_attn.q_proj layers.0.mlp.down_proj layers.15.mlp
 TORCH_DTYPE="float32"
 WANDB_PROJECT="llama-flat-quant-adc-ptq"
 MODEL_SHORT_NAME=$(echo $MODEL_NAME | sed 's/.*\///')
-WANDB_RUN_NAME="fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_pct${FQ_TRAIN_ACT_PERCENTILE}_${CALIBRATION_METHOD}"
+WANDB_RUN_NAME="fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
 SEED=42
 
 echo "========================================"
@@ -177,7 +177,6 @@ if [ -n "$FQ_RELOAD_PATH" ]; then
     CMD="$CMD --fq_reload_path \"$FQ_RELOAD_PATH\""
 fi
 
-CMD="$CMD --fq_train_act_percentile $FQ_TRAIN_ACT_PERCENTILE"
 
 echo "Running FlatQuant + ADC PTQ..."
 echo ""

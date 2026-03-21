@@ -48,7 +48,7 @@ FQ_ADD_DIAG=false     # --fq_no_diag (best setting found)
 FQ_LWC=true
 FQ_LAC=true
 FQ_SAVE_TRANSFORMS=true
-FQ_TRAIN_ACT_PERCENTILE=0.99  # match inference percentile calibration (1.0 = max / old behaviour)
+
 
 # ============================================================
 # ADC Hardware Configuration
@@ -165,8 +165,7 @@ CMD="python ADC/llama/runs/llama_smooth_quant_adc_ptq.py \
     --run_no_adc_eval \
     --layer_ablation \
     --layer_ablation_max_windows $LAYER_ABLATION_MAX_WINDOWS \
-    --proj_ablation \
-    --fq_train_act_percentile $FQ_TRAIN_ACT_PERCENTILE"
+    --proj_ablation"
 
 if [ -n "$STRIDE" ]; then
     CMD="$CMD --stride $STRIDE"
