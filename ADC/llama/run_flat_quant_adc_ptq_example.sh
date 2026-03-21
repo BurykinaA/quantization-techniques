@@ -25,15 +25,16 @@ OUTPUT_DIR="./ADC/llama/checkpoints/outputs_llama_flat_quant_adc_ptq"
 FQ_W_BITS=8               # Weight quantizer bits during FQ calibration
 FQ_A_BITS=8               # Activation quantizer bits during FQ calibration
 FQ_NSAMPLES=128            # Calibration samples for FQ training
-FQ_CALI_BSZ=4              # Batch size for layer-by-layer calibration
-FQ_EPOCHS=15               # Training epochs per layer
+FQ_CALI_BSZ=16             # Batch size for layer-by-layer calibration
+FQ_EPOCHS=30               # Training epochs per layer
 FQ_LR=0.005                # AdamW learning rate for transforms
 FQ_DIAG_ALPHA=0.5          # Diagonal scale init (SQ-style)
-FQ_ADD_DIAG=true           # Per-channel diagonal scaling
+FQ_ADD_DIAG=false          # Per-channel diagonal scaling (conflicts with ADC scaling)
 FQ_LWC=true                # Learnable weight clipping
 FQ_LAC=true                # Learnable activation clipping
 FQ_SAVE_TRANSFORMS=true    # Save trained transforms
 FQ_RELOAD_PATH=""          # Load pre-trained transforms (skip training)
+FQ_TRAIN_ACT_PERCENTILE=0.99  # match inference percentile calibration (1.0 = max / old behaviour)
 
 # ============================================================
 # ADC Hardware Configuration
@@ -41,7 +42,7 @@ FQ_RELOAD_PATH=""          # Load pre-trained transforms (skip training)
 BX=8
 BW=8
 BA=8
-K=4
+K=16
 ASHIFT=false
 MVM_LIMIT=256
 
@@ -75,10 +76,10 @@ VISUALIZE_LAYERS="layers.0.self_attn.q_proj layers.0.mlp.down_proj layers.15.mlp
 # ============================================================
 # Other Settings
 # ============================================================
-TORCH_DTYPE="float16"
+TORCH_DTYPE="float32"
 WANDB_PROJECT="llama-flat-quant-adc-ptq"
 MODEL_SHORT_NAME=$(echo $MODEL_NAME | sed 's/.*\///')
-WANDB_RUN_NAME="fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
+WANDB_RUN_NAME="fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_pct${FQ_TRAIN_ACT_PERCENTILE}_${CALIBRATION_METHOD}"
 SEED=42
 
 echo "========================================"
@@ -175,6 +176,8 @@ fi
 if [ -n "$FQ_RELOAD_PATH" ]; then
     CMD="$CMD --fq_reload_path \"$FQ_RELOAD_PATH\""
 fi
+
+CMD="$CMD --fq_train_act_percentile $FQ_TRAIN_ACT_PERCENTILE"
 
 echo "Running FlatQuant + ADC PTQ..."
 echo ""
