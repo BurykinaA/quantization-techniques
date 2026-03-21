@@ -100,6 +100,7 @@ FQ_LAMBDA_BAND=0.0
 FQ_BAND_TAU_LO=1.0
 FQ_BAND_TAU_HI=64.0
 FQ_BAND_BETA=5.0
+FQ_BAND_TOPK_FRAC=0.2
 FQ_FREEZE_CLIP=false
 
 # Resolve intensity → lambda_dead + dead_threshold (used by e8/e9)
@@ -219,6 +220,7 @@ CMD="python ADC/llama/runs/llama_smooth_quant_adc_ptq.py \
     --fq_band_tau_lo $FQ_BAND_TAU_LO \
     --fq_band_tau_hi $FQ_BAND_TAU_HI \
     --fq_band_beta $FQ_BAND_BETA \
+    --fq_band_topk_frac $FQ_BAND_TOPK_FRAC \
     --bx $BX \
     --bw $BW \
     --ba $BA \

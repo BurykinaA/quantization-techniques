@@ -346,11 +346,12 @@ class FlatQuantLinear(nn.Module):
         self._last_dead_penalty: torch.Tensor | None = None
         # Band-occupancy penalty: encourages z-mass into (tau_lo, tau_hi)
         # L_band = 1 - E[σ(β(|z|−τ_lo)) · σ(β(τ_hi−|z|))]
-        self._band_enabled   = False
-        self._band_lambda    = 0.0
-        self._band_tau_lo    = 1.0
-        self._band_tau_hi    = 64.0
-        self._band_beta      = 5.0
+        self._band_enabled      = False
+        self._band_lambda       = 0.0
+        self._band_tau_lo       = 1.0
+        self._band_tau_hi       = 64.0
+        self._band_beta         = 5.0
+        self._band_topk_frac    = 0.2   # top-k% worst tiles by band loss
         self._last_band_penalty: torch.Tensor | None = None
         if lwc:
             out_features = linear.weight.shape[0]
@@ -474,7 +475,7 @@ class FlatQuantLinear(nn.Module):
         # Penalty accumulators — initialised on the same device as x
         clip_acc = x2d.new_zeros(()).float()
         dead_acc = x2d.new_zeros(()).float()
-        band_acc = x2d.new_zeros(()).float()
+        band_tile_losses: list[torch.Tensor] = []   # one scalar per tile, for top-k selection
         n_tiles_eff = 0
 
         for i in range(n_tiles):
@@ -504,12 +505,11 @@ class FlatQuantLinear(nn.Module):
                     clip_acc = clip_acc + F.relu(z.abs() - (float(pa) - self._penalty_clip_margin)).pow(2).mean()
                     dead_acc = dead_acc + F.relu(self._penalty_dead_threshold - z.abs()).mean()
                 if self._band_enabled:
-                    # L_band = 1 - E[σ(β(|z|−τ_lo)) · σ(β(τ_hi−|z|))]
-                    # Encourages z-mass into the useful ADC band (tau_lo, tau_hi)
+                    # per-tile loss stored for top-k selection after loop
                     z_abs = z.abs()
                     in_band = (torch.sigmoid(self._band_beta * (z_abs - self._band_tau_lo))
                                * torch.sigmoid(self._band_beta * (self._band_tau_hi - z_abs)))
-                    band_acc = band_acc + (1.0 - in_band.mean())
+                    band_tile_losses.append(1.0 - in_band.mean())
                 n_tiles_eff += 1
 
             # Dequantize: s_xi [B,1] × s_wi.T [out] → [B, out]
@@ -518,7 +518,13 @@ class FlatQuantLinear(nn.Module):
         # Store per-tile mean penalties for the training loop
         self._last_clip_penalty = clip_acc / max(n_tiles_eff, 1)
         self._last_dead_penalty = dead_acc / max(n_tiles_eff, 1)
-        self._last_band_penalty = band_acc / max(n_tiles_eff, 1)
+        if band_tile_losses:
+            stacked = torch.stack(band_tile_losses)          # [n_tiles]
+            k = max(1, int(len(stacked) * self._band_topk_frac))
+            # topk returns the k largest values (= worst tiles)
+            self._last_band_penalty = stacked.topk(k).values.mean()
+        else:
+            self._last_band_penalty = x2d.new_zeros(()).float()
 
         y = y2d.reshape(*orig_shape[:-1], self.linear.out_features)
         if self.linear.bias is not None:
@@ -927,6 +933,7 @@ def calibrate_flat_quant(
     band_tau_lo: float = 1.0,
     band_tau_hi: float = 64.0,
     band_beta: float = 5.0,
+    band_topk_frac: float = 0.2,
     freeze_clip: bool = False,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
@@ -1151,6 +1158,7 @@ def calibrate_flat_quant(
                 _m._band_tau_lo            = band_tau_lo
                 _m._band_tau_hi            = band_tau_hi
                 _m._band_beta              = band_beta
+                _m._band_topk_frac         = band_topk_frac
 
         optimizer = torch.optim.AdamW(trained_params)
         total_steps = epochs * (actual_nsamples // cali_bsz)

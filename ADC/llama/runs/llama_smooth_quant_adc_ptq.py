@@ -1674,6 +1674,8 @@ def main():
                         help="Upper bound of useful ADC band (clip zone boundary)")
     parser.add_argument("--fq_band_beta", type=float, default=5.0,
                         help="Sharpness of sigmoid transitions in band-occupancy loss")
+    parser.add_argument("--fq_band_topk_frac", type=float, default=0.2,
+                        help="Fraction of worst tiles used for band-occupancy loss (top-k%%, 0.2=20%%)")
     parser.add_argument("--fq_freeze_clip", action="store_true",
                         help="Freeze LWC/LAC clip params during training (prevents dead penalty escaping into weight clipping)")
     parser.add_argument("--fq_save_transforms", action="store_true",
@@ -2106,6 +2108,7 @@ def main():
                     band_tau_lo=args.fq_band_tau_lo,
                     band_tau_hi=args.fq_band_tau_hi,
                     band_beta=args.fq_band_beta,
+                    band_topk_frac=args.fq_band_topk_frac,
                     freeze_clip=args.fq_freeze_clip,
                 )
 
