@@ -344,6 +344,8 @@ class FlatQuantLinear(nn.Module):
         # Last computed penalties (mean over tiles, set during forward)
         self._last_clip_penalty: torch.Tensor | None = None
         self._last_dead_penalty: torch.Tensor | None = None
+        # Percentile for act_scale during ADC training simulation (1.0 = max, 0.99 = 99th pct)
+        self._train_act_percentile: float = 1.0
         if lwc:
             out_features = linear.weight.shape[0]
             self.clip_factor_w_max = nn.Parameter(
@@ -477,7 +479,15 @@ class FlatQuantLinear(nn.Module):
             code_wi = round_ste(wi / s_wi).clamp(qmin_w, qmax_w)
 
             # Per-token activation quantization for this tile
-            s_xi = xi.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
+            # Use percentile instead of max to match inference-time ADC calibration
+            # (percentile < 1.0 clips outliers, giving smaller delta → fewer dead zones)
+            _xi_abs = xi.abs()
+            if self._train_act_percentile < 1.0:
+                s_xi = torch.quantile(
+                    _xi_abs, self._train_act_percentile, dim=-1, keepdim=True
+                ).clamp(min=1e-6) / act_levels
+            else:
+                s_xi = _xi_abs.amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
             code_xi = round_ste(xi / s_xi).clamp(qmin_x, qmax_x)
 
             # Integer MVM → ADC quantization (Eq. 2-3)
@@ -905,6 +915,7 @@ def calibrate_flat_quant(
     clip_margin: float = 1.0,
     dead_threshold: float = 1.0,
     penalty_projections: list[str] | None = None,
+    train_act_percentile: float = 1.0,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1123,6 +1134,7 @@ def calibrate_flat_quant(
                 _m._penalty_lambda_dead   = lambda_dead
                 _m._penalty_clip_margin   = clip_margin
                 _m._penalty_dead_threshold = dead_threshold
+                _m._train_act_percentile  = train_act_percentile
 
         optimizer = torch.optim.AdamW(trained_params)
         total_steps = epochs * (actual_nsamples // cali_bsz)

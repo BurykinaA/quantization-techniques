@@ -1666,6 +1666,9 @@ def main():
     parser.add_argument("--fq_penalty_projections", nargs="+",
                         default=["o_proj", "down_proj"],
                         help="Projection names to apply ADC penalties to")
+    parser.add_argument("--fq_train_act_percentile", type=float, default=1.0,
+                        help="Percentile for act_scale during FlatQuant ADC training simulation "
+                             "(1.0=max, 0.99=99th pct). Matches inference percentile calibration.")
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
     parser.add_argument("--fq_reload_path", type=str, default=None,
@@ -2092,6 +2095,7 @@ def main():
                     clip_margin=args.fq_clip_margin,
                     dead_threshold=args.fq_dead_threshold,
                     penalty_projections=args.fq_penalty_projections,
+                    train_act_percentile=args.fq_train_act_percentile,
                 )
 
             if args.fq_save_transforms:
