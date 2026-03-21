@@ -96,6 +96,11 @@ FQ_CLIP_MARGIN=1.0
 FQ_DEAD_THRESHOLD=1.0
 # FQ_PENALTY_PROJECTIONS="o_proj down_proj"
 FQ_PENALTY_PROJECTIONS="o_proj down_proj q_proj k_proj v_proj gate_proj up_proj"
+FQ_LAMBDA_BAND=0.0
+FQ_BAND_TAU_LO=1.0
+FQ_BAND_TAU_HI=64.0
+FQ_BAND_BETA=5.0
+FQ_FREEZE_CLIP=false
 
 # Resolve intensity → lambda_dead + dead_threshold (used by e8/e9)
 case "$INTENSITY" in
@@ -138,9 +143,15 @@ case "$EXPERIMENT" in
         FQ_LAMBDA_DEAD=$_LAMBDA_DEAD_INTENSITY
         FQ_DEAD_THRESHOLD=$_DEAD_THRESHOLD_INTENSITY
         ;;
+    band)
+        # Band-occupancy loss: encourages z-mass into (tau_lo, tau_hi)
+        # intensity: weak=0.01, mid=0.1, strong=1.0
+        FQ_LAMBDA_BAND=$_LAMBDA_DEAD_INTENSITY
+        FQ_FREEZE_CLIP=true
+        ;;
     *)
         echo "Unknown experiment: '$EXPERIMENT'"
-        echo "Available: baseline | e7 | e8 | e9"
+        echo "Available: baseline | e7 | e8 | e9 | band"
         exit 1
         ;;
 esac
@@ -149,6 +160,8 @@ esac
 MODEL_SHORT_NAME=$(echo $MODEL_NAME | sed 's/.*\///')
 if [[ "$EXPERIMENT" == "e8" || "$EXPERIMENT" == "e9" ]]; then
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}_tau${FQ_DEAD_THRESHOLD}_${INTENSITY}"
+elif [[ "$EXPERIMENT" == "band" ]]; then
+    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lb${FQ_LAMBDA_BAND}_${INTENSITY}"
 else
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}"
 fi
@@ -202,6 +215,10 @@ CMD="python ADC/llama/runs/llama_smooth_quant_adc_ptq.py \
     --fq_clip_margin $FQ_CLIP_MARGIN \
     --fq_dead_threshold $FQ_DEAD_THRESHOLD \
     --fq_penalty_projections $FQ_PENALTY_PROJECTIONS \
+    --fq_lambda_band $FQ_LAMBDA_BAND \
+    --fq_band_tau_lo $FQ_BAND_TAU_LO \
+    --fq_band_tau_hi $FQ_BAND_TAU_HI \
+    --fq_band_beta $FQ_BAND_BETA \
     --bx $BX \
     --bw $BW \
     --ba $BA \
@@ -254,6 +271,10 @@ fi
 
 if [ -n "$FQ_RELOAD_PATH" ]; then
     CMD="$CMD --fq_reload_path \"$FQ_RELOAD_PATH\""
+fi
+
+if [ "$FQ_FREEZE_CLIP" = true ]; then
+    CMD="$CMD --fq_freeze_clip"
 fi
 
 echo "Running FlatQuant + ADC PTQ [${EXP_LABEL}]..."
