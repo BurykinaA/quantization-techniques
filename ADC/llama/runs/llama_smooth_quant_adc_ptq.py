@@ -1678,6 +1678,9 @@ def main():
                         help="Fraction of worst tiles used for band-occupancy loss (top-k%%, 0.2=20%%)")
     parser.add_argument("--fq_freeze_clip", action="store_true",
                         help="Freeze LWC/LAC clip params during training (prevents dead penalty escaping into weight clipping)")
+    parser.add_argument("--fq_kronecker_init", type=str, default="random",
+                        choices=["random", "hadamard"],
+                        help="Kronecker factor initialization: 'random' (default FlatQuant) or 'hadamard' (QuaRot-style)")
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
     parser.add_argument("--fq_reload_path", type=str, default=None,
@@ -2110,6 +2113,7 @@ def main():
                     band_beta=args.fq_band_beta,
                     band_topk_frac=args.fq_band_topk_frac,
                     freeze_clip=args.fq_freeze_clip,
+                    kronecker_init=args.fq_kronecker_init,
                 )
 
             if args.fq_save_transforms:

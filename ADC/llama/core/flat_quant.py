@@ -171,6 +171,70 @@ def _random_orthogonal(size: int) -> torch.Tensor:
     return q.float()
 
 
+def _hadamard_matrix(n: int) -> torch.Tensor:
+    """Return the normalized n×n Hadamard matrix (float32).
+
+    Uses recursive Sylvester construction:
+        H_1 = [[1]],  H_{2k} = (1/√2) [[H_k, H_k], [H_k, -H_k]]
+
+    The returned matrix satisfies H @ H.T = I (orthogonal).
+    n must be a power of two.
+    """
+    assert n >= 1 and (n & (n - 1)) == 0, f"Hadamard requires power-of-2 size, got {n}"
+    h = torch.ones(1, 1, dtype=torch.float64)
+    cur = 1
+    while cur < n:
+        h = torch.cat([torch.cat([h, h], dim=1),
+                       torch.cat([h, -h], dim=1)], dim=0)
+        cur *= 2
+    return (h / math.sqrt(n)).float()
+
+
+def _init_kronecker_hadamard(trans: "KroneckerTransform") -> None:
+    """Re-initialize Kronecker factors so P ≈ H_left ⊗ H_right.
+
+    Sets  u_left = H_left,  v_left = I  →  mat_l = H_left @ I @ I.T = H_left
+    and equivalently for the right factor, so the full transform starts as a
+    pure (normalized) Hadamard rotation.  diag_left / diag_right are reset
+    to ones (no anisotropic scaling at initialization).
+
+    Only applied when both left_size and right_size are powers of two;
+    silently falls back to the current weights otherwise.
+    """
+    def _is_pow2(n: int) -> bool:
+        return n >= 1 and (n & (n - 1)) == 0
+
+    if not (_is_pow2(trans.left_size) and _is_pow2(trans.right_size)):
+        logger.debug(
+            "_init_kronecker_hadamard: skipping (left=%d right=%d not both pow2)",
+            trans.left_size, trans.right_size,
+        )
+        return
+
+    dev = trans.diag_left.device
+
+    def _reinit(m: nn.Linear, w: torch.Tensor) -> None:
+        """Replace the parametrized weight's base point with *w*."""
+        torch.nn.utils.parametrize.remove_parametrizations(m, "weight", leave_parametrized=True)
+        m.weight.data = w.to(dev)
+        nn.utils.parametrizations.orthogonal(
+            m, orthogonal_map="matrix_exp", use_trivialization=True,
+        )
+
+    h_l   = _hadamard_matrix(trans.left_size)
+    h_r   = _hadamard_matrix(trans.right_size)
+    eye_l = torch.eye(trans.left_size)
+    eye_r = torch.eye(trans.right_size)
+
+    _reinit(trans.u_left,  h_l)
+    _reinit(trans.v_left,  eye_l)
+    _reinit(trans.u_right, h_r)
+    _reinit(trans.v_right, eye_r)
+
+    trans.diag_left.data.fill_(1.0)
+    trans.diag_right.data.fill_(1.0)
+
+
 class KroneckerTransform(nn.Module):
     """Learnable Kronecker-decomposed transform with optional diagonal.
 
@@ -935,6 +999,7 @@ def calibrate_flat_quant(
     band_beta: float = 5.0,
     band_topk_frac: float = 0.2,
     freeze_clip: bool = False,
+    kronecker_init: str = "random",
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1112,6 +1177,12 @@ def calibrate_flat_quant(
         if add_diag:
             layer.self_attn.init_diag_scale(alpha=diag_alpha)
             layer.mlp.init_diag_scale(alpha=diag_alpha)
+
+        # (b2) Optionally re-initialize Kronecker factors to Hadamard rotation
+        if kronecker_init == "hadamard":
+            for _name, _m in layer.named_modules():
+                if isinstance(_m, KroneckerTransform):
+                    _init_kronecker_hadamard(_m)
 
         layer = layer.to(device)
 

@@ -102,6 +102,7 @@ FQ_BAND_TAU_HI=64.0
 FQ_BAND_BETA=5.0
 FQ_BAND_TOPK_FRAC=0.2
 FQ_FREEZE_CLIP=false
+FQ_KRONECKER_INIT="random"    # "random" (FlatQuant default) | "hadamard" (QuaRot-style)
 
 # Resolve intensity → lambda_dead + dead_threshold (used by e8/e9)
 case "$INTENSITY" in
@@ -150,9 +151,22 @@ case "$EXPERIMENT" in
         FQ_LAMBDA_BAND=$_LAMBDA_DEAD_INTENSITY
         FQ_FREEZE_CLIP=true
         ;;
+    hadamard)
+        # Hadamard (QuaRot-style) Kronecker initialization.
+        # P starts at H⊗H instead of random orthogonal — spreads activation
+        # outliers uniformly, targeting the dead-zone problem at K=16.
+        # intensity controls optional dead penalty on top (0=pure Hadamard init).
+        FQ_KRONECKER_INIT="hadamard"
+        ;;
+    hadamard+dead)
+        # Hadamard init + dead penalty (combined)
+        FQ_KRONECKER_INIT="hadamard"
+        FQ_LAMBDA_DEAD=$_LAMBDA_DEAD_INTENSITY
+        FQ_DEAD_THRESHOLD=$_DEAD_THRESHOLD_INTENSITY
+        ;;
     *)
         echo "Unknown experiment: '$EXPERIMENT'"
-        echo "Available: baseline | e7 | e8 | e9 | band"
+        echo "Available: baseline | e7 | e8 | e9 | band | hadamard | hadamard+dead"
         exit 1
         ;;
 esac
@@ -163,6 +177,8 @@ if [[ "$EXPERIMENT" == "e8" || "$EXPERIMENT" == "e9" ]]; then
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}_tau${FQ_DEAD_THRESHOLD}_${INTENSITY}"
 elif [[ "$EXPERIMENT" == "band" ]]; then
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lb${FQ_LAMBDA_BAND}_${INTENSITY}"
+elif [[ "$EXPERIMENT" == hadamard* ]]; then
+    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_ld${FQ_LAMBDA_DEAD}"
 else
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}"
 fi
@@ -277,6 +293,10 @@ fi
 
 if [ "$FQ_FREEZE_CLIP" = true ]; then
     CMD="$CMD --fq_freeze_clip"
+fi
+
+if [ "$FQ_KRONECKER_INIT" != "random" ]; then
+    CMD="$CMD --fq_kronecker_init $FQ_KRONECKER_INIT"
 fi
 
 echo "Running FlatQuant + ADC PTQ [${EXP_LABEL}]..."
