@@ -86,6 +86,7 @@ VISUALIZE_LAYERS="layers.0.self_attn.q_proj layers.0.mlp.down_proj layers.15.mlp
 TORCH_DTYPE="float32"
 WANDB_PROJECT="llama-flat-quant-adc-ptq-blocks"
 SEED=42
+RUN_NO_ADC_EVAL=false    # set true to measure PPL without ADC (isolates ADC contribution)
 
 # ============================================================
 # Experiment-specific penalty parameters
@@ -103,6 +104,15 @@ FQ_BAND_BETA=5.0
 FQ_BAND_TOPK_FRAC=0.2
 FQ_FREEZE_CLIP=false
 FQ_KRONECKER_INIT="random"    # "random" (FlatQuant default) | "hadamard" (QuaRot-style)
+
+# ============================================================
+# KD fine-tuning (post-ADC-calibration)
+# ============================================================
+KD_EPOCHS=0            # 0 = disabled; try 5-10
+KD_LR=1e-4
+KD_TEMPERATURE=2.0
+KD_BATCHES=64
+KD_TEACHER_ON_CPU=false
 
 # Resolve intensity → lambda_dead + dead_threshold (used by e8/e9)
 case "$INTENSITY" in
@@ -164,9 +174,23 @@ case "$EXPERIMENT" in
         FQ_LAMBDA_DEAD=$_LAMBDA_DEAD_INTENSITY
         FQ_DEAD_THRESHOLD=$_DEAD_THRESHOLD_INTENSITY
         ;;
+    kd)
+        # KD fine-tuning of activation scales after ADC calibration.
+        # Uses FP16 teacher (same model) + KL divergence on final logits.
+        # intensity: weak=5 epochs, mid=10 epochs [default], strong=20 epochs
+        case "$INTENSITY" in
+            weak)   KD_EPOCHS=5  ;;
+            mid)    KD_EPOCHS=10 ;;
+            strong) KD_EPOCHS=20 ;;
+        esac
+        ;;
+    baseline+kd)
+        # Baseline FlatQuant + KD fine-tuning on top
+        KD_EPOCHS=10
+        ;;
     *)
         echo "Unknown experiment: '$EXPERIMENT'"
-        echo "Available: baseline | e7 | e8 | e9 | band | hadamard | hadamard+dead"
+        echo "Available: baseline | e7 | e8 | e9 | band | hadamard | hadamard+dead | kd | baseline+kd"
         exit 1
         ;;
 esac
@@ -179,6 +203,8 @@ elif [[ "$EXPERIMENT" == "band" ]]; then
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lb${FQ_LAMBDA_BAND}_${INTENSITY}"
 elif [[ "$EXPERIMENT" == hadamard* ]]; then
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_ld${FQ_LAMBDA_DEAD}"
+elif [[ "$EXPERIMENT" == *kd* ]]; then
+    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_kd${KD_EPOCHS}_T${KD_TEMPERATURE}"
 else
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}"
 fi
@@ -297,6 +323,17 @@ fi
 
 if [ "$FQ_KRONECKER_INIT" != "random" ]; then
     CMD="$CMD --fq_kronecker_init $FQ_KRONECKER_INIT"
+fi
+
+if [ "$RUN_NO_ADC_EVAL" = true ]; then
+    CMD="$CMD --run_no_adc_eval"
+fi
+
+if [ "$KD_EPOCHS" -gt 0 ] 2>/dev/null; then
+    CMD="$CMD --kd_epochs $KD_EPOCHS --kd_lr $KD_LR --kd_temperature $KD_TEMPERATURE --kd_batches $KD_BATCHES"
+    if [ "$KD_TEACHER_ON_CPU" = true ]; then
+        CMD="$CMD --kd_teacher_on_cpu"
+    fi
 fi
 
 echo "Running FlatQuant + ADC PTQ [${EXP_LABEL}]..."

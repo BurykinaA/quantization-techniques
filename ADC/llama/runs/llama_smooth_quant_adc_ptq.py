@@ -1033,6 +1033,146 @@ def log_adc_diagnostics(results: dict, use_wandb: bool = False) -> None:
 
 
 # =========================================================================
+# KD Fine-tuning (post-ADC-calibration)
+# =========================================================================
+
+def perform_kd_finetuning(
+    model: nn.Module,
+    model_name_or_path: str,
+    dataloader,
+    device: torch.device,
+    epochs: int = 5,
+    lr: float = 1e-4,
+    temperature: float = 2.0,
+    num_batches: int = 64,
+    teacher_on_cpu: bool = False,
+    use_wandb: bool = False,
+) -> None:
+    """End-to-end KD fine-tuning of activation quantizer scales.
+
+    Loads a FP16 teacher model and fine-tunes each QATLinearADC tile's
+    activation_quantizer.scale in the student model using KL divergence
+    on final logits (token-level, summed over the sequence).
+
+    Only activation scales are trained — weight scales are left at their
+    calibrated values to avoid disturbing the per-channel weight quantization.
+    """
+    logger.info("=" * 80)
+    logger.info(f"KD FINE-TUNING: epochs={epochs}  lr={lr}  T={temperature}  batches={num_batches}")
+    logger.info("=" * 80)
+
+    # -----------------------------------------------------------------
+    # 1. Load FP16 teacher
+    # -----------------------------------------------------------------
+    teacher_device = torch.device("cpu") if teacher_on_cpu else device
+    logger.info(f"Loading FP teacher from {model_name_or_path} → {teacher_device}...")
+    teacher = AutoModelForCausalLM.from_pretrained(
+        model_name_or_path,
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+    ).to(teacher_device)
+    teacher.eval()
+    for p in teacher.parameters():
+        p.requires_grad_(False)
+    logger.info("Teacher loaded and frozen.")
+
+    # -----------------------------------------------------------------
+    # 2. Collect trainable params: only activation scales in QATLinearADC
+    #    (weight scales were calibrated carefully — leave them fixed)
+    # -----------------------------------------------------------------
+    kd_params = []
+    for _, m in model.named_modules():
+        if isinstance(m, QATLinearADC):
+            # Freeze everything, then re-enable only the activation scale
+            m.set_quantizer_mode('fixed')
+            m.activation_quantizer.scale.requires_grad_(True)
+            kd_params.append(m.activation_quantizer.scale)
+
+    if not kd_params:
+        logger.warning("KD: no QATLinearADC activation scales found — skipping.")
+        del teacher
+        torch.cuda.empty_cache()
+        return
+
+    logger.info(f"KD trainable params: {len(kd_params)} activation scales")
+    optimizer = torch.optim.Adam(kd_params, lr=lr)
+
+    # -----------------------------------------------------------------
+    # 3. Training loop
+    # -----------------------------------------------------------------
+    model.eval()  # keep eval mode — avoids dropout, doesn't disable autograd
+
+    best_loss = float("inf")
+    for epoch in range(epochs):
+        epoch_loss = 0.0
+        n_batches_done = 0
+
+        for batch_idx, batch in enumerate(dataloader):
+            if batch_idx >= num_batches:
+                break
+
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch.get("attention_mask")
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(device)
+
+            # Teacher forward — no gradient, possibly on CPU
+            with torch.no_grad():
+                t_kwargs = {"input_ids": input_ids.to(teacher_device)}
+                if attention_mask is not None:
+                    t_kwargs["attention_mask"] = attention_mask.to(teacher_device)
+                teacher_logits = teacher(**t_kwargs).logits.to(device).float()
+
+            # Student forward — gradient flows through STE in activation scales
+            student_out = model(input_ids=input_ids, attention_mask=attention_mask)
+            student_logits = student_out.logits.float()  # [B, T, V]
+
+            V = teacher_logits.shape[-1]
+
+            # KL(teacher || student): minimise -sum(p_teacher * log(p_student))
+            # scaled by T² so gradients are temperature-independent
+            loss = F.kl_div(
+                F.log_softmax(student_logits.view(-1, V) / temperature, dim=-1),
+                F.softmax(teacher_logits.view(-1, V) / temperature, dim=-1),
+                reduction="batchmean",
+                log_target=False,
+            ) * (temperature ** 2)
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(kd_params, max_norm=1.0)
+            optimizer.step()
+
+            # Ensure activation scales stay positive
+            with torch.no_grad():
+                for p in kd_params:
+                    p.clamp_(min=1e-6)
+
+            epoch_loss += loss.item()
+            n_batches_done += 1
+
+        avg_loss = epoch_loss / max(n_batches_done, 1)
+        best_loss = min(best_loss, avg_loss)
+        logger.info(f"KD epoch {epoch + 1}/{epochs}: loss={avg_loss:.4f}")
+        if use_wandb:
+            wandb.log({"kd/loss": avg_loss, "kd/epoch": epoch + 1})
+
+    # -----------------------------------------------------------------
+    # 4. Restore fixed mode, free teacher
+    # -----------------------------------------------------------------
+    for _, m in model.named_modules():
+        if isinstance(m, QATLinearADC):
+            m.set_quantizer_mode('fixed')
+
+    del teacher
+    torch.cuda.empty_cache()
+
+    logger.info(f"KD fine-tuning complete. Best loss={best_loss:.4f}.")
+    if use_wandb:
+        wandb.run.summary["kd/best_loss"] = best_loss
+
+
+# =========================================================================
 # SmoothQuant 3D Visualization
 # =========================================================================
 
@@ -1681,6 +1821,18 @@ def main():
     parser.add_argument("--fq_kronecker_init", type=str, default="random",
                         choices=["random", "hadamard"],
                         help="Kronecker factor initialization: 'random' (default FlatQuant) or 'hadamard' (QuaRot-style)")
+    # Knowledge Distillation fine-tuning (post-ADC-calibration)
+    parser.add_argument("--kd_epochs", type=int, default=0,
+                        help="KD fine-tuning epochs after ADC calibration (0 = disabled)")
+    parser.add_argument("--kd_lr", type=float, default=1e-4,
+                        help="Learning rate for KD activation scale fine-tuning")
+    parser.add_argument("--kd_temperature", type=float, default=2.0,
+                        help="Softmax temperature T for KD loss (higher = softer targets)")
+    parser.add_argument("--kd_batches", type=int, default=64,
+                        help="Number of calibration batches per KD epoch")
+    parser.add_argument("--kd_teacher_on_cpu", action="store_true",
+                        help="Load FP teacher model on CPU to save GPU memory")
+
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
     parser.add_argument("--fq_reload_path", type=str, default=None,
@@ -2310,6 +2462,23 @@ def main():
             if hasattr(module, 'set_quantizer_mode'):
                 module.set_quantizer_mode('fixed')
     logger.info("Quantizers set to 'fixed' mode after calibration")
+
+    # =========================================================================
+    # STEP 2.3 (optional): KD fine-tuning of activation scales
+    # =========================================================================
+    if args.kd_epochs > 0:
+        perform_kd_finetuning(
+            model=model,
+            model_name_or_path=args.model_name,
+            dataloader=calibration_loader,
+            device=device,
+            epochs=args.kd_epochs,
+            lr=args.kd_lr,
+            temperature=args.kd_temperature,
+            num_batches=args.kd_batches,
+            teacher_on_cpu=args.kd_teacher_on_cpu,
+            use_wandb=use_wandb,
+        )
 
     # E3: capture inference-path outputs and compare with calibration-path
     if args.run_e3_check and e3_calib_outputs is not None and e3_sample is not None:
