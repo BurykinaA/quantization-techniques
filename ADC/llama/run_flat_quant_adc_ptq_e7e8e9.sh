@@ -45,7 +45,7 @@ FQ_ADD_DIAG=false
 FQ_LWC=true
 FQ_LAC=true
 FQ_SAVE_TRANSFORMS=true
-FQ_RELOAD_PATH="./ADC/llama/checkpoints/outputs_llama_flat_quant_adc_ptq_20260325/flat_quant_transforms.pt"
+FQ_RELOAD_PATH=""          # set to a .pt path to skip FQ training
 
 # ============================================================
 # ADC Hardware Configuration

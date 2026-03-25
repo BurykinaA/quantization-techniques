@@ -1578,15 +1578,43 @@ def compare_layer_outputs(
 # =========================================================================
 
 def save_flat_transforms(model: nn.Module, path: str) -> None:
-    """Save FlatQuant transform state dicts for all layers."""
+    """Save FlatQuant transform state dicts for all layers.
+
+    Saves Kronecker transforms AND LWC/LAC clip factors — both are required
+    to reproduce the reparameterized weights on reload.
+    """
     transforms = {}
     for i, layer in enumerate(model.model.layers):
         state = {}
         if isinstance(layer.self_attn, FlatQuantLlamaAttention):
             state["attn_ln_trans"] = layer.self_attn.ln_trans.state_dict()
+            # LWC/LAC clip factors for attention projections
+            for proj_name in ("q_proj", "k_proj", "v_proj", "o_proj"):
+                fql = getattr(layer.self_attn, proj_name, None)
+                if isinstance(fql, FlatQuantLinear):
+                    proj_state = {}
+                    if fql.lwc and hasattr(fql, "clip_factor_w_max"):
+                        proj_state["clip_factor_w_max"] = fql.clip_factor_w_max.data
+                        proj_state["clip_factor_w_min"] = fql.clip_factor_w_min.data
+                    if hasattr(fql, "a_quantizer") and fql.a_quantizer.lac:
+                        proj_state["clip_factor_a"] = fql.a_quantizer.clip_factor.data
+                    if proj_state:
+                        state[f"attn_{proj_name}_clip"] = proj_state
         if isinstance(layer.mlp, FlatQuantLlamaMLP):
             state["mlp_up_gate_trans"] = layer.mlp.up_gate_trans.state_dict()
             state["mlp_down_trans"] = layer.mlp.down_trans.state_dict()
+            # LWC/LAC clip factors for MLP projections
+            for proj_name in ("gate_proj", "up_proj", "down_proj"):
+                fql = getattr(layer.mlp, proj_name, None)
+                if isinstance(fql, FlatQuantLinear):
+                    proj_state = {}
+                    if fql.lwc and hasattr(fql, "clip_factor_w_max"):
+                        proj_state["clip_factor_w_max"] = fql.clip_factor_w_max.data
+                        proj_state["clip_factor_w_min"] = fql.clip_factor_w_min.data
+                    if hasattr(fql, "a_quantizer") and fql.a_quantizer.lac:
+                        proj_state["clip_factor_a"] = fql.a_quantizer.clip_factor.data
+                    if proj_state:
+                        state[f"mlp_{proj_name}_clip"] = proj_state
         if state:
             transforms[i] = state
     torch.save(transforms, path)
@@ -1594,8 +1622,11 @@ def save_flat_transforms(model: nn.Module, path: str) -> None:
 
 
 def load_flat_transforms(model: nn.Module, path: str) -> nn.Module:
-    """Load pre-trained FlatQuant transforms into an already-wrapped model."""
-    # Determine model device to place loaded tensors on the correct device
+    """Load pre-trained FlatQuant transforms into an already-wrapped model.
+
+    Restores both Kronecker transforms and LWC/LAC clip factors so that
+    fq_reparameterize_model() produces the same weights as during training.
+    """
     try:
         _device = next(model.parameters()).device
     except StopIteration:
@@ -1604,14 +1635,41 @@ def load_flat_transforms(model: nn.Module, path: str) -> nn.Module:
     transforms = torch.load(path, map_location=_device)
     for i, state in transforms.items():
         layer = model.model.layers[i]
+
+        # --- Attention ---
         if "attn_ln_trans" in state and isinstance(layer.self_attn, FlatQuantLlamaAttention):
             layer.self_attn.ln_trans.load_state_dict(state["attn_ln_trans"])
             layer.self_attn.ln_trans.to(_device)
+        for proj_name in ("q_proj", "k_proj", "v_proj", "o_proj"):
+            clip_key = f"attn_{proj_name}_clip"
+            if clip_key in state and isinstance(layer.self_attn, FlatQuantLlamaAttention):
+                fql = getattr(layer.self_attn, proj_name, None)
+                if isinstance(fql, FlatQuantLinear):
+                    ps = state[clip_key]
+                    if "clip_factor_w_max" in ps and hasattr(fql, "clip_factor_w_max"):
+                        fql.clip_factor_w_max.data.copy_(ps["clip_factor_w_max"].to(_device))
+                        fql.clip_factor_w_min.data.copy_(ps["clip_factor_w_min"].to(_device))
+                    if "clip_factor_a" in ps and fql.a_quantizer.lac:
+                        fql.a_quantizer.clip_factor.data.copy_(ps["clip_factor_a"].to(_device))
+
+        # --- MLP ---
         if "mlp_up_gate_trans" in state and isinstance(layer.mlp, FlatQuantLlamaMLP):
             layer.mlp.up_gate_trans.load_state_dict(state["mlp_up_gate_trans"])
             layer.mlp.up_gate_trans.to(_device)
-        if "mlp_down_trans" in state:
+        if "mlp_down_trans" in state and isinstance(layer.mlp, FlatQuantLlamaMLP):
             layer.mlp.down_trans.load_state_dict(state["mlp_down_trans"])
             layer.mlp.down_trans.to(_device)
+        for proj_name in ("gate_proj", "up_proj", "down_proj"):
+            clip_key = f"mlp_{proj_name}_clip"
+            if clip_key in state and isinstance(layer.mlp, FlatQuantLlamaMLP):
+                fql = getattr(layer.mlp, proj_name, None)
+                if isinstance(fql, FlatQuantLinear):
+                    ps = state[clip_key]
+                    if "clip_factor_w_max" in ps and hasattr(fql, "clip_factor_w_max"):
+                        fql.clip_factor_w_max.data.copy_(ps["clip_factor_w_max"].to(_device))
+                        fql.clip_factor_w_min.data.copy_(ps["clip_factor_w_min"].to(_device))
+                    if "clip_factor_a" in ps and fql.a_quantizer.lac:
+                        fql.a_quantizer.clip_factor.data.copy_(ps["clip_factor_a"].to(_device))
+
     logger.info(f"Loaded FlatQuant transforms from {path}")
     return model
