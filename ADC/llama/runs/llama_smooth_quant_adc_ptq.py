@@ -1077,24 +1077,31 @@ def perform_kd_finetuning(
     logger.info("Teacher loaded and frozen.")
 
     # -----------------------------------------------------------------
-    # 2. Collect trainable params: only activation scales in QATLinearADC
-    #    (weight scales were calibrated carefully — leave them fixed)
+    # 2. Collect trainable params: per-channel weight scales in QATLinearADC.
+    #
+    # NOTE: activation_quantizer.scale is intentionally NOT used in
+    # QATLinearADC.forward() — activations are scaled dynamically per-token
+    # (s_x = amax(x, dim=-1) / act_levels), so there is no learned
+    # per-tensor activation scale to tune.
+    #
+    # weight_quantizer.scale IS used in forward via round_ste(W / s_w),
+    # and gradients flow through STE. KD can shift these scales to
+    # minimise logit KL rather than the calibration percentile criterion.
     # -----------------------------------------------------------------
     kd_params = []
     for _, m in model.named_modules():
         if isinstance(m, QATLinearADC):
-            # Freeze everything, then re-enable only the activation scale
             m.set_quantizer_mode('fixed')
-            m.activation_quantizer.scale.requires_grad_(True)
-            kd_params.append(m.activation_quantizer.scale)
+            m.weight_quantizer.scale.requires_grad_(True)
+            kd_params.append(m.weight_quantizer.scale)
 
     if not kd_params:
-        logger.warning("KD: no QATLinearADC activation scales found — skipping.")
+        logger.warning("KD: no QATLinearADC weight scales found — skipping.")
         del teacher
         torch.cuda.empty_cache()
         return
 
-    logger.info(f"KD trainable params: {len(kd_params)} activation scales")
+    logger.info(f"KD trainable params: {len(kd_params)} per-channel weight scales")
     optimizer = torch.optim.Adam(kd_params, lr=lr)
 
     # -----------------------------------------------------------------
@@ -1143,7 +1150,7 @@ def perform_kd_finetuning(
             torch.nn.utils.clip_grad_norm_(kd_params, max_norm=1.0)
             optimizer.step()
 
-            # Ensure activation scales stay positive
+            # Ensure weight scales stay positive
             with torch.no_grad():
                 for p in kd_params:
                     p.clamp_(min=1e-6)
