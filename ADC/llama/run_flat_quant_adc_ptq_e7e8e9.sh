@@ -45,7 +45,7 @@ FQ_ADD_DIAG=false
 FQ_LWC=true
 FQ_LAC=true
 FQ_SAVE_TRANSFORMS=true
-FQ_RELOAD_PATH=""          # set to a .pt path to skip FQ training
+FQ_RELOAD_PATH="./ADC/llama/checkpoints/outputs_llama_flat_quant_adc_ptq_20260325/flat_quant_transforms.pt"
 
 # ============================================================
 # ADC Hardware Configuration
@@ -86,7 +86,7 @@ VISUALIZE_LAYERS="layers.0.self_attn.q_proj layers.0.mlp.down_proj layers.15.mlp
 TORCH_DTYPE="float32"
 WANDB_PROJECT="llama-flat-quant-adc-ptq-blocks"
 SEED=42
-RUN_NO_ADC_EVAL=false    # set true to measure PPL without ADC (isolates ADC contribution)
+RUN_NO_ADC_EVAL=true     # set true to measure PPL without ADC (isolates ADC contribution)
 
 # ============================================================
 # Experiment-specific penalty parameters
