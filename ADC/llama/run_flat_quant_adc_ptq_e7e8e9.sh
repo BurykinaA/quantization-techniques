@@ -149,11 +149,13 @@ case "$EXPERIMENT" in
         FQ_LAMBDA_CLIP=0.0
         FQ_LAMBDA_DEAD=$_LAMBDA_DEAD_INTENSITY
         FQ_DEAD_THRESHOLD=$_DEAD_THRESHOLD_INTENSITY
+        FQ_FREEZE_CLIP=true    # prevent LWC from driving delta→0 to "solve" dead penalty
         ;;
     e9)
         FQ_LAMBDA_CLIP=0.01
         FQ_LAMBDA_DEAD=$_LAMBDA_DEAD_INTENSITY
         FQ_DEAD_THRESHOLD=$_DEAD_THRESHOLD_INTENSITY
+        FQ_FREEZE_CLIP=true    # prevent LWC from driving delta→0
         ;;
     band)
         # Band-occupancy loss: encourages z-mass into (tau_lo, tau_hi)
