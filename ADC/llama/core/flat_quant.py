@@ -453,9 +453,13 @@ class FlatQuantLinear(nn.Module):
         """
         if self.raw_alpha_adc is None:
             return
-        p99 = torch.quantile(act_stats.float(), 0.99).clamp(min=1e-3)
+        # Use p50 (median) rather than p99: with p99, alpha is large and most
+        # code_xi ≈ 0 → y_int small → dead zone unchanged.
+        # With p50, ~50% of features clip to ±127 and ~50% spread [0,127] →
+        # all tile inputs contribute large codes → y_int >> delta → alive.
+        p50 = torch.quantile(act_stats.float(), 0.50).clamp(min=1e-3)
         # softplus^{-1}(x) = log(exp(x) - 1)
-        raw = torch.log(torch.expm1(p99))
+        raw = torch.log(torch.expm1(p50))
         self.raw_alpha_adc.data.fill_(raw.item())
         self._alpha_adc_initialized = True
 
@@ -1224,17 +1228,16 @@ def calibrate_flat_quant(
                 if isinstance(_m, KroneckerTransform):
                     _init_kronecker_hadamard(_m)
 
-        # (b3) Initialize alpha_adc from activation statistics
-        # Use p99 of fp_inps as a rough proxy for each projection's input range.
-        # This is the layer input; the actual projection inputs differ (especially
-        # down_proj which sees intermediate activations), but it gives a better
-        # starting point than a fixed value and lets the optimizer fine-tune.
+        # (b3) Initialize alpha_adc from activation statistics.
+        # Use p50 (median) of fp_inps: p99 was too large — most code_xi ≈ 0,
+        # y_int stayed small, dead zone unchanged.  With p50, ~50% of features
+        # clip to ±127 and ~50% fill [0,127] → y_int >> delta → mostly alive.
         for _name, _m in layer.named_modules():
             if isinstance(_m, FlatQuantLinear) and _m.raw_alpha_adc is not None:
                 _flat = fp_inps[:actual_nsamples].abs().float().flatten()
                 _idx = torch.randperm(_flat.numel(), device=_flat.device)[:min(1_000_000, _flat.numel())]
-                p99 = torch.quantile(_flat[_idx], 0.99)
-                raw = torch.log(torch.expm1(p99.clamp(min=0.01)))
+                p50 = torch.quantile(_flat[_idx], 0.50)
+                raw = torch.log(torch.expm1(p50.clamp(min=0.01)))
                 _m.raw_alpha_adc.data.fill_(raw.clamp(min=-5.0, max=5.0).item())
 
         layer = layer.to(device)
