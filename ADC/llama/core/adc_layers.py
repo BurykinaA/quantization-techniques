@@ -261,6 +261,10 @@ class QATLinearADC(nn.Linear):
         self.bypass_adc = False
         # When True, skip ALL quantization (plain F.linear).
         self.bypass_all = False
+        # PACT-style learned activation clip threshold (set from FlatQuantLinear
+        # after ADC conversion).  When not None, replaces per-token amax with a
+        # fixed scalar clip value so activation codes are not outlier-dominated.
+        self.alpha_adc: float | None = None
     
     def set_quantizer_mode(self, mode: str):
         """
@@ -303,19 +307,26 @@ class QATLinearADC(nn.Linear):
         input_dtype = x.dtype
         x = x.float()
 
-        # 1) Build activation codes — dynamic per-token scale, matching
-        #    FlatQuantLinear._train_forward_adc which the Kronecker transforms
-        #    were trained against.  activation_quantizer.scale (per-tensor,
-        #    calibrated in STEP 2) is intentionally NOT used for the forward
-        #    computation; it is still calibrated so that calibration diagnostics
-        #    remain valid.
+        # 1) Build activation codes — matching FlatQuantLinear._train_forward_adc.
+        #    When alpha_adc is set (PACT-style), use the fixed learned clip threshold
+        #    so codes are not dominated by per-token outliers (same logic as training).
+        #    Otherwise fall back to per-token amax (original behaviour).
+        #    activation_quantizer.scale (per-tensor, calibrated in STEP 2) is
+        #    intentionally NOT used for the forward computation; it is still
+        #    calibrated so that calibration diagnostics remain valid.
         act_q = self.activation_quantizer
         qmin_x, qmax_x = act_q.qmin, act_q.qmax
         act_levels = float(qmax_x)  # 127 (signed) or 255 (unsigned)
 
-        # amax over the feature dimension → one scale per token [B, 1]
-        s_x = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
-        code_x = round_ste(x / s_x).clamp(qmin_x, qmax_x)
+        if self.alpha_adc is not None:
+            alpha_t = x.new_tensor(self.alpha_adc)
+            x_c = x.clamp(-alpha_t, alpha_t)
+            s_x = alpha_t / act_levels          # scalar — same for all tokens
+            code_x = round_ste(x_c / s_x).clamp(qmin_x, qmax_x)
+        else:
+            # amax over the feature dimension → one scale per token [B, 1]
+            s_x = x.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
+            code_x = round_ste(x / s_x).clamp(qmin_x, qmax_x)
 
         # 2) Build weight codes (per-channel symmetric, channel_dim=0)
         w_q = self.weight_quantizer
@@ -420,6 +431,16 @@ class TiledLinearADC(nn.Module):
                 )
             )
     
+    def set_alpha_adc(self, alpha: float | None) -> None:
+        """Set PACT-style activation clip threshold for all tiles.
+
+        Args:
+            alpha: Positive float clip threshold (alpha = softplus(raw_alpha_adc)).
+                   Pass None to revert to per-token amax (original behaviour).
+        """
+        for tile in self.tiles:
+            tile.alpha_adc = alpha
+
     def set_bypass_adc(self, bypass: bool):
         """Enable/disable ADC bypass for all tiles."""
         for tile in self.tiles:

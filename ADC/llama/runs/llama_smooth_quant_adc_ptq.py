@@ -47,6 +47,7 @@ from ADC.llama.core.flat_quant import (
     load_flat_transforms,
     capture_layer_outputs,
     compare_layer_outputs,
+    propagate_alpha_adc_to_tiled,
 )
 
 import wandb
@@ -2357,6 +2358,11 @@ def main():
 
     model = model.to(device)
     logger.info(f"Model moved to {device}")
+
+    # Propagate learned PACT alpha_adc from FlatQuantLinear → TiledLinearADC.
+    # Only has an effect when FlatQuant was used (alpha_adc params exist);
+    # is a no-op otherwise (logs "Propagated alpha_adc to 0 layers").
+    propagate_alpha_adc_to_tiled(model)
 
     stats = LlamaADCConverter.count_adc_layers(model)
     logger.info(f"Model: {stats['adc_linear']} ADC layers, {stats['regular_linear']} regular Linear, {stats['total_params']:,} params")

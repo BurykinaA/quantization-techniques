@@ -417,6 +417,16 @@ class FlatQuantLinear(nn.Module):
         self._band_beta         = 5.0
         self._band_topk_frac    = 0.2   # top-k% worst tiles by band loss
         self._last_band_penalty: torch.Tensor | None = None
+        # PACT-style learnable activation range for ADC path.
+        # alpha_adc = softplus(raw_alpha_adc) + eps — a fixed clip threshold
+        # replacing per-token amax in _train_forward_adc.
+        # None when adc_config is None (non-ADC path).
+        self.raw_alpha_adc: nn.Parameter | None = None
+        self._alpha_adc_initialized = False
+        if adc_config is not None:
+            # Initialize raw_alpha_adc so softplus(raw) ≈ 1.0 (softplus(0.541)≈1)
+            # Will be overwritten by init_alpha_adc() from calibration stats.
+            self.raw_alpha_adc = nn.Parameter(torch.tensor(0.541))
         if lwc:
             out_features = linear.weight.shape[0]
             self.clip_factor_w_max = nn.Parameter(
@@ -433,6 +443,21 @@ class FlatQuantLinear(nn.Module):
         wmax = wmax * self.sigmoid(self.clip_factor_w_max)
         wmin = wmin * self.sigmoid(self.clip_factor_w_min)
         return torch.clamp(weight, min=wmin, max=wmax)
+
+    def init_alpha_adc(self, act_stats: torch.Tensor) -> None:
+        """Initialise raw_alpha_adc from percentile of activation magnitudes.
+
+        act_stats: 1-D tensor of per-channel max activations (abs) collected
+                   during the FP forward pass.  We use p99 of the distribution
+                   as the initial clip threshold.
+        """
+        if self.raw_alpha_adc is None:
+            return
+        p99 = torch.quantile(act_stats.float(), 0.99).clamp(min=1e-3)
+        # softplus^{-1}(x) = log(exp(x) - 1)
+        raw = torch.log(torch.expm1(p99))
+        self.raw_alpha_adc.data.fill_(raw.item())
+        self._alpha_adc_initialized = True
 
     def ori_forward(self, x: torch.Tensor) -> torch.Tensor:
         """Original FP forward — no transform, no quantisation."""
@@ -550,9 +575,17 @@ class FlatQuantLinear(nn.Module):
             s_wi = wi.abs().amax(dim=1, keepdim=True).clamp(min=1e-8) / w_levels
             code_wi = round_ste(wi / s_wi).clamp(qmin_w, qmax_w)
 
-            # Per-token activation quantization for this tile
-            s_xi = xi.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
-            code_xi = round_ste(xi / s_xi).clamp(qmin_x, qmax_x)
+            # Per-tile activation quantization
+            # PACT-style: use fixed learned clip threshold alpha_adc
+            # so that code_xi is not dominated by per-token outliers.
+            if self.raw_alpha_adc is not None:
+                alpha = F.softplus(self.raw_alpha_adc).clamp(min=1e-6)
+                xi_c = xi.clamp(-alpha, alpha)
+                s_xi = alpha / act_levels           # scalar — same for all tokens
+                code_xi = round_ste(xi_c / s_xi).clamp(qmin_x, qmax_x)
+            else:
+                s_xi = xi.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
+                code_xi = round_ste(xi / s_xi).clamp(qmin_x, qmax_x)
 
             # Integer MVM → ADC quantization (Eq. 2-3)
             # y_int can reach tile_in * 127^2 ≈ 4M, which overflows float16
@@ -1191,6 +1224,17 @@ def calibrate_flat_quant(
                 if isinstance(_m, KroneckerTransform):
                     _init_kronecker_hadamard(_m)
 
+        # (b3) Initialize alpha_adc from activation statistics
+        # Use p99 of fp_inps as a rough proxy for each projection's input range.
+        # This is the layer input; the actual projection inputs differ (especially
+        # down_proj which sees intermediate activations), but it gives a better
+        # starting point than a fixed value and lets the optimizer fine-tune.
+        for _name, _m in layer.named_modules():
+            if isinstance(_m, FlatQuantLinear) and _m.raw_alpha_adc is not None:
+                p99 = torch.quantile(fp_inps[:actual_nsamples].abs().float(), 0.99)
+                raw = torch.log(torch.expm1(p99.clamp(min=0.01)))
+                _m.raw_alpha_adc.data.fill_(raw.clamp(min=-5.0, max=5.0).item())
+
         layer = layer.to(device)
 
         # (c) Set up trainable parameters & optimiser ───────────────
@@ -1218,6 +1262,15 @@ def calibrate_flat_quant(
         if lac and not freeze_clip:
             trained_params.append({
                 "params": _get_params_by_pattern(layer, ["clip_factor_a"]),
+                "lr": flat_lr * 10,
+            })
+        # PACT alpha_adc: use higher LR like clip factors (10x base LR)
+        # but only when adc_config is set (raw_alpha_adc is not None).
+        # _get_params_by_pattern also sets requires_grad=True, so use it here too.
+        alpha_params = _get_params_by_pattern(layer, ["raw_alpha_adc"])
+        if alpha_params:
+            trained_params.append({
+                "params": alpha_params,
                 "lr": flat_lr * 10,
             })
 
@@ -1376,10 +1429,10 @@ def calibrate_flat_quant(
                             param.data.clamp_(min=0.1)
                         elif "diag_scale" in name:
                             param.data.clamp_(min=1e-4, max=10.0)
-                        if "diag_left" in name or "diag_right" in name:
-                            param.data.clamp_(min=0.1)
-                        elif "diag_scale" in name:
-                            param.data.clamp_(min=1e-4, max=10.0)
+                        elif "raw_alpha_adc" in name:
+                            # Keep alpha = softplus(raw) in [0.1, 100]
+                            # softplus^{-1}(0.1) ≈ -2.25, softplus^{-1}(100) ≈ 100
+                            param.data.clamp_(min=-2.25, max=100.0)
                 scheduler.step()
                 _pf: dict = dict(
                     loss=f"{loss.item():.3e}",
@@ -1595,7 +1648,7 @@ def save_flat_transforms(model: nn.Module, path: str) -> None:
         state = {}
         if isinstance(layer.self_attn, FlatQuantLlamaAttention):
             state["attn_ln_trans"] = layer.self_attn.ln_trans.state_dict()
-            # LWC/LAC clip factors for attention projections
+            # LWC/LAC clip factors and alpha_adc for attention projections
             for proj_name in ("q_proj", "k_proj", "v_proj", "o_proj"):
                 fql = getattr(layer.self_attn, proj_name, None)
                 if isinstance(fql, FlatQuantLinear):
@@ -1605,12 +1658,14 @@ def save_flat_transforms(model: nn.Module, path: str) -> None:
                         proj_state["clip_factor_w_min"] = fql.clip_factor_w_min.data
                     if hasattr(fql, "a_quantizer") and fql.a_quantizer.lac:
                         proj_state["clip_factor_a"] = fql.a_quantizer.clip_factor.data
+                    if fql.raw_alpha_adc is not None:
+                        proj_state["raw_alpha_adc"] = fql.raw_alpha_adc.data.clone()
                     if proj_state:
                         state[f"attn_{proj_name}_clip"] = proj_state
         if isinstance(layer.mlp, FlatQuantLlamaMLP):
             state["mlp_up_gate_trans"] = layer.mlp.up_gate_trans.state_dict()
             state["mlp_down_trans"] = layer.mlp.down_trans.state_dict()
-            # LWC/LAC clip factors for MLP projections
+            # LWC/LAC clip factors and alpha_adc for MLP projections
             for proj_name in ("gate_proj", "up_proj", "down_proj"):
                 fql = getattr(layer.mlp, proj_name, None)
                 if isinstance(fql, FlatQuantLinear):
@@ -1620,6 +1675,8 @@ def save_flat_transforms(model: nn.Module, path: str) -> None:
                         proj_state["clip_factor_w_min"] = fql.clip_factor_w_min.data
                     if hasattr(fql, "a_quantizer") and fql.a_quantizer.lac:
                         proj_state["clip_factor_a"] = fql.a_quantizer.clip_factor.data
+                    if fql.raw_alpha_adc is not None:
+                        proj_state["raw_alpha_adc"] = fql.raw_alpha_adc.data.clone()
                     if proj_state:
                         state[f"mlp_{proj_name}_clip"] = proj_state
         if state:
@@ -1658,6 +1715,8 @@ def load_flat_transforms(model: nn.Module, path: str) -> nn.Module:
                         fql.clip_factor_w_min.data.copy_(ps["clip_factor_w_min"].to(_device))
                     if "clip_factor_a" in ps and fql.a_quantizer.lac:
                         fql.a_quantizer.clip_factor.data.copy_(ps["clip_factor_a"].to(_device))
+                    if "raw_alpha_adc" in ps and fql.raw_alpha_adc is not None:
+                        fql.raw_alpha_adc.data.copy_(ps["raw_alpha_adc"].to(_device))
 
         # --- MLP ---
         if "mlp_up_gate_trans" in state and isinstance(layer.mlp, FlatQuantLlamaMLP):
@@ -1677,6 +1736,38 @@ def load_flat_transforms(model: nn.Module, path: str) -> nn.Module:
                         fql.clip_factor_w_min.data.copy_(ps["clip_factor_w_min"].to(_device))
                     if "clip_factor_a" in ps and fql.a_quantizer.lac:
                         fql.a_quantizer.clip_factor.data.copy_(ps["clip_factor_a"].to(_device))
+                    if "raw_alpha_adc" in ps and fql.raw_alpha_adc is not None:
+                        fql.raw_alpha_adc.data.copy_(ps["raw_alpha_adc"].to(_device))
 
     logger.info(f"Loaded FlatQuant transforms from {path}")
     return model
+
+
+def propagate_alpha_adc_to_tiled(model: nn.Module) -> None:
+    """Propagate learned alpha_adc from FlatQuantLinear to TiledLinearADC.
+
+    After ``replace_linear_with_adc``, each ``FlatQuantLinear.linear`` is a
+    ``TiledLinearADC``.  This function reads ``raw_alpha_adc`` from every
+    ``FlatQuantLinear`` and calls ``TiledLinearADC.set_alpha_adc`` so that
+    inference uses the same PACT clip threshold that was learned during
+    FlatQuant calibration.
+
+    Must be called **after** ``replace_linear_with_adc`` and **before**
+    any quantized inference.
+    """
+    from ADC.llama.core.adc_layers import TiledLinearADC
+    n_propagated = 0
+    for _, module in model.named_modules():
+        if not isinstance(module, FlatQuantLinear):
+            continue
+        if module.raw_alpha_adc is None:
+            continue
+        if not isinstance(module.linear, TiledLinearADC):
+            continue
+        with torch.no_grad():
+            alpha_val = float(
+                torch.nn.functional.softplus(module.raw_alpha_adc).clamp(min=1e-6).item()
+            )
+        module.linear.set_alpha_adc(alpha_val)
+        n_propagated += 1
+    logger.info(f"Propagated alpha_adc to {n_propagated} TiledLinearADC layers")
