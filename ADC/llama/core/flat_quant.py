@@ -424,9 +424,19 @@ class FlatQuantLinear(nn.Module):
         self.raw_alpha_adc: nn.Parameter | None = None
         self._alpha_adc_initialized = False
         if adc_config is not None:
-            # Initialize raw_alpha_adc so softplus(raw) ≈ 1.0 (softplus(0.541)≈1)
-            # Will be overwritten by init_alpha_adc() from calibration stats.
-            self.raw_alpha_adc = nn.Parameter(torch.tensor(0.541))
+            # Per-tile alpha: one PACT threshold per input tile (matching TiledLinearADC).
+            # Different tiles see different activation distributions (outlier features
+            # concentrate in specific dimensions), so a single scalar alpha causes
+            # some tiles to have all-saturated codes (alpha too small) or all-dead
+            # codes (alpha too large).  Per-tile alpha fixes this.
+            _mvm_lim = adc_config.get("mvm_limit", 256)
+            _in_f = linear.weight.shape[1]
+            _ti = _in_f
+            while _ti > _mvm_lim and _ti % 2 == 0:
+                _ti //= 2
+            _nt = max(1, _in_f // _ti)
+            # Initialize so softplus(raw) ≈ 1.0 per tile (softplus(0.541)≈1)
+            self.raw_alpha_adc = nn.Parameter(torch.full((_nt,), 0.541))
         if lwc:
             out_features = linear.weight.shape[0]
             self.clip_factor_w_max = nn.Parameter(
@@ -580,12 +590,15 @@ class FlatQuantLinear(nn.Module):
             code_wi = round_ste(wi / s_wi).clamp(qmin_w, qmax_w)
 
             # Per-tile activation quantization
-            # PACT-style: use fixed learned clip threshold alpha_adc
-            # so that code_xi is not dominated by per-token outliers.
+            # PACT-style: use per-tile learned clip threshold alpha_adc[i].
+            # Per-tile is critical: outlier features concentrate in specific
+            # dimensions, so different tiles need different alpha values.
+            # A single global alpha causes whole tiles to saturate (alpha too
+            # small) or die (alpha too large).
             if self.raw_alpha_adc is not None:
-                alpha = F.softplus(self.raw_alpha_adc).clamp(min=1e-6)
-                xi_c = xi.clamp(-alpha, alpha)
-                s_xi = alpha / act_levels           # scalar — same for all tokens
+                alpha_i = F.softplus(self.raw_alpha_adc[i]).clamp(min=1e-6)
+                xi_c = xi.clamp(-alpha_i, alpha_i)
+                s_xi = alpha_i / act_levels         # scalar for this tile
                 code_xi = round_ste(xi_c / s_xi).clamp(qmin_x, qmax_x)
             else:
                 s_xi = xi.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
@@ -1228,17 +1241,43 @@ def calibrate_flat_quant(
                 if isinstance(_m, KroneckerTransform):
                     _init_kronecker_hadamard(_m)
 
-        # (b3) Initialize alpha_adc from activation statistics.
-        # Use p50 (median) of fp_inps: p99 was too large — most code_xi ≈ 0,
-        # y_int stayed small, dead zone unchanged.  With p50, ~50% of features
-        # clip to ±127 and ~50% fill [0,127] → y_int >> delta → mostly alive.
+        # (b3) Initialize per-tile alpha_adc from per-tile activation statistics.
+        # Per-tile is critical: outlier features are concentrated in specific
+        # input dimensions.  A global p50 calibrates some tiles correctly but
+        # causes others (containing outlier dims) to saturate (alpha too small
+        # → all codes = ±127 → y_int is random sign noise) or die (alpha too
+        # large → all codes ≈ 0 → y_int ≈ 0).
+        # We use p50 (median) per tile so ~50% of each tile's activations fill
+        # [0, alpha_i] and ~50% clip to ±127, keeping every tile's y_int >> delta.
+        _fp_inps_f32 = fp_inps[:actual_nsamples].float()  # [N, seqlen, in_f]
         for _name, _m in layer.named_modules():
             if isinstance(_m, FlatQuantLinear) and _m.raw_alpha_adc is not None:
-                _flat = fp_inps[:actual_nsamples].abs().float().flatten()
-                _idx = torch.randperm(_flat.numel(), device=_flat.device)[:min(1_000_000, _flat.numel())]
-                p50 = torch.quantile(_flat[_idx], 0.50)
-                raw = torch.log(torch.expm1(p50.clamp(min=0.01)))
-                _m.raw_alpha_adc.data.fill_(raw.clamp(min=-5.0, max=5.0).item())
+                _in_f = _m.linear.weight.shape[1]
+                _mvm = _m._adc_config.get("mvm_limit", 256)
+                _ti = _in_f
+                while _ti > _mvm and _ti % 2 == 0:
+                    _ti //= 2
+                _nt = max(1, _in_f // _ti)
+                # fp_inps is layer input [N, seqlen, hidden]; for most projections
+                # this equals the projection input (o_proj/down_proj differ but
+                # layer input is a reasonable proxy at init time).
+                _flat2d = _fp_inps_f32.reshape(-1, _fp_inps_f32.shape[-1])  # [B, in_f]
+                # If projection in_features ≠ hidden (shouldn't happen for Llama), skip
+                if _flat2d.shape[-1] < _in_f:
+                    continue
+                _raw_inits: list[float] = []
+                for _t in range(_nt):
+                    _tile_vals = _flat2d[:, _t * _ti:(_t + 1) * _ti].abs().flatten()
+                    _sidx = torch.randperm(_tile_vals.numel(), device=_tile_vals.device)[
+                        :min(200_000, _tile_vals.numel())
+                    ]
+                    _p50 = torch.quantile(_tile_vals[_sidx], 0.50).clamp(min=1e-3)
+                    _raw = torch.log(torch.expm1(_p50)).clamp(min=-5.0, max=5.0)
+                    _raw_inits.append(_raw.item())
+                if len(_raw_inits) == _m.raw_alpha_adc.shape[0]:
+                    _m.raw_alpha_adc.data.copy_(
+                        torch.tensor(_raw_inits, device=_m.raw_alpha_adc.device)
+                    )
 
         layer = layer.to(device)
 
@@ -1770,9 +1809,10 @@ def propagate_alpha_adc_to_tiled(model: nn.Module) -> None:
         if not isinstance(module.linear, TiledLinearADC):
             continue
         with torch.no_grad():
-            alpha_val = float(
-                torch.nn.functional.softplus(module.raw_alpha_adc).clamp(min=1e-6).item()
-            )
-        module.linear.set_alpha_adc(alpha_val)
+            alphas = torch.nn.functional.softplus(module.raw_alpha_adc).clamp(min=1e-6)
+        if alphas.numel() == 1:
+            module.linear.set_alpha_adc(float(alphas.item()))
+        else:
+            module.linear.set_alpha_adc([float(a) for a in alphas])
         n_propagated += 1
     logger.info(f"Propagated alpha_adc to {n_propagated} TiledLinearADC layers")

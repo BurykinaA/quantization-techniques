@@ -431,15 +431,21 @@ class TiledLinearADC(nn.Module):
                 )
             )
     
-    def set_alpha_adc(self, alpha: float | None) -> None:
-        """Set PACT-style activation clip threshold for all tiles.
+    def set_alpha_adc(self, alpha: "float | list[float] | None") -> None:
+        """Set PACT-style activation clip threshold.
 
         Args:
-            alpha: Positive float clip threshold (alpha = softplus(raw_alpha_adc)).
-                   Pass None to revert to per-token amax (original behaviour).
+            alpha: Scalar float (same for all tiles), list of per-tile floats
+                   (length must match n_tiles), or None to revert to per-token
+                   amax (original behaviour).
         """
-        for tile in self.tiles:
-            tile.alpha_adc = alpha
+        if alpha is None or isinstance(alpha, float):
+            for tile in self.tiles:
+                tile.alpha_adc = alpha
+        else:
+            # Per-tile list
+            for i, tile in enumerate(self.tiles):
+                tile.alpha_adc = float(alpha[i]) if i < len(alpha) else float(alpha[-1])
 
     def set_bypass_adc(self, bypass: bool):
         """Enable/disable ADC bypass for all tiles."""
