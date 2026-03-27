@@ -1231,7 +1231,9 @@ def calibrate_flat_quant(
         # starting point than a fixed value and lets the optimizer fine-tune.
         for _name, _m in layer.named_modules():
             if isinstance(_m, FlatQuantLinear) and _m.raw_alpha_adc is not None:
-                p99 = torch.quantile(fp_inps[:actual_nsamples].abs().float(), 0.99)
+                _flat = fp_inps[:actual_nsamples].abs().float().flatten()
+                _idx = torch.randperm(_flat.numel(), device=_flat.device)[:min(1_000_000, _flat.numel())]
+                p99 = torch.quantile(_flat[_idx], 0.99)
                 raw = torch.log(torch.expm1(p99.clamp(min=0.01)))
                 _m.raw_alpha_adc.data.fill_(raw.clamp(min=-5.0, max=5.0).item())
 
