@@ -1828,6 +1828,11 @@ def main():
     parser.add_argument("--fq_kronecker_init", type=str, default="random",
                         choices=["random", "hadamard"],
                         help="Kronecker factor initialization: 'random' (default FlatQuant) or 'hadamard' (QuaRot-style)")
+    parser.add_argument("--fq_loss_type", type=str, default="mse",
+                        choices=["mse", "l1", "huber"],
+                        help="Reconstruction loss for FlatQuant calibration: mse (default), l1, or huber")
+    parser.add_argument("--fq_huber_delta", type=float, default=1.0,
+                        help="Delta parameter for HuberLoss (only used when --fq_loss_type=huber)")
     # Knowledge Distillation fine-tuning (post-ADC-calibration)
     parser.add_argument("--kd_epochs", type=int, default=0,
                         help="KD fine-tuning epochs after ADC calibration (0 = disabled)")
@@ -2273,6 +2278,8 @@ def main():
                     band_topk_frac=args.fq_band_topk_frac,
                     freeze_clip=args.fq_freeze_clip,
                     kronecker_init=args.fq_kronecker_init,
+                    loss_type=args.fq_loss_type,
+                    huber_delta=args.fq_huber_delta,
                 )
 
             if args.fq_save_transforms:

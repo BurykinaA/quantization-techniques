@@ -1000,6 +1000,8 @@ def calibrate_flat_quant(
     band_topk_frac: float = 0.2,
     freeze_clip: bool = False,
     kronecker_init: str = "random",
+    loss_type: str = "mse",
+    huber_delta: float = 1.0,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1135,7 +1137,12 @@ def calibrate_flat_quant(
     # ── Step 2: layer-by-layer calibration ─────────────────────────
     fp_inps = inps.float()
     fp_outs = torch.zeros_like(fp_inps)
-    loss_func = nn.MSELoss()
+    if loss_type == "l1":
+        loss_func = nn.L1Loss()
+    elif loss_type == "huber":
+        loss_func = nn.HuberLoss(delta=huber_delta)
+    else:
+        loss_func = nn.MSELoss()
 
     num_layers = len(layers)
     layer_bar = tqdm(range(num_layers), desc="FlatQuant layers", unit="layer")

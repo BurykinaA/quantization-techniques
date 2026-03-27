@@ -41,7 +41,7 @@ FQ_CALI_BSZ=16
 FQ_EPOCHS=30
 FQ_LR=0.005
 FQ_DIAG_ALPHA=0.5
-FQ_ADD_DIAG=false
+FQ_ADD_DIAG=false  # add_diag=true was tested and gave PPL≈9000 — disabled
 FQ_LWC=true
 FQ_LAC=true
 FQ_SAVE_TRANSFORMS=true
@@ -104,6 +104,8 @@ FQ_BAND_BETA=5.0
 FQ_BAND_TOPK_FRAC=0.2
 FQ_FREEZE_CLIP=false
 FQ_KRONECKER_INIT="random"    # "random" (FlatQuant default) | "hadamard" (QuaRot-style)
+FQ_LOSS_TYPE="mse"            # "mse" | "l1" | "huber"
+FQ_HUBER_DELTA=1.0
 
 # ============================================================
 # KD fine-tuning (post-ADC-calibration)
@@ -190,9 +192,25 @@ case "$EXPERIMENT" in
         # Baseline FlatQuant + KD fine-tuning on top
         KD_EPOCHS=10
         ;;
+    l1)
+        # L1 loss instead of MSE for FlatQuant calibration.
+        # Hypothesis: L1 penalises all channels linearly → less dominated by outlier channels,
+        # potentially giving more gradient signal to dead/small channels.
+        FQ_LOSS_TYPE="l1"
+        ;;
+    huber)
+        # Huber loss (smooth L1): L2 near zero, L1 for large errors.
+        # intensity controls delta: weak=0.1, mid=1.0, strong=10.0
+        FQ_LOSS_TYPE="huber"
+        case "$INTENSITY" in
+            weak)   FQ_HUBER_DELTA=0.1 ;;
+            mid)    FQ_HUBER_DELTA=1.0 ;;
+            strong) FQ_HUBER_DELTA=10.0 ;;
+        esac
+        ;;
     *)
         echo "Unknown experiment: '$EXPERIMENT'"
-        echo "Available: baseline | e7 | e8 | e9 | band | hadamard | hadamard+dead | kd | baseline+kd"
+        echo "Available: baseline | e7 | e8 | e9 | band | hadamard | hadamard+dead | kd | baseline+kd | l1 | huber"
         exit 1
         ;;
 esac
@@ -325,6 +343,13 @@ fi
 
 if [ "$FQ_KRONECKER_INIT" != "random" ]; then
     CMD="$CMD --fq_kronecker_init $FQ_KRONECKER_INIT"
+fi
+
+if [ "$FQ_LOSS_TYPE" != "mse" ]; then
+    CMD="$CMD --fq_loss_type $FQ_LOSS_TYPE"
+    if [ "$FQ_LOSS_TYPE" = "huber" ]; then
+        CMD="$CMD --fq_huber_delta $FQ_HUBER_DELTA"
+    fi
 fi
 
 if [ "$RUN_NO_ADC_EVAL" = true ]; then
