@@ -423,8 +423,11 @@ class FlatQuantLinear(nn.Module):
         # None when adc_config is None (non-ADC path).
         self.raw_alpha_adc: nn.Parameter | None = None
         self._alpha_adc_initialized = False
+        # Per-tile xi capture for post-training alpha calibration (see calibrate_flat_quant).
+        self._alpha_calib_mode: bool = False
+        self._alpha_calib_tiles: list = []   # list of lists: [tile_idx][batch]
         if adc_config is not None:
-            # Per-tile alpha: one PACT threshold per input tile (matching TiledLinearADC).
+            # Per-tile alpha: one PACT threshold per input tile.
             # Different tiles see different activation distributions (outlier features
             # concentrate in specific dimensions), so a single scalar alpha causes
             # some tiles to have all-saturated codes (alpha too small) or all-dead
@@ -435,8 +438,15 @@ class FlatQuantLinear(nn.Module):
             while _ti > _mvm_lim and _ti % 2 == 0:
                 _ti //= 2
             _nt = max(1, _in_f // _ti)
-            # Initialize so softplus(raw) ≈ 1.0 per tile (softplus(0.541)≈1)
-            self.raw_alpha_adc = nn.Parameter(torch.full((_nt,), 0.541))
+            # Initialize to large value (softplus(100) ≈ 100) so PACT has no effect
+            # during transform training — behaviour is identical to per-token ADC.
+            # The real per-tile thresholds are calibrated post-training from actual
+            # transformed activation statistics (see calibrate_flat_quant step d5).
+            # requires_grad=False: alpha is NOT optimised jointly with transforms;
+            # learning alpha under the PACT loss distorts the Kronecker transforms.
+            self.raw_alpha_adc = nn.Parameter(
+                torch.full((_nt,), 100.0), requires_grad=False
+            )
         if lwc:
             out_features = linear.weight.shape[0]
             self.clip_factor_w_max = nn.Parameter(
@@ -457,19 +467,14 @@ class FlatQuantLinear(nn.Module):
     def init_alpha_adc(self, act_stats: torch.Tensor) -> None:
         """Initialise raw_alpha_adc from percentile of activation magnitudes.
 
-        act_stats: 1-D tensor of per-channel max activations (abs) collected
-                   during the FP forward pass.  We use p99 of the distribution
-                   as the initial clip threshold.
+        Deprecated: per-tile alpha is now calibrated post-training inside
+        calibrate_flat_quant (step d5) from actual transformed xi statistics.
+        This method is kept for compatibility but is not called by the pipeline.
         """
         if self.raw_alpha_adc is None:
             return
-        # Use p50 (median) rather than p99: with p99, alpha is large and most
-        # code_xi ≈ 0 → y_int small → dead zone unchanged.
-        # With p50, ~50% of features clip to ±127 and ~50% spread [0,127] →
-        # all tile inputs contribute large codes → y_int >> delta → alive.
         p50 = torch.quantile(act_stats.float(), 0.50).clamp(min=1e-3)
-        # softplus^{-1}(x) = log(exp(x) - 1)
-        raw = torch.log(torch.expm1(p50))
+        raw = torch.log(torch.expm1(p50)).clamp(min=-5.0, max=5.0)
         self.raw_alpha_adc.data.fill_(raw.item())
         self._alpha_adc_initialized = True
 
@@ -584,6 +589,15 @@ class FlatQuantLinear(nn.Module):
         for i in range(n_tiles):
             xi = x2d[:, i * tile_in:(i + 1) * tile_in]     # [B, tile_in]
             wi = w_f32[:, i * tile_in:(i + 1) * tile_in]   # [out, tile_in]
+
+            # Capture per-tile xi for post-training alpha calibration.
+            # xi here is the TRANSFORMED activation (after ln_trans / up_gate_trans),
+            # which is exactly what PACT should clip at inference.
+            if self._alpha_calib_mode:
+                if not self._alpha_calib_tiles:
+                    self._alpha_calib_tiles = [[] for _ in range(n_tiles)]
+                if len(self._alpha_calib_tiles[i]) < 4:   # keep up to 4 batches
+                    self._alpha_calib_tiles[i].append(xi.detach().float().cpu())
 
             # Per-channel weight quantization for this tile
             s_wi = wi.abs().amax(dim=1, keepdim=True).clamp(min=1e-8) / w_levels
@@ -1241,43 +1255,9 @@ def calibrate_flat_quant(
                 if isinstance(_m, KroneckerTransform):
                     _init_kronecker_hadamard(_m)
 
-        # (b3) Initialize per-tile alpha_adc from per-tile activation statistics.
-        # Per-tile is critical: outlier features are concentrated in specific
-        # input dimensions.  A global p50 calibrates some tiles correctly but
-        # causes others (containing outlier dims) to saturate (alpha too small
-        # → all codes = ±127 → y_int is random sign noise) or die (alpha too
-        # large → all codes ≈ 0 → y_int ≈ 0).
-        # We use p50 (median) per tile so ~50% of each tile's activations fill
-        # [0, alpha_i] and ~50% clip to ±127, keeping every tile's y_int >> delta.
-        _fp_inps_f32 = fp_inps[:actual_nsamples].float()  # [N, seqlen, in_f]
-        for _name, _m in layer.named_modules():
-            if isinstance(_m, FlatQuantLinear) and _m.raw_alpha_adc is not None:
-                _in_f = _m.linear.weight.shape[1]
-                _mvm = _m._adc_config.get("mvm_limit", 256)
-                _ti = _in_f
-                while _ti > _mvm and _ti % 2 == 0:
-                    _ti //= 2
-                _nt = max(1, _in_f // _ti)
-                # fp_inps is layer input [N, seqlen, hidden]; for most projections
-                # this equals the projection input (o_proj/down_proj differ but
-                # layer input is a reasonable proxy at init time).
-                _flat2d = _fp_inps_f32.reshape(-1, _fp_inps_f32.shape[-1])  # [B, in_f]
-                # If projection in_features ≠ hidden (shouldn't happen for Llama), skip
-                if _flat2d.shape[-1] < _in_f:
-                    continue
-                _raw_inits: list[float] = []
-                for _t in range(_nt):
-                    _tile_vals = _flat2d[:, _t * _ti:(_t + 1) * _ti].abs().flatten()
-                    _sidx = torch.randperm(_tile_vals.numel(), device=_tile_vals.device)[
-                        :min(200_000, _tile_vals.numel())
-                    ]
-                    _p50 = torch.quantile(_tile_vals[_sidx], 0.50).clamp(min=1e-3)
-                    _raw = torch.log(torch.expm1(_p50)).clamp(min=-5.0, max=5.0)
-                    _raw_inits.append(_raw.item())
-                if len(_raw_inits) == _m.raw_alpha_adc.shape[0]:
-                    _m.raw_alpha_adc.data.copy_(
-                        torch.tensor(_raw_inits, device=_m.raw_alpha_adc.device)
-                    )
+        # (b3) raw_alpha_adc is initialised to 100.0 in __init__ (per-token-like).
+        # Post-training calibration (step d5) will set it to p50 of actual
+        # per-tile transformed activations captured during a no-grad forward pass.
 
         layer = layer.to(device)
 
@@ -1308,15 +1288,11 @@ def calibrate_flat_quant(
                 "params": _get_params_by_pattern(layer, ["clip_factor_a"]),
                 "lr": flat_lr * 10,
             })
-        # PACT alpha_adc: use higher LR like clip factors (10x base LR)
-        # but only when adc_config is set (raw_alpha_adc is not None).
-        # _get_params_by_pattern also sets requires_grad=True, so use it here too.
-        alpha_params = _get_params_by_pattern(layer, ["raw_alpha_adc"])
-        if alpha_params:
-            trained_params.append({
-                "params": alpha_params,
-                "lr": flat_lr * 10,
-            })
+        # raw_alpha_adc is NOT included in the optimizer.
+        # Jointly learning alpha with transforms under PACT loss distorts the
+        # Kronecker transforms (bypass PPL degrades from ~21 to ~700+).
+        # Instead: transforms are trained with alpha=100 (per-token-like),
+        # then alpha is calibrated post-training from actual xi statistics.
 
         # Inject penalty attrs — separate from adc_config, not mutating shared dict
         _penalty_projs = penalty_projections or ["o_proj", "down_proj"]
@@ -1521,6 +1497,49 @@ def calibrate_flat_quant(
                     )
         for h in _hooks:
             h.remove()
+
+        # (d5) Post-training per-tile PACT alpha calibration.
+        # Transforms are now converged.  Run a few no-grad batches through the
+        # layer to capture actual per-tile TRANSFORMED activation xi values
+        # (xi already has ln_trans / up_gate_trans applied, which is what PACT
+        # clips at inference).  Set raw_alpha_adc to p50 per tile.
+        _fql_with_alpha = [
+            m for _, m in layer.named_modules()
+            if isinstance(m, FlatQuantLinear) and m.raw_alpha_adc is not None
+        ]
+        if _fql_with_alpha:
+            for _m in _fql_with_alpha:
+                _m._alpha_calib_mode = True
+                _m._alpha_calib_tiles = []
+            with torch.no_grad():
+                _n_calib_batches = min(4, actual_nsamples // cali_bsz)
+                for j in range(_n_calib_batches):
+                    idx = j * cali_bsz
+                    layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
+            for _m in _fql_with_alpha:
+                _m._alpha_calib_mode = False
+                if _m._alpha_calib_tiles and all(_m._alpha_calib_tiles):
+                    _new_raws: list[float] = []
+                    for _t_batches in _m._alpha_calib_tiles:
+                        if _t_batches:
+                            _cat = torch.cat([s.flatten() for s in _t_batches])
+                            _sidx = torch.randperm(_cat.numel())[
+                                :min(200_000, _cat.numel())
+                            ]
+                            _p50 = torch.quantile(_cat.abs()[_sidx], 0.50).clamp(min=1e-3)
+                            _r = torch.log(torch.expm1(_p50)).clamp(min=-5.0, max=5.0)
+                            _new_raws.append(_r.item())
+                        else:
+                            _new_raws.append(0.541)   # fallback: alpha≈1
+                    if len(_new_raws) == _m.raw_alpha_adc.shape[0]:
+                        _m.raw_alpha_adc.data.copy_(
+                            torch.tensor(_new_raws, device=_m.raw_alpha_adc.device)
+                        )
+                _m._alpha_calib_tiles = []
+            logger.info(
+                f"  layer {i}: post-training PACT alpha calibrated for "
+                f"{len(_fql_with_alpha)} projections"
+            )
 
         # Feed this layer's output as the next layer's input
         fp_inps, fp_outs = fp_outs, fp_inps
