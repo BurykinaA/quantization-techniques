@@ -603,20 +603,17 @@ class FlatQuantLinear(nn.Module):
             s_wi = wi.abs().amax(dim=1, keepdim=True).clamp(min=1e-8) / w_levels
             code_wi = round_ste(wi / s_wi).clamp(qmin_w, qmax_w)
 
-            # Per-tile activation quantization
-            # PACT-style: use per-tile learned clip threshold alpha_adc[i].
-            # Per-tile is critical: outlier features concentrate in specific
-            # dimensions, so different tiles need different alpha values.
-            # A single global alpha causes whole tiles to saturate (alpha too
-            # small) or die (alpha too large).
-            if self.raw_alpha_adc is not None:
-                alpha_i = F.softplus(self.raw_alpha_adc[i]).clamp(min=1e-6)
-                xi_c = xi.clamp(-alpha_i, alpha_i)
-                s_xi = alpha_i / act_levels         # scalar for this tile
-                code_xi = round_ste(xi_c / s_xi).clamp(qmin_x, qmax_x)
-            else:
-                s_xi = xi.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
-                code_xi = round_ste(xi / s_xi).clamp(qmin_x, qmax_x)
+            # Per-token amax — identical to E2 baseline.
+            # PACT (raw_alpha_adc) is applied ONLY at inference via TiledLinearADC.
+            # Using PACT here during training distorts transform learning:
+            #   alpha=large → s_xi fixed & large → codes≈0 → transforms learn
+            #     extreme weight distributions to compensate (bypass PPL → ∞)
+            #   alpha=p50   → clips 50% of activations → transforms adapt to
+            #     PACT loss landscape, incompatible with INT8 bypass path
+            # Per-tile PACT alpha is calibrated post-training (step d5) and
+            # applied at inference only via TiledLinearADC.set_alpha_adc.
+            s_xi = xi.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
+            code_xi = round_ste(xi / s_xi).clamp(qmin_x, qmax_x)
 
             # Integer MVM → ADC quantization (Eq. 2-3)
             # y_int can reach tile_in * 127^2 ≈ 4M, which overflows float16

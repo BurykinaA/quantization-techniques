@@ -72,7 +72,8 @@ Per-token amax activation scaling (`s_xi = amax(xi_tile) / 127`) concentrates al
 | **PACT-1** | Single alpha/proj, init=p99, alpha learned | 21.6 | 38945 | 81% | alpha=5 → still sparse codes |
 | **PACT-2** | Single alpha/proj, init=p50, alpha learned | 71.1 | 34463 | 10.5% | Bypass PPL degraded: transforms adapted to PACT loss |
 | **PACT-3** | Per-tile alpha, init=p50, alpha learned | 757 | 5768 | 10.4% | Worse: optimizer changed alpha during transform training |
-| **PACT-4** | Per-tile alpha, frozen during training, post-training calibration from actual xi | TBD | TBD | TBD | Current run |
+| **PACT-4** | Per-tile alpha frozen at 100.0, post-training calib from xi | 397960 | 1545294 | 9.9% | alpha=100 → s_xi=0.787 (worse than per-token!) → transforms learn on dead codes |
+| **PACT-5** | Per-token in train forward (E2-identical), PACT only at inference via TiledLinearADC | TBD | TBD | TBD | Current run |
 
 #### Why PACT-1,2,3 failed
 
@@ -82,13 +83,18 @@ Per-token amax activation scaling (`s_xi = amax(xi_tile) / 127`) concentrates al
 
 **PACT-3** (per-tile alpha, p50 init): single alpha per projection caused tile-level catastrophe — the tile containing outlier features had ALL codes saturated at ±127 (alpha too small), giving y_int = random sign sum = wrong output. Per-tile alpha fixed this. But bypass PPL = 757 (even worse) because optimizer still trained alpha jointly with transforms across more parameters.
 
-**PACT-4** (current): Completely decouple alpha from transform training.
-- `raw_alpha_adc` initialized to 100.0 per tile (`requires_grad=False`, NOT in optimizer)
-- Transforms train exactly like E2 (alpha=100 = per-token, no PACT effect)
-- Post-training no-grad pass captures actual per-tile transformed xi statistics
-- Sets `raw_alpha_adc` to p50 of each tile's actual xi values
+**PACT-4** (failed): alpha=100 is NOT equivalent to per-token.
+- Per-token: `s_xi = amax(xi_tile) / 127` adapts per-token (for typical tile max≈5: s_xi=0.039)
+- PACT alpha=100: `s_xi = 100/127 = 0.787` — fixed and huge
+- Most codes ≈ 0 during training → transforms learn to compensate → extreme weight distributions → bypass PPL catastrophic
 
-Expected: bypass PPL ≈ 21.6 (E2-quality transforms), dead_rate ≈ 10%, ADC PPL better than 28.99.
+**PACT-5** (current): PACT only at inference, E2-identical training.
+- `_train_forward_adc` reverted to per-token amax — PACT code removed entirely from training
+- Post-training d5 calibration runs no-grad forward to capture per-tile xi values
+- Sets `raw_alpha_adc` to p50 per tile from actual transformed activations
+- `propagate_alpha_adc_to_tiled` applies PACT to TiledLinearADC at inference
+
+Expected: bypass PPL ≈ 21.6 (transforms = E2), dead_rate ≈ 10% (PACT p50 at inference), ADC PPL < 28.99.
 
 ---
 
