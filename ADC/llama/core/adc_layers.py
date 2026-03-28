@@ -318,7 +318,9 @@ class QATLinearADC(nn.Linear):
         qmin_x, qmax_x = act_q.qmin, act_q.qmax
         act_levels = float(qmax_x)  # 127 (signed) or 255 (unsigned)
 
-        if self.alpha_adc is not None:
+        if self.alpha_adc is not None and not self.bypass_adc:
+            # PACT: fixed per-tile clip threshold — used for ADC path only.
+            # bypass_adc path always uses per-token amax (identical to training).
             alpha_t = x.new_tensor(self.alpha_adc)
             x_c = x.clamp(-alpha_t, alpha_t)
             s_x = alpha_t / act_levels          # scalar — same for all tokens
