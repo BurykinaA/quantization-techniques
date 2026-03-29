@@ -103,6 +103,20 @@ We discovered this when running the E2-equivalent baseline on the pact branch: t
 
 **PACT conclusion:** PACT at p50 doesn't work. Clipping 50% of activations introduces reconstruction error worse than the dead zone benefit. PACT-2/5 both give ADC PPL ~34k–75k. Approach abandoned.
 
+#### Branch `llama-flatquant-adc-v2` experiments
+
+**Hypothesis:** The bypass→ADC gap (10→29) comes from coarse ADC resolution (delta=2016). Two approaches to reduce it:
+
+1. **Bin-center loss** (`--fq_lambda_center`): adds `cos²(π·z)` as a penalty during FlatQuant training. `z = y_int/delta`. The cosine has minimum at half-integer z (bin centres of floor quantizer) and maximum at integer z (bin boundaries). Minimising it nudges y_int toward bin centres, reducing per-step floor-rounding error from O(delta) to O(delta/4).
+
+2. **Propagated calibration** (`--fq_propagate_quant`): each layer i is trained to map ADC-quantized inputs (from layer i-1) to FP reference outputs, rather than FP inputs → FP outputs. Addresses error accumulation across layers — layer-wise PTQ without error propagation may underestimate the reconstruction difficulty faced at inference.
+
+| Experiment | Description | PPL bypass | PPL ADC | dead_rate | Notes |
+|------------|-------------|------------|---------|-----------|-------|
+| **center mid** | bin-center λ=0.1 | TBD | TBD | TBD | |
+| **prop** | propagated calibration | TBD | TBD | TBD | |
+| **prop+center mid** | both combined | TBD | TBD | TBD | |
+
 #### New baseline (per-token inference, improved transforms)
 
 | Experiment | Description | PPL bypass | PPL ADC | dead_rate (mean) | reconstruction_rel | Notes |
@@ -116,20 +130,18 @@ We discovered this when running the E2-equivalent baseline on the pact branch: t
 ## Run commands
 
 ```bash
-# New baseline (per-token inference, improved transforms)
+# Baseline (per-token inference, improved transforms) — current best: PPL 28.86
 bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh baseline
 
-# With PACT at inference (experimental, generally worse)
-bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh baseline --pact_inference
+# Bin-center loss: cos²(π·z) pushes y_int toward ADC bin centres
+# intensity: weak=0.01, mid=0.1, strong=1.0
+bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh center mid
 
-# E7: clip penalty
-bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh e7
+# Propagated calibration: each layer trained on ADC-quantized inputs from prev layers
+bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh prop
 
-# E8: dead-zone penalty
-bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh e8
-
-# E9: combined penalties
-bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh e9
+# Combined: propagated + bin-center
+bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh prop+center mid
 ```
 
 **WandB project:** `llama-flat-quant-adc-ptq-blocks`
