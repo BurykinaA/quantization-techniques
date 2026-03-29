@@ -1803,6 +1803,9 @@ def main():
                         help="Enable learnable activation clipping")
     parser.add_argument("--fq_no_lac", dest="fq_lac", action="store_false",
                         help="Disable learnable activation clipping")
+    parser.add_argument("--pact_inference", action="store_true",
+                        help="Apply PACT (post-training alpha calibration) at ADC inference. "
+                             "Default: per-token amax at inference (same as training).")
     parser.add_argument("--fq_lambda_clip", type=float, default=0.0,
                         help="Penalty weight for ADC clip loss (E7/E9)")
     parser.add_argument("--fq_lambda_dead", type=float, default=0.0,
@@ -1974,6 +1977,7 @@ def main():
                 f"fq_ptq_{model_short_name}_w{args.fq_w_bits}a{args.fq_a_bits}_e{args.fq_epochs}_"
                 f"bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}_{args.calibration_method}"
                 f"_lc{args.fq_lambda_clip}_ld{args.fq_lambda_dead}"
+                + ("_pact" if args.pact_inference else "")
             )
         else:
             default_run_name = (
@@ -2360,9 +2364,13 @@ def main():
     logger.info(f"Model moved to {device}")
 
     # Propagate learned PACT alpha_adc from FlatQuantLinear → TiledLinearADC.
-    # Only has an effect when FlatQuant was used (alpha_adc params exist);
-    # is a no-op otherwise (logs "Propagated alpha_adc to 0 layers").
-    propagate_alpha_adc_to_tiled(model)
+    # Only when --pact_inference is set; otherwise TiledLinearADC uses
+    # per-token amax at inference (same quantization scheme as training).
+    if args.pact_inference:
+        propagate_alpha_adc_to_tiled(model)
+        logger.info("PACT inference enabled: per-tile alpha propagated to TiledLinearADC")
+    else:
+        logger.info("PACT inference disabled: TiledLinearADC uses per-token amax at inference")
 
     stats = LlamaADCConverter.count_adc_layers(model)
     logger.info(f"Model: {stats['adc_linear']} ADC layers, {stats['regular_linear']} regular Linear, {stats['total_params']:,} params")
