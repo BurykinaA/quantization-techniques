@@ -35,13 +35,35 @@
 
 ---
 
+## What FlatQuant Transforms Do
+
+FlatQuant learns per-layer **Kronecker-decomposed orthogonal transforms** applied to activations and weights before quantization. For each projection (q/k/v/o/gate/up/down), a pair of small orthogonal matrices (Kronecker factors) is trained to rotate the activation and weight space so that the resulting distributions are as flat (uniform) as possible — minimizing per-channel variance without changing the linear map.
+
+```
+y = x @ W^T  =  (x @ T^{-1}) @ (T @ W^T)  =  x_rot @ W_rot^T
+```
+
+The transform `T` is learned by minimizing MSE between FP output and INT8-quantized output of the rotated layer. After calibration, `T` is folded into the weights (reparameterization), so inference cost is the same as standard INT8.
+
+**Why transforms matter for ADC:**
+
+Per-token activation scaling (`s_xi = max(|xi_tile|) / 127`) concentrates all quantization range on the largest feature in each tile. If one feature is 10× larger than the rest, it gets code 127 and all others get codes ≈ 0–12. The integer dot product `y_int = code_xi @ code_w` is then dominated by a single sparse term, which for most output channels gives `|y_int| < delta = 2016` → dead zone.
+
+Good transforms **flatten** the activation distribution within each tile: no single feature dominates. After rotation, all features have similar magnitude → all codes are ≈ 50–100 → every feature contributes to `y_int`. The dot product `y_int ≈ 64 * sum(code_w) ≈ 64 * 256 * mean(|code_w|)` is typically >> delta → no dead zone.
+
+**Bypass PPL is a direct proxy for transform quality** — it measures INT8 reconstruction accuracy without ADC quantization noise. Lower bypass PPL = flatter distributions = more uniform codes = less dead zone.
+
 ## ADC Quality Problem
 
 **Current status (pact branch, new baseline):** bypass PPL = 10.0, ADC PPL = 28.86, dead_rate mean = **10.3%**.
 
-The dead_rate of 81% seen in early experiments (branch `llama-flatquant-adc`) was a FlatQuant transform quality issue, not a fundamental hardware constraint. The pact branch produces better transforms (bypass 21.6 → 10.0) with much lower dead_rate (81% → 10.3%).
+The dead_rate of 81% seen in early experiments (branch `llama-flatquant-adc`) was a **FlatQuant transform quality issue**, not a fundamental hardware constraint. The pact branch produces better transforms (bypass 21.6 → 10.0) and dead_rate dropped correspondingly (81% → 10.3%) — without any changes to the ADC hardware parameters or activation scaling scheme.
 
-**Remaining gap:** bypass PPL 10.0 → ADC PPL 28.86. With dead_rate at 10.3% and reconstruction_rel at 0.22%, the ~3x PPL degradation comes primarily from **ADC quantization resolution** — delta=2016 gives only ~15–30 discrete output levels in the typical z range, not dead zone.
+We discovered this when running the E2-equivalent baseline on the pact branch: the dead zone disappeared on its own, purely from better transforms. All the PACT experiments (PACT-1 through PACT-5) were trying to fix a problem that better FlatQuant training already solves.
+
+**Why pact branch transforms are better** is not fully pinned down. The run uses `calibration_method=percentile` (99.9th percentile for static scale calibration in Step 2) vs the earlier `absmax`. The training code also accumulated several fixes during PACT development. The bypass PPL improvement (21.6 → 10.0, approaching FP baseline 10.5) is the cleanest indicator.
+
+**Remaining gap:** bypass PPL 10.0 → ADC PPL 28.86. With dead_rate at 10.3% and reconstruction_rel at 0.22%, the ~3x PPL degradation comes primarily from **ADC quantization resolution** — delta=2016 gives only ~15–30 discrete output levels in the typical z range (std_z ≈ 15). Each active output channel has limited precision regardless of how well the transforms work.
 
 **Delta is a hardware constant** — it cannot be reduced by training.
 
