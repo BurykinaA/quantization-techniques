@@ -106,6 +106,8 @@ FQ_FREEZE_CLIP=false
 FQ_KRONECKER_INIT="random"    # "random" (FlatQuant default) | "hadamard" (QuaRot-style)
 FQ_LOSS_TYPE="mse"            # "mse" | "l1" | "huber"
 FQ_HUBER_DELTA=1.0
+FQ_LAMBDA_CENTER=0.0          # bin-center penalty: cos²(π·z), pushes y_int to ADC bin centres
+FQ_PROPAGATE_QUANT=false      # propagated calibration: train on ADC-quantized inputs
 
 # ============================================================
 # KD fine-tuning (post-ADC-calibration)
@@ -208,9 +210,25 @@ case "$EXPERIMENT" in
             strong) FQ_HUBER_DELTA=10.0 ;;
         esac
         ;;
+    center)
+        # Bin-center penalty: cos²(π·z) pushes y_int toward centres of ADC bins.
+        # Reduces floor-rounding error without changing activation scaling.
+        # intensity: weak=0.01, mid=0.1, strong=1.0
+        FQ_LAMBDA_CENTER=$_LAMBDA_DEAD_INTENSITY
+        ;;
+    prop)
+        # Propagated calibration: each layer sees ADC-quantized inputs from previous layers.
+        # Makes transforms robust to upstream quantization error.
+        FQ_PROPAGATE_QUANT=true
+        ;;
+    prop+center)
+        # Propagated calibration + bin-center penalty combined.
+        FQ_PROPAGATE_QUANT=true
+        FQ_LAMBDA_CENTER=$_LAMBDA_DEAD_INTENSITY
+        ;;
     *)
         echo "Unknown experiment: '$EXPERIMENT'"
-        echo "Available: baseline | e7 | e8 | e9 | band | hadamard | hadamard+dead | kd | baseline+kd | l1 | huber"
+        echo "Available: baseline | e7 | e8 | e9 | band | hadamard | hadamard+dead | kd | baseline+kd | l1 | huber | center | prop | prop+center"
         exit 1
         ;;
 esac
@@ -225,6 +243,12 @@ elif [[ "$EXPERIMENT" == hadamard* ]]; then
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_ld${FQ_LAMBDA_DEAD}"
 elif [[ "$EXPERIMENT" == *kd* ]]; then
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_kd${KD_EPOCHS}_T${KD_TEMPERATURE}"
+elif [[ "$EXPERIMENT" == "center" ]]; then
+    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lct${FQ_LAMBDA_CENTER}_${INTENSITY}"
+elif [[ "$EXPERIMENT" == "prop" ]]; then
+    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
+elif [[ "$EXPERIMENT" == "prop+center" ]]; then
+    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lct${FQ_LAMBDA_CENTER}_${INTENSITY}"
 else
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}"
 fi
@@ -350,6 +374,14 @@ if [ "$FQ_LOSS_TYPE" != "mse" ]; then
     if [ "$FQ_LOSS_TYPE" = "huber" ]; then
         CMD="$CMD --fq_huber_delta $FQ_HUBER_DELTA"
     fi
+fi
+
+if (( $(echo "$FQ_LAMBDA_CENTER > 0" | bc -l) )); then
+    CMD="$CMD --fq_lambda_center $FQ_LAMBDA_CENTER"
+fi
+
+if [ "$FQ_PROPAGATE_QUANT" = true ]; then
+    CMD="$CMD --fq_propagate_quant"
 fi
 
 if [ "$RUN_NO_ADC_EVAL" = true ]; then

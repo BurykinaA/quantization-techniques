@@ -1837,6 +1837,10 @@ def main():
                         help="Reconstruction loss for FlatQuant calibration: mse (default), l1, or huber")
     parser.add_argument("--fq_huber_delta", type=float, default=1.0,
                         help="Delta parameter for HuberLoss (only used when --fq_loss_type=huber)")
+    parser.add_argument("--fq_lambda_center", type=float, default=0.0,
+                        help="Bin-center penalty weight: cos²(π·z) pushes y_int toward ADC bin centres")
+    parser.add_argument("--fq_propagate_quant", action="store_true",
+                        help="Propagated calibration: train each layer on ADC-quantized inputs from previous layers")
     # Knowledge Distillation fine-tuning (post-ADC-calibration)
     parser.add_argument("--kd_epochs", type=int, default=0,
                         help="KD fine-tuning epochs after ADC calibration (0 = disabled)")
@@ -1977,6 +1981,8 @@ def main():
                 f"fq_ptq_{model_short_name}_w{args.fq_w_bits}a{args.fq_a_bits}_e{args.fq_epochs}_"
                 f"bx{args.bx}_bw{args.bw}_ba{args.ba}_k{args.k}_{args.calibration_method}"
                 f"_lc{args.fq_lambda_clip}_ld{args.fq_lambda_dead}"
+                + (f"_lct{args.fq_lambda_center}" if args.fq_lambda_center > 0 else "")
+                + ("_prop" if args.fq_propagate_quant else "")
                 + ("_pact" if args.pact_inference else "")
             )
         else:
@@ -2285,6 +2291,8 @@ def main():
                     kronecker_init=args.fq_kronecker_init,
                     loss_type=args.fq_loss_type,
                     huber_delta=args.fq_huber_delta,
+                    lambda_center=args.fq_lambda_center,
+                    propagate_quant_inputs=args.fq_propagate_quant,
                 )
 
             if args.fq_save_transforms:

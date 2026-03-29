@@ -417,6 +417,11 @@ class FlatQuantLinear(nn.Module):
         self._band_beta         = 5.0
         self._band_topk_frac    = 0.2   # top-k% worst tiles by band loss
         self._last_band_penalty: torch.Tensor | None = None
+        # Bin-center penalty: cos²(π·z) is minimised at half-integer z (bin centres)
+        # and maximised at integer z (bin boundaries). Adding this as a loss term
+        # encourages y_int to land in the centre of ADC bins, reducing floor-rounding error.
+        self._penalty_lambda_center: float = 0.0
+        self._last_center_penalty: torch.Tensor | None = None
         # PACT-style learnable activation range for ADC path.
         # alpha_adc = softplus(raw_alpha_adc) + eps — a fixed clip threshold
         # replacing per-token amax in _train_forward_adc.
@@ -583,6 +588,7 @@ class FlatQuantLinear(nn.Module):
         # Penalty accumulators — initialised on the same device as x
         clip_acc = x2d.new_zeros(()).float()
         dead_acc = x2d.new_zeros(()).float()
+        center_acc = x2d.new_zeros(()).float()
         band_tile_losses: list[torch.Tensor] = []   # one scalar per tile, for top-k selection
         n_tiles_eff = 0
 
@@ -624,11 +630,17 @@ class FlatQuantLinear(nn.Module):
             y_adc  = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
 
             # Accumulate penalties (only when enabled)
-            if self._penalty_enabled or self._band_enabled:
+            if self._penalty_enabled or self._band_enabled or self._penalty_lambda_center > 0:
                 z = y_int / delta   # normalised ADC input, same shape as y_int
                 if self._penalty_enabled:
                     clip_acc = clip_acc + F.relu(z.abs() - (float(pa) - self._penalty_clip_margin)).pow(2).mean()
                     dead_acc = dead_acc + F.relu(self._penalty_dead_threshold - z.abs()).mean()
+                if self._penalty_lambda_center > 0:
+                    # cos²(π·z): max at bin boundaries (integer z), min at bin centres (half-integer z).
+                    # Minimising this loss pushes z toward bin centres → less floor-rounding error.
+                    # Mask out near-clip zone where the penalty conflicts with clipping constraint.
+                    _mask = (z.abs() < float(pa) - 1.0).detach().float()
+                    center_acc = center_acc + (torch.cos(math.pi * z).pow(2) * _mask).mean()
                 if self._band_enabled:
                     # per-tile loss stored for top-k selection after loop
                     z_abs = z.abs()
@@ -643,6 +655,7 @@ class FlatQuantLinear(nn.Module):
         # Store per-tile mean penalties for the training loop
         self._last_clip_penalty = clip_acc / max(n_tiles_eff, 1)
         self._last_dead_penalty = dead_acc / max(n_tiles_eff, 1)
+        self._last_center_penalty = center_acc / max(n_tiles_eff, 1)
         if band_tile_losses:
             stacked = torch.stack(band_tile_losses)          # [n_tiles]
             k = max(1, int(len(stacked) * self._band_topk_frac))
@@ -1063,6 +1076,8 @@ def calibrate_flat_quant(
     kronecker_init: str = "random",
     loss_type: str = "mse",
     huber_delta: float = 1.0,
+    lambda_center: float = 0.0,
+    propagate_quant_inputs: bool = False,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1198,6 +1213,11 @@ def calibrate_flat_quant(
     # ── Step 2: layer-by-layer calibration ─────────────────────────
     fp_inps = inps.float()
     fp_outs = torch.zeros_like(fp_inps)
+    # Propagated calibration: quant_inps tracks ADC-quantized hidden states.
+    # Layer i is trained to map quant_inps (corrupted by previous ADC layers)
+    # to fp_outs (FP reference), making each layer robust to upstream noise.
+    # When disabled, quant_inps is the same tensor as fp_inps (no overhead).
+    quant_inps: torch.Tensor = fp_inps.clone() if propagate_quant_inputs else fp_inps
     if loss_type == "l1":
         loss_func = nn.L1Loss()
     elif loss_type == "huber":
@@ -1307,6 +1327,7 @@ def calibrate_flat_quant(
                 _m._band_tau_hi            = band_tau_hi
                 _m._band_beta              = band_beta
                 _m._band_topk_frac         = band_topk_frac
+                _m._penalty_lambda_center  = lambda_center if _is_target else 0.0
 
         optimizer = torch.optim.AdamW(trained_params)
         total_steps = epochs * (actual_nsamples // cali_bsz)
@@ -1340,6 +1361,7 @@ def calibrate_flat_quant(
             epoch_mse = 0.0
             epoch_dead = 0.0
             epoch_clip = 0.0
+            epoch_center = 0.0
             epoch_band = 0.0
             epoch_pen_count = 0
             nan_count = 0
@@ -1350,14 +1372,17 @@ def calibrate_flat_quant(
                 # Forward only under autocast — backward must run in float32
                 # to avoid float16 overflow (1/loss can exceed float16 max).
                 with traincast():
-                    out = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
+                    _train_inp = quant_inps[idx:idx + cali_bsz] if propagate_quant_inputs else fp_inps[idx:idx + cali_bsz]
+                    out = layer(_train_inp, **batch_kwargs)
                     quant_out = out[0] if isinstance(out, tuple) else out
                     loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
-                    if lambda_clip > 0.0 or lambda_dead > 0.0 or lambda_band > 0.0:
+                    if lambda_clip > 0.0 or lambda_dead > 0.0 or lambda_band > 0.0 or lambda_center > 0.0:
                         _clip_acc = loss.new_zeros(())
                         _dead_acc = loss.new_zeros(())
+                        _center_acc = loss.new_zeros(())
                         _band_acc = loss.new_zeros(())
                         _n_pen = 0
+                        _n_center = 0
                         for _, _m in layer.named_modules():
                             if isinstance(_m, FlatQuantLinear):
                                 if (_m._penalty_enabled
@@ -1365,6 +1390,10 @@ def calibrate_flat_quant(
                                     _clip_acc = _clip_acc + _m._last_clip_penalty.to(loss.device)
                                     _dead_acc = _dead_acc + _m._last_dead_penalty.to(loss.device)
                                     _n_pen += 1
+                                if (_m._penalty_lambda_center > 0
+                                        and _m._last_center_penalty is not None):
+                                    _center_acc = _center_acc + _m._last_center_penalty.to(loss.device)
+                                    _n_center += 1
                                 if (_m._band_enabled
                                         and _m._last_band_penalty is not None):
                                     _band_acc = _band_acc + _m._last_band_penalty.to(loss.device)
@@ -1374,6 +1403,9 @@ def calibrate_flat_quant(
                             epoch_clip += (_clip_acc / _n_pen).item()
                             epoch_dead += (_dead_acc / _n_pen).item()
                             epoch_pen_count += 1
+                        if _n_center > 0:
+                            loss = loss + lambda_center * _center_acc / _n_center
+                            epoch_center += (_center_acc / _n_center).item()
                         _n_band = sum(
                             1 for _, _m in layer.named_modules()
                             if isinstance(_m, FlatQuantLinear) and _m._band_enabled
@@ -1460,6 +1492,8 @@ def calibrate_flat_quant(
                     if _n_pen > 0:
                         _pf["clip"] = f"{(_clip_acc / _n_pen).item():.3e}"
                         _pf["dead"] = f"{(_dead_acc / _n_pen).item():.3e}"
+                if lambda_center > 0.0 and _n_center > 0:
+                    _pf["center"] = f"{(_center_acc / _n_center).item():.3e}"
                 if lambda_band > 0.0 and _n_band > 0:
                     _pf["band"] = f"{(_band_acc / _n_band).item():.3e}"
                 batch_bar.set_postfix(**_pf)
@@ -1474,6 +1508,10 @@ def calibrate_flat_quant(
                 if lambda_clip > 0.0:
                     _epf["clip"] = f"{_mean_clip:.3e}"
                 _log_extra = f", dead={_mean_dead:.4e}, clip={_mean_clip:.4e}"
+            if lambda_center > 0.0 and n_batches > 0:
+                _mean_center = epoch_center / n_batches
+                _epf["center"] = f"{_mean_center:.3e}"
+                _log_extra += f", center={_mean_center:.4e}"
             if lambda_band > 0.0 and n_batches > 0:
                 _mean_band = epoch_band / n_batches
                 _epf["band"] = f"{_mean_band:.3e}"
@@ -1537,6 +1575,18 @@ def calibrate_flat_quant(
                 f"  layer {i}: post-training PACT alpha calibrated for "
                 f"{len(_fql_with_alpha)} projections"
             )
+
+        # Propagated calibration: update quant_inps with quantized outputs of this layer.
+        # Next layer will receive ADC-corrupted inputs (as it would at inference).
+        if propagate_quant_inputs:
+            with torch.no_grad():
+                for _j in range(actual_nsamples // cali_bsz):
+                    _idx = _j * cali_bsz
+                    _qo = layer(quant_inps[_idx:_idx + cali_bsz], **batch_kwargs)
+                    if isinstance(_qo, tuple):
+                        _qo = _qo[0]
+                    quant_inps[_idx:_idx + cali_bsz] = _qo.detach().float()
+            logger.info(f"  layer {i}: propagated quantized activations → next layer")
 
         # Feed this layer's output as the next layer's input
         fp_inps, fp_outs = fp_outs, fp_inps
