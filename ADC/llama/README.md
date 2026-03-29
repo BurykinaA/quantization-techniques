@@ -6,7 +6,7 @@
 **Task:** Post-Training Quantization (PTQ) with Analog-Digital Compute (ADC)
 **Calibration:** 128 samples × 2048 tokens, WikiText2
 **Eval:** WikiText2 test, sliding window (ctx=2048, stride=1024)
-**Branch for experiments:** `llama-flatquant-adc` (baseline), `llama-flatquant-adc-pact` (PACT experiments)
+**Branch for experiments:** `llama-flatquant-adc` (early baseline), `llama-flatquant-adc-pact` (current)
 
 ### Quantization config
 
@@ -35,12 +35,13 @@
 
 ---
 
-## Dead Zone Problem
+## ADC Quality Problem
 
-The root cause of bad ADC quality: **81% of output channels are "dead"** (`y_int < delta`).
+**Current status (pact branch, new baseline):** bypass PPL = 10.0, ADC PPL = 28.86, dead_rate mean = **10.3%**.
 
-**Why it happens:**
-Per-token amax activation scaling (`s_xi = amax(xi_tile) / 127`) concentrates all quantization range on the outlier feature within each tile. Typical features get code ≈ 0. The dot product `y_int = code_xi @ code_wi` is then dominated by a single sparse term, which for most output channels is too small to cross the delta threshold.
+The dead_rate of 81% seen in early experiments (branch `llama-flatquant-adc`) was a FlatQuant transform quality issue, not a fundamental hardware constraint. The pact branch produces better transforms (bypass 21.6 → 10.0) with much lower dead_rate (81% → 10.3%).
+
+**Remaining gap:** bypass PPL 10.0 → ADC PPL 28.86. With dead_rate at 10.3% and reconstruction_rel at 0.22%, the ~3x PPL degradation comes primarily from **ADC quantization resolution** — delta=2016 gives only ~15–30 discrete output levels in the typical z range, not dead zone.
 
 **Delta is a hardware constant** — it cannot be reduced by training.
 
@@ -48,61 +49,56 @@ Per-token amax activation scaling (`s_xi = amax(xi_tile) / 127`) concentrates al
 
 ## Experiments
 
-### Baseline & ablations (branch `llama-flatquant-adc`)
+### Branch `llama-flatquant-adc` (early)
 
 | Experiment | Description | PPL bypass | PPL ADC | dead_rate (mean) | Notes |
 |------------|-------------|------------|---------|-----------------|-------|
 | **FP baseline** | BF16, no quantization | — | ~10.5 | — | Reference |
-| **E2 baseline** | FlatQuant w8a8, per-token ADC | ~21.6 | **28.99** | 81% | Best ADC PPL so far |
+| **E2 baseline** | FlatQuant w8a8, per-token ADC | ~21.6 | 28.99 | 81% | Transforms suboptimal |
 | **E8 mid** | E2 + dead penalty λ=0.1 | — | 864 | 80.7% | LWC clip factors → delta≈0, catastrophic |
 | **E8 weak+freeze** | E2 + dead penalty λ=0.01, freeze_clip=True | — | 1637 | 81.2% | Penalty didn't fix dead zone |
-| **add_diag=True** | E2 + diagonal scaling transforms | — | ~9000 | — | Already tested, confirmed bad |
+| **add_diag=True** | E2 + diagonal scaling transforms | — | ~9000 | — | Confirmed bad |
 | **L1 loss** | FlatQuant with L1 reconstruction loss | — | 52.19 | 81.3% | Much worse than MSE |
 
-**Key finding from branch `llama-flatquant-adc`:** P=I (MSE baseline E2) is near-optimal for this setup. Dead zone is structural — cannot be fixed by output-aware penalties or loss changes when using per-token scaling.
+**Key finding:** With poor transforms (bypass=21.6), dead zone is structural and cannot be fixed by penalties or loss changes.
 
 ---
 
-### PACT experiments (branch `llama-flatquant-adc-pact`)
+### Branch `llama-flatquant-adc-pact` (current)
+
+#### PACT experiments
 
 **Idea (from advisor):** Replace per-token amax with a learned per-projection fixed threshold (PACT-style). With a smaller alpha, typical features get non-zero codes, making `y_int >> delta` for most channels.
 
-| Experiment | Description | PPL bypass | PPL ADC | dead_rate (mean) | clip_rate | Notes |
-|------------|-------------|------------|---------|-----------------|-----------|-------|
+| Experiment | Description | PPL bypass | PPL ADC | dead_rate (mean) | Notes |
+|------------|-------------|------------|---------|-----------------|-------|
 | **PACT-1** | Single alpha/proj, init=p99, alpha learned | 21.6 | 38945 | 81% | alpha=5 → still sparse codes |
 | **PACT-2** | Single alpha/proj, init=p50, alpha learned | 71.1 | 34463 | 10.5% | Bypass PPL degraded: transforms adapted to PACT loss |
-| **PACT-3** | Per-tile alpha, init=p50, alpha learned | 757 | 5768 | 10.4% | Worse: optimizer changed alpha during transform training |
-| **PACT-4** | Per-tile alpha frozen at 100.0, post-training calib from xi | 397960 | 1545294 | 9.9% | alpha=100 → s_xi=0.787 (worse than per-token!) → transforms learn on dead codes |
-| **PACT-5** | Per-token in train forward (E2-identical), PACT only at inference via TiledLinearADC | TBD | TBD | TBD | Current run |
+| **PACT-3** | Per-tile alpha, init=p50, alpha learned | 757 | 5768 | 10.4% | Optimizer changed alpha during transform training |
+| **PACT-4** | Per-tile alpha frozen at 100.0, post-training calib | 397960 | 1545294 | 9.9% | alpha=100 → s_xi=0.787 >> per-token → codes≈0 |
+| **PACT-5 (buggy)** | Per-token training, PACT inference (bypass bug) | 26926 | 77183 | — | Bug: bypass used PACT s_x for dequant |
+| **PACT-5 (fixed bypass, PACT inference)** | Bypass fix applied, PACT alpha at inference | 10.0 | 75448 | 10.3% (diag) | PACT p50 clipping error worse than dead zone |
 
-#### Why PACT-1,2,3 failed
+**PACT conclusion:** PACT at p50 doesn't work. Clipping 50% of activations introduces reconstruction error worse than the dead zone benefit. PACT-2/5 both give ADC PPL ~34k–75k. Approach abandoned.
 
-**PACT-1** (single alpha, large p99): alpha=5 → s_xi=0.039 → most features get code≈0 → dead zone unchanged.
+#### New baseline (per-token inference, improved transforms)
 
-**PACT-2** (single alpha, p50 init): dead zone fixed (10.5%), but **bypass PPL 21→71**. Root cause: optimizer drives alpha jointly with Kronecker transforms. PACT clips ~50% of activations → transforms adapt to the PACT loss landscape, becoming suboptimal for standard INT8 bypass.
+| Experiment | Description | PPL bypass | PPL ADC | dead_rate (mean) | reconstruction_rel | Notes |
+|------------|-------------|------------|---------|-----------------|-------------------|-------|
+| **New baseline** | FlatQuant w8a8, per-token ADC (no PACT) | **10.01** | **28.86** | **10.3%** | 0.22% | Current best |
 
-**PACT-3** (per-tile alpha, p50 init): single alpha per projection caused tile-level catastrophe — the tile containing outlier features had ALL codes saturated at ±127 (alpha too small), giving y_int = random sign sum = wrong output. Per-tile alpha fixed this. But bypass PPL = 757 (even worse) because optimizer still trained alpha jointly with transforms across more parameters.
-
-**PACT-4** (failed): alpha=100 is NOT equivalent to per-token.
-- Per-token: `s_xi = amax(xi_tile) / 127` adapts per-token (for typical tile max≈5: s_xi=0.039)
-- PACT alpha=100: `s_xi = 100/127 = 0.787` — fixed and huge
-- Most codes ≈ 0 during training → transforms learn to compensate → extreme weight distributions → bypass PPL catastrophic
-
-**PACT-5** (current): PACT only at inference, E2-identical training.
-- `_train_forward_adc` reverted to per-token amax — PACT code removed entirely from training
-- Post-training d5 calibration runs no-grad forward to capture per-tile xi values
-- Sets `raw_alpha_adc` to p50 per tile from actual transformed activations
-- `propagate_alpha_adc_to_tiled` applies PACT to TiledLinearADC at inference
-
-Expected: bypass PPL ≈ 21.6 (transforms = E2), dead_rate ≈ 10% (PACT p50 at inference), ADC PPL < 28.99.
+**Key finding:** Improved transforms on pact branch (bypass 21.6 → 10.0) also reduce dead_rate (81% → 10.3%). ADC PPL essentially unchanged (28.99 → 28.86) despite much lower dead_rate — confirming the ~3x gap (10 → 29) is **ADC resolution**, not dead zone.
 
 ---
 
 ## Run commands
 
 ```bash
-# Baseline (E2-equivalent on pact branch)
+# New baseline (per-token inference, improved transforms)
 bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh baseline
+
+# With PACT at inference (experimental, generally worse)
+bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh baseline --pact_inference
 
 # E7: clip penalty
 bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh e7
