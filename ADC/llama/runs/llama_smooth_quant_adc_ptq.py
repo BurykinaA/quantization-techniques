@@ -1898,6 +1898,11 @@ def main():
     parser.add_argument("--wandb_run_name", type=str, default=None)
     parser.add_argument("--disable_wandb", action="store_true")
 
+    # Results export
+    parser.add_argument("--results_json_path", type=str, default=None,
+                        help="Append a JSON record with key metrics to this file after each run. "
+                             "Creates the file if it does not exist.")
+
     # Visualization settings
     parser.add_argument("--disable_visualizations", action="store_true",
                         help="Disable ADC visualizations")
@@ -2361,7 +2366,7 @@ def main():
         k=args.k,
         ashift=args.ashift,
         signed_activations=signed_activations,
-        exclude_patterns=["embed_tokens", "lm_head"],
+        exclude_patterns=["embed_tokens", "lm_head", "_orig_attn"],
         mvm_limit=args.mvm_limit,
         use_kurtosis_loss=False,
         kurtosis_weight=0.0,
@@ -2623,6 +2628,8 @@ def main():
     # =========================================================================
     # STEP 2.5 (optional): Diagnostic -- quantized tiling WITHOUT ADC
     # =========================================================================
+    _diag_metrics = None  # bypass PPL (no ADC), set if --run_no_adc_eval
+
     if args.run_no_adc_eval:
         logger.info("=" * 80)
         logger.info("STEP 2.5: DIAGNOSTIC -- Tiling + Quantization WITHOUT ADC")
@@ -2796,6 +2803,49 @@ def main():
 
     if args.preprocess_method == "smooth_quant" and not args.disable_visualizations and args.smooth_quant_layers:
         logger.info(f"  SmoothQuant 3D:     {os.path.join(args.output_dir, 'viz_smooth_quant')}")
+
+    # -------------------------------------------------------------------------
+    # Export key metrics to JSON (for overnight batch runs)
+    # -------------------------------------------------------------------------
+    if args.results_json_path:
+        import json as _json
+        # Compute mean dead_rate and reconstruction_rel from adc_diag_results
+        _dead_vals = [r["dead_rate"] for r in adc_diag_results.values() if "dead_rate" in r]
+        _rel_vals  = [r["reconstruction_rel"] for r in adc_diag_results.values() if "reconstruction_rel" in r]
+        _record = {
+            "run_name":      getattr(args, "wandb_run_name", None) or args.output_dir,
+            "timestamp":     __import__("datetime").datetime.now().isoformat(),
+            "status":        "success",
+            "config": {
+                "bx":                    args.bx,
+                "bw":                    args.bw,
+                "ba":                    args.ba,
+                "k":                     args.k,
+                "fq_epochs":             args.fq_epochs,
+                "fq_nsamples":           args.fq_nsamples,
+                "fq_lambda_center":      getattr(args, "fq_lambda_center", 0.0),
+                "fq_propagate_quant":    getattr(args, "fq_propagate_quant", False),
+                "fq_kronecker_init":     getattr(args, "fq_kronecker_init", "random"),
+            },
+            "results": {
+                "ppl_bypass":            float(_diag_metrics["perplexity"]) if _diag_metrics else None,
+                "ppl_adc":               float(eval_metrics["perplexity"]),
+                "dead_rate_mean":        float(np.mean(_dead_vals)) if _dead_vals else None,
+                "dead_rate_max":         float(np.max(_dead_vals))  if _dead_vals else None,
+                "reconstruction_rel_mean": float(np.mean(_rel_vals)) if _rel_vals else None,
+            },
+        }
+        _existing = []
+        try:
+            with open(args.results_json_path) as _f:
+                _existing = _json.load(_f)
+        except (FileNotFoundError, _json.JSONDecodeError):
+            pass
+        _existing.append(_record)
+        os.makedirs(os.path.dirname(os.path.abspath(args.results_json_path)), exist_ok=True)
+        with open(args.results_json_path, "w") as _f:
+            _json.dump(_existing, _f, indent=2)
+        logger.info(f"Results appended to: {args.results_json_path}")
 
     # Final WandB logging
     if use_wandb:

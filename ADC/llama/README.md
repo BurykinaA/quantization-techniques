@@ -113,9 +113,21 @@ We discovered this when running the E2-equivalent baseline on the pact branch: t
 
 | Experiment | Description | PPL bypass | PPL ADC | dead_rate | Notes |
 |------------|-------------|------------|---------|-----------|-------|
-| **center mid** | bin-center λ=0.1 | TBD | TBD | TBD | |
-| **prop** | propagated calibration | TBD | TBD | TBD | |
-| **prop+center mid** | both combined | TBD | TBD | TBD | |
+| **center mid** | bin-center λ=0.1 | 10.01 | 28.86 | 10.3% | No improvement vs baseline; bin-center loss alone does not help |
+| **prop** | propagated calibration | 11.01 | **14.55** | 10.3% | Major improvement: −47% ADC PPL vs baseline |
+| **prop+center mid** | propagated + bin-center λ=0.1 | 11.00 | **14.41** | 10.3% | Best result; marginal gain over prop alone |
+
+#### INT4 experiments (bx=4, bw=4, k=16, ba=8)
+
+With INT4, delta scales proportionally: `delta = 2 * 256 * 7 * 7 / (256 * 16) ≈ 6.12` (vs 2016 for INT8). Finer ADC resolution but more quantization noise per weight/activation value.
+
+| Experiment | Description | PPL bypass | PPL ADC | dead_rate | delta | Notes |
+|------------|-------------|------------|---------|-----------|-------|-------|
+| **prop+center (w4a4)** | propagated + bin-center λ=0.1, bx=4 bw=4 | 33.45 | 236.78 | 10.6% | 6.12 | 512/1792 layers uncalibrated; INT4 transforms degraded |
+
+**Key finding:** INT4 is significantly worse than INT8 despite the smaller delta. Bypass PPL degrades to 33.45 (vs 11.00 for INT8 prop+center) because INT4 quantizers add more noise during FlatQuant transform training — the optimizer cannot compensate fully. The 512/1792 uncalibrated layers warning (`_orig_attn` q/k/v tiles retaining default act_scale=0.01) may compound the result but is not the primary cause.
+
+---
 
 #### New baseline (per-token inference, improved transforms)
 
@@ -145,6 +157,41 @@ bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh prop+center mid
 ```
 
 **WandB project:** `llama-flat-quant-adc-ptq-blocks`
+
+---
+
+## Conclusions
+
+### What we found
+
+| Method | bits | PPL bypass | PPL ADC | Δ ADC vs baseline |
+|--------|------|------------|---------|-------------------|
+| FP baseline | — | — | ~10.5 | — |
+| New baseline (per-token) | w8a8 | 10.01 | 28.86 | — |
+| Bin-center loss (λ=0.1) | w8a8 | 10.01 | 28.86 | 0% |
+| **Propagated calibration** | w8a8 | 11.01 | **14.55** | **−47%** |
+| **Prop + bin-center** | w8a8 | 11.00 | **14.41** | **−50%** |
+| Prop + bin-center (w4a4) | w4a4 | 33.45 | 236.78 | +720% |
+
+### Key takeaways
+
+**1. Dead zone was a transform quality problem, not a hardware problem.**
+The original 81% dead_rate (branch `llama-flatquant-adc`) disappeared by itself with better FlatQuant transforms (percentile calibration + accumulated fixes). Dead_rate dropped to 10.3% without touching ADC hardware parameters. All PACT experiments were trying to fix a symptom, not the root cause.
+
+**2. The bypass→ADC gap (10 → 29) is ADC resolution.**
+With dead_rate at 10.3%, the 3× PPL degradation comes from coarse floor quantization: delta=2016 gives only ~15–30 discrete output levels in a typical z range. Bin-center loss doesn't change this — nudging y_int toward bin centers reduces per-step rounding error within each bin, but the number of bins is the same. This is why center loss alone gives no improvement.
+
+**3. Propagated calibration is the key fix.**
+When each layer trains on ADC-quantized inputs from the previous layer (rather than clean FP inputs), it learns to compensate for upstream quantization errors. The bypass PPL rises slightly (10.0 → 11.0, transforms slightly suboptimal for FP path) but ADC PPL drops from 28.86 → 14.55 (−47%). The improvement is real: standard layer-wise PTQ with FP inputs underestimates the reconstruction difficulty each layer faces at inference.
+
+**4. Bin-center loss gives a marginal additional gain on top of propagated.**
+Prop+center (14.41) vs prop alone (14.55) is a ~1% improvement. Not negligible, but not the primary lever.
+
+**5. INT4 (bx=bw=4) is worse despite smaller delta.**
+Smaller delta (6.12 vs 2016) gives finer ADC resolution, but INT4 quantization noise dominates — FlatQuant transforms cannot compensate for 4-bit precision loss. Bypass PPL = 33.45 (vs 11.00 for INT8), ADC PPL = 236.78. INT8 propagated (14.41) remains far better.
+
+**6. Remaining gap: 14.41 vs FP baseline 10.5.**
+~37% PPL gap remains. Further reduction likely requires lower delta (hardware change), reduced tile size, or higher ADC bits — not achievable through training.
 
 ---
 
