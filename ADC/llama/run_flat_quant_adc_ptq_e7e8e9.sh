@@ -1,21 +1,22 @@
 #!/bin/bash
-# FlatQuant + ADC PTQ — E7 / E8 / E9 output-aware penalty experiments
+# FlatQuant + ADC PTQ — INT8 experiment launcher
 #
 # Variants (first argument):
-#   baseline  — no penalty (reproduces existing run_flat_quant_adc_ptq_example.sh)
-#   e7        — clip penalty only  (lambda_clip=0.01)
-#   e8        — dead-zone penalty only
-#   e9        — combined clip + dead
+#   baseline     — no extras (INT8 reference)
+#   hadamard     — Hadamard Kronecker init
+#   prop         — propagated calibration
+#   hadamard+prop — Hadamard + propagated
+#   prop+center  — propagated + bin-center penalty (INT8 only; bin-center hurts INT4)
 #
-# Intensity (second argument, applies to e8/e9 dead-zone penalty):
-#   weak    lambda_dead=0.01  dead_threshold=1.0
-#   mid     lambda_dead=0.1   dead_threshold=2.0   [default]
-#   strong  lambda_dead=1.0   dead_threshold=2.0
+# Intensity (second argument, applies to prop+center bin-center weight):
+#   weak    lambda_center=0.01
+#   mid     lambda_center=0.1   [default]
+#   strong  lambda_center=1.0
 #
 # Usage:
-#   bash run_flat_quant_adc_ptq_e7e8e9.sh [baseline|e7|e8|e9] [weak|mid|strong]
-#   bash run_flat_quant_adc_ptq_e7e8e9.sh e8 weak
-#   bash run_flat_quant_adc_ptq_e7e8e9.sh e8          # mid by default
+#   bash run_flat_quant_adc_ptq_e7e8e9.sh baseline
+#   bash run_flat_quant_adc_ptq_e7e8e9.sh prop
+#   bash run_flat_quant_adc_ptq_e7e8e9.sh prop+center mid
 
 EXPERIMENT="${1:-baseline}"
 # Optional intensity suffix for e8/e9: weak | mid | strong (default: mid)
@@ -141,124 +142,39 @@ esac
 
 case "$EXPERIMENT" in
     baseline)
-        FQ_LAMBDA_CLIP=0.0
-        FQ_LAMBDA_DEAD=0.0
-        ;;
-    e7)
-        # clip penalty only — intensity not applicable (clip_rate=0 in baseline)
-        FQ_LAMBDA_CLIP=0.01
-        FQ_LAMBDA_DEAD=0.0
-        ;;
-    e8)
-        FQ_LAMBDA_CLIP=0.0
-        FQ_LAMBDA_DEAD=$_LAMBDA_DEAD_INTENSITY
-        FQ_DEAD_THRESHOLD=$_DEAD_THRESHOLD_INTENSITY
-        FQ_FREEZE_CLIP=true    # prevent LWC from driving delta→0 to "solve" dead penalty
-        ;;
-    e9)
-        FQ_LAMBDA_CLIP=0.01
-        FQ_LAMBDA_DEAD=$_LAMBDA_DEAD_INTENSITY
-        FQ_DEAD_THRESHOLD=$_DEAD_THRESHOLD_INTENSITY
-        FQ_FREEZE_CLIP=true    # prevent LWC from driving delta→0
-        ;;
-    band)
-        # Band-occupancy loss: encourages z-mass into (tau_lo, tau_hi)
-        # intensity: weak=0.01, mid=0.1, strong=1.0
-        FQ_LAMBDA_BAND=$_LAMBDA_DEAD_INTENSITY
-        FQ_FREEZE_CLIP=true
         ;;
     hadamard)
-        # Hadamard (QuaRot-style) Kronecker initialization.
-        # P starts at H⊗H instead of random orthogonal — spreads activation
-        # outliers uniformly, targeting the dead-zone problem at K=16.
-        # intensity controls optional dead penalty on top (0=pure Hadamard init).
         FQ_KRONECKER_INIT="hadamard"
-        ;;
-    hadamard+dead)
-        # Hadamard init + dead penalty (combined)
-        FQ_KRONECKER_INIT="hadamard"
-        FQ_LAMBDA_DEAD=$_LAMBDA_DEAD_INTENSITY
-        FQ_DEAD_THRESHOLD=$_DEAD_THRESHOLD_INTENSITY
-        ;;
-    kd)
-        # KD fine-tuning of activation scales after ADC calibration.
-        # Uses FP16 teacher (same model) + KL divergence on final logits.
-        # intensity: weak=5 epochs, mid=10 epochs [default], strong=20 epochs
-        case "$INTENSITY" in
-            weak)   KD_EPOCHS=5  ;;
-            mid)    KD_EPOCHS=10 ;;
-            strong) KD_EPOCHS=20 ;;
-        esac
-        ;;
-    baseline+kd)
-        # Baseline FlatQuant + KD fine-tuning on top
-        KD_EPOCHS=10
-        ;;
-    l1)
-        # L1 loss instead of MSE for FlatQuant calibration.
-        # Hypothesis: L1 penalises all channels linearly → less dominated by outlier channels,
-        # potentially giving more gradient signal to dead/small channels.
-        FQ_LOSS_TYPE="l1"
-        ;;
-    huber)
-        # Huber loss (smooth L1): L2 near zero, L1 for large errors.
-        # intensity controls delta: weak=0.1, mid=1.0, strong=10.0
-        FQ_LOSS_TYPE="huber"
-        case "$INTENSITY" in
-            weak)   FQ_HUBER_DELTA=0.1 ;;
-            mid)    FQ_HUBER_DELTA=1.0 ;;
-            strong) FQ_HUBER_DELTA=10.0 ;;
-        esac
-        ;;
-    center)
-        # Bin-center penalty: cos²(π·z) pushes y_int toward centres of ADC bins.
-        # Reduces floor-rounding error without changing activation scaling.
-        # intensity: weak=0.01, mid=0.1, strong=1.0
-        FQ_LAMBDA_CENTER=$_LAMBDA_DEAD_INTENSITY
         ;;
     prop)
-        # Propagated calibration: each layer sees ADC-quantized inputs from previous layers.
-        # Makes transforms robust to upstream quantization error.
+        FQ_PROPAGATE_QUANT=true
+        ;;
+    hadamard+prop)
+        FQ_KRONECKER_INIT="hadamard"
         FQ_PROPAGATE_QUANT=true
         ;;
     prop+center)
-        # Propagated calibration + bin-center penalty combined.
+        # INT8 only: bin-center is harmful for INT4
         FQ_PROPAGATE_QUANT=true
         FQ_LAMBDA_CENTER=$_LAMBDA_DEAD_INTENSITY
         ;;
     *)
         echo "Unknown experiment: '$EXPERIMENT'"
-        echo "Available: baseline | e7 | e8 | e9 | band | hadamard | hadamard+dead | kd | baseline+kd | l1 | huber | center | prop | prop+center"
+        echo "Available: baseline | hadamard | prop | hadamard+prop | prop+center"
         exit 1
         ;;
 esac
 
-# Build run name (mirrors Python default_run_name logic)
+# Build run name
 MODEL_SHORT_NAME=$(echo $MODEL_NAME | sed 's/.*\///')
-if [[ "$EXPERIMENT" == "e8" || "$EXPERIMENT" == "e9" ]]; then
-    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}_tau${FQ_DEAD_THRESHOLD}_${INTENSITY}"
-elif [[ "$EXPERIMENT" == "band" ]]; then
-    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lb${FQ_LAMBDA_BAND}_${INTENSITY}"
-elif [[ "$EXPERIMENT" == hadamard* ]]; then
-    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_ld${FQ_LAMBDA_DEAD}"
-elif [[ "$EXPERIMENT" == *kd* ]]; then
-    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_kd${KD_EPOCHS}_T${KD_TEMPERATURE}"
-elif [[ "$EXPERIMENT" == "center" ]]; then
-    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lct${FQ_LAMBDA_CENTER}_${INTENSITY}"
-elif [[ "$EXPERIMENT" == "prop" ]]; then
-    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
-elif [[ "$EXPERIMENT" == "prop+center" ]]; then
+if [[ "$EXPERIMENT" == "prop+center" ]]; then
     WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lct${FQ_LAMBDA_CENTER}_${INTENSITY}"
 else
-    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}_lc${FQ_LAMBDA_CLIP}_ld${FQ_LAMBDA_DEAD}"
+    WANDB_RUN_NAME="${EXPERIMENT}_fq_ptq_${MODEL_SHORT_NAME}_w${FQ_W_BITS}a${FQ_A_BITS}_e${FQ_EPOCHS}_bx${BX}_bw${BW}_ba${BA}_k${K}_${CALIBRATION_METHOD}"
 fi
 
 echo "========================================"
-if [[ "$EXPERIMENT" == "e8" || "$EXPERIMENT" == "e9" ]]; then
-    EXP_LABEL="${EXPERIMENT^^}/${INTENSITY}"
-else
-    EXP_LABEL="${EXPERIMENT^^}"
-fi
+EXP_LABEL="${EXPERIMENT^^}"
 echo "LLaMA FlatQuant + ADC PTQ  [${EXP_LABEL}]"
 echo "========================================"
 echo "Model:             $MODEL_NAME"

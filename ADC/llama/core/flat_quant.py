@@ -1078,6 +1078,7 @@ def calibrate_flat_quant(
     huber_delta: float = 1.0,
     lambda_center: float = 0.0,
     propagate_quant_inputs: bool = False,
+    propagate_quant_alpha: float = 1.0,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1372,10 +1373,21 @@ def calibrate_flat_quant(
                 # Forward only under autocast — backward must run in float32
                 # to avoid float16 overflow (1/loss can exceed float16 max).
                 with traincast():
-                    _train_inp = quant_inps[idx:idx + cali_bsz] if propagate_quant_inputs else fp_inps[idx:idx + cali_bsz]
-                    out = layer(_train_inp, **batch_kwargs)
-                    quant_out = out[0] if isinstance(out, tuple) else out
-                    loss = loss_func(fp_outs[idx:idx + cali_bsz], quant_out)
+                    _fp_ref = fp_outs[idx:idx + cali_bsz]
+                    if propagate_quant_inputs and 0.0 < propagate_quant_alpha < 1.0:
+                        # Dual forward: mix FP-input loss and quantized-input loss.
+                        # (1-alpha)*MSE(layer(fp_inp), fp_ref) + alpha*MSE(layer(quant_inp), fp_ref)
+                        _out_fp = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
+                        _fp_hidden = _out_fp[0] if isinstance(_out_fp, tuple) else _out_fp
+                        _out_q = layer(quant_inps[idx:idx + cali_bsz], **batch_kwargs)
+                        quant_out = _out_q[0] if isinstance(_out_q, tuple) else _out_q
+                        loss = ((1.0 - propagate_quant_alpha) * loss_func(_fp_ref, _fp_hidden)
+                                + propagate_quant_alpha * loss_func(_fp_ref, quant_out))
+                    else:
+                        _train_inp = quant_inps[idx:idx + cali_bsz] if propagate_quant_inputs else fp_inps[idx:idx + cali_bsz]
+                        out = layer(_train_inp, **batch_kwargs)
+                        quant_out = out[0] if isinstance(out, tuple) else out
+                        loss = loss_func(_fp_ref, quant_out)
                     if lambda_clip > 0.0 or lambda_dead > 0.0 or lambda_band > 0.0 or lambda_center > 0.0:
                         _clip_acc = loss.new_zeros(())
                         _dead_acc = loss.new_zeros(())

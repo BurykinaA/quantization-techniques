@@ -1841,6 +1841,12 @@ def main():
                         help="Bin-center penalty weight: cos²(π·z) pushes y_int toward ADC bin centres")
     parser.add_argument("--fq_propagate_quant", action="store_true",
                         help="Propagated calibration: train each layer on ADC-quantized inputs from previous layers")
+    parser.add_argument("--fq_prop_alpha", type=float, default=1.0,
+                        help="Propagation mixing: 1.0=full quant (default), 0.5=dual-forward (FP+quant), 0.0=FP only")
+    parser.add_argument("--fq_stage_b_epochs", type=int, default=0,
+                        help="Stage B epochs: after main calibration, run a second pass with propagation (0=disabled)")
+    parser.add_argument("--fq_stage_b_prop_alpha", type=float, default=0.5,
+                        help="Stage B propagation alpha (default 0.5)")
     # Knowledge Distillation fine-tuning (post-ADC-calibration)
     parser.add_argument("--kd_epochs", type=int, default=0,
                         help="KD fine-tuning epochs after ADC calibration (0 = disabled)")
@@ -1988,6 +1994,8 @@ def main():
                 f"_lc{args.fq_lambda_clip}_ld{args.fq_lambda_dead}"
                 + (f"_lct{args.fq_lambda_center}" if args.fq_lambda_center > 0 else "")
                 + ("_prop" if args.fq_propagate_quant else "")
+                + (f"_pa{args.fq_prop_alpha}" if args.fq_propagate_quant and args.fq_prop_alpha < 1.0 else "")
+                + (f"_sb{args.fq_stage_b_epochs}" if args.fq_stage_b_epochs > 0 else "")
                 + ("_pact" if args.pact_inference else "")
             )
         else:
@@ -2298,6 +2306,30 @@ def main():
                     huber_delta=args.fq_huber_delta,
                     lambda_center=args.fq_lambda_center,
                     propagate_quant_inputs=args.fq_propagate_quant,
+                    propagate_quant_alpha=args.fq_prop_alpha,
+                )
+
+            if args.fq_stage_b_epochs > 0:
+                logger.info(
+                    f"Stage B: {args.fq_stage_b_epochs} epochs, "
+                    f"prop=True, prop_alpha={args.fq_stage_b_prop_alpha}"
+                )
+                model = calibrate_flat_quant(
+                    model,
+                    dataloader=pre_loader,
+                    device=device,
+                    nsamples=args.fq_nsamples,
+                    cali_bsz=args.fq_cali_bsz,
+                    epochs=args.fq_stage_b_epochs,
+                    flat_lr=args.fq_lr * 0.1,
+                    diag_alpha=args.fq_diag_alpha,
+                    add_diag=args.fq_add_diag,
+                    lwc=args.fq_lwc,
+                    lac=args.fq_lac,
+                    kronecker_init=args.fq_kronecker_init,
+                    loss_type=args.fq_loss_type,
+                    propagate_quant_inputs=True,
+                    propagate_quant_alpha=args.fq_stage_b_prop_alpha,
                 )
 
             if args.fq_save_transforms:
