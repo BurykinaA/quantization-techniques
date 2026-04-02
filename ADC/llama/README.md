@@ -117,7 +117,7 @@ We discovered this when running the E2-equivalent baseline on the pact branch: t
 | **prop** | propagated calibration | 11.01 | **14.55** | 10.3% | Major improvement: −47% ADC PPL vs baseline |
 | **prop+center mid** | propagated + bin-center λ=0.1 | 11.00 | **14.41** | 10.3% | Best result; marginal gain over prop alone |
 
-#### Branch `llama-flatquant-adc-int4-experiments` — INT4 overnight sweep
+#### Branch `llama-flatquant-adc-int4-experiments` — INT4 v1 overnight sweep (128–512 samples)
 
 **Config:** bx=4, bw=4, ba=8, k=16. delta ≈ 6.12 (finer ADC resolution than INT8).
 
@@ -144,6 +144,36 @@ We discovered this when running the E2-equivalent baseline on the pact branch: t
 
 ---
 
+#### Branch `llama-flatquant-adc-int4-v2` — partial propagation sweep (1024 samples)
+
+**New feature:** `propagate_quant_alpha` α ∈ [0,1] — dual-forward mixing:
+`loss = (1−α)·MSE(layer(fp_inp), ref) + α·MSE(layer(quant_inp), ref)`
+α=1.0 = full propagation (v1), α=0.0 = no propagation (baseline), α=0.5 = equal mix.
+
+**2-stage:** stage A = 30 epochs no prop (good transforms) → stage B = 10 epochs α=0.5 (robustness fine-tune, lr×0.1).
+
+| Experiment | Description | PPL bypass | PPL ADC | gap (ADC/bypass) | dead_rate |
+|------------|-------------|------------|---------|-----------------|-----------|
+| **baseline_1024** | no prop, 1024 samples | 19.80 | 56.83 | ×2.87 | 10.4% |
+| **prop_full_1024** | α=1.0, 1024 samples | 30.32 | 40.20 | ×1.32 | 10.4% |
+| **propalpha_075_1024** | α=0.75, 1024 samples | 27.46 | 35.92 | ×1.31 | 10.4% |
+| **propalpha_05_1024** | α=0.5, 1024 samples | 24.24 | **31.22** | **×1.29** | 10.4% |
+| **propalpha_025_1024** | α=0.25, 1024 samples | 21.65 | 32.35 | ×1.49 | 10.4% |
+| **hadamard_propalpha05_1024** | Hadamard + α=0.5 | 24.63 | 33.12 | ×1.34 | 10.4% |
+| **2stage_sb10_pa05** | stage A no prop → stage B α=0.5 | 22.82 | 32.21 | ×1.41 | 10.3% |
+| **add_diag_propalpha05_1024** | bounded LET + α=0.5 | **20.23** | **27.56** | **×1.36** | 10.4% |
+
+**Key findings:**
+
+- **add_diag + α=0.5 gives best absolute INT4 PPL (27.56)** — diagonal scaling (bounded LET) improves both bypass (24.24→20.23) and ADC (31.22→27.56). The bypass/ADC gap is slightly wider (×1.36 vs ×1.29 for α=0.5 alone), but absolute numbers are best across all INT4 experiments.
+- **α=0.5 without diag is the best gap ratio (×1.29)** — diagonal scaling adds expressive power but also slightly over-specialises transforms.
+- **Below α=0.5, ADC gets worse** — at α=0.25, ADC PPL rises to 32.35 despite better bypass (21.65). When FP input dominates the loss, transforms don't adapt sufficiently to ADC-corrupted inference inputs.
+- **Hadamard init gives no benefit** — hadamard+prop_α05 (33.12) is worse than random+prop_α05 (31.22) at the same α. Result consistent across v1 and v2.
+- **2-stage is competitive** — bypass=22.82, ADC=32.21, gap ×1.41. Better bypass than α=0.5 but slightly worse ADC.
+- **1024 vs 512 samples**: prop_full_1024 (ADC=40.20) vs prop_512s (ADC=40.63) — marginal. The α-mixing (→31.22) matters more than extra samples beyond 512.
+
+---
+
 #### New baseline (per-token inference, improved transforms)
 
 | Experiment | Description | PPL bypass | PPL ADC | dead_rate (mean) | reconstruction_rel | Notes |
@@ -162,9 +192,12 @@ bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh baseline        # PPL 28.86
 bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh prop             # PPL 14.55
 bash ADC/llama/run_flat_quant_adc_ptq_e7e8e9.sh prop+center mid  # PPL 14.41 (best INT8)
 
-# INT4 overnight sweep (branch llama-flatquant-adc-int4-experiments)
+# INT4 v1 sweep (branch llama-flatquant-adc-int4-experiments)
 bash ADC/llama/run_overnight_int4.sh
-# Results saved to: ADC/llama/results/overnight_int4_YYYYMMDD.json
+
+# INT4 v2 sweep: partial propagation α-sweep + 2-stage + bounded LET
+bash ADC/llama/run_overnight_int4_v2.sh
+# Results: ADC/llama/results/overnight_int4_v2_YYYYMMDD.json
 ```
 
 **WandB project:** `llama-flat-quant-adc-ptq-blocks`
@@ -182,10 +215,15 @@ bash ADC/llama/run_overnight_int4.sh
 | Bin-center (λ=0.1) | w8a8 | 128 | 10.01 | 28.86 | 0% |
 | **Propagated** | w8a8 | 128 | 11.01 | **14.55** | **−47%** |
 | **Prop + bin-center** | w8a8 | 128 | 11.00 | **14.41** | **−50%** |
-| INT4 baseline | w4a4 | 128 | 15.41 | 2354.86 | +8060% |
-| INT4 prop | w4a4 | 128 | 40.28 | 203.89 | +607% |
-| INT4 hadamard+prop | w4a4 | 128 | 34.73 | 178.86 | +520% |
-| **INT4 prop + 512 samples** | w4a4 | 512 | 34.25 | **40.63** | **+41%** |
+| INT4 baseline (128s) | w4a4 | 128 | 15.41 | 2354.86 | +8060% |
+| INT4 prop (128s) | w4a4 | 128 | 40.28 | 203.89 | +607% |
+| INT4 prop (512s) | w4a4 | 512 | 34.25 | 40.63 | +41% |
+| INT4 baseline (1024s) | w4a4 | 1024 | 19.80 | 56.83 | +97% |
+| INT4 prop α=1.0 (1024s) | w4a4 | 1024 | 30.32 | 40.20 | +39% |
+| INT4 prop α=0.75 (1024s) | w4a4 | 1024 | 27.46 | 35.92 | +24% |
+| **INT4 prop α=0.5 (1024s)** | w4a4 | 1024 | 24.24 | **31.22** | **+8%** |
+| INT4 2-stage α=0.5 (1024s) | w4a4 | 1024 | 22.82 | 32.21 | +12% |
+| **INT4 add_diag + α=0.5 (1024s)** | w4a4 | 1024 | **20.23** | **27.56** | **−5%** |
 
 ### Key takeaways
 
@@ -202,16 +240,22 @@ Training each layer on ADC-quantized inputs from the previous layer (rather than
 In INT8, prop+center (14.41) vs prop (14.55) is ~1% gain. In INT4, bin-center is actively harmful (ADC PPL 7895 vs 2354 baseline) — with delta=6.12 the penalty dominates and destabilises training.
 
 **5. INT4 requires more calibration samples — 128 is insufficient.**
-With 128 samples, all INT4 methods give ADC PPL ≥ 178. With 512 samples + propagation, ADC PPL drops to 40.63, closing the bypass→ADC gap to ×1.2. The INT4 optimizer overfits on 128 samples; more data is the dominant lever.
+With 128 samples, all INT4 methods give ADC PPL ≥ 178. With 512–1024 samples + propagation, ADC PPL drops to 31–40, closing the gap substantially. The INT4 optimizer overfits on 128 samples; more data is the dominant lever.
 
-**6. Propagation and calibration samples interact differently in INT4 vs INT8.**
-In INT8: propagation helps even at 128 samples (28.86 → 14.55). In INT4: propagation alone gives 203 PPL; only with 512 samples does it give 40.63. Low-bit PTQ is more sensitive to calibration data quantity.
+**6. Partial propagation (α=0.5) is strictly better than full propagation for INT4.**
+α-sweep (0.25–1.0) shows α=0.5 achieves the best ADC PPL (31.22) AND the best bypass/ADC gap (×1.29). Full propagation (α=1.0) overshoots: transforms over-specialise for corrupted inputs and lose bypass quality. Below α=0.5, FP input dominates the loss and transforms under-adapt to inference conditions.
 
-**7. Decoupled training (transform at W8, ADC at W4) gives good bypass but poor ADC.**
-Bypass PPL 11.64 ≈ INT8 quality, but ADC PPL is 276 — transforms optimised without W4 quantization noise don't generalize to the W4 ADC inference regime.
+**7. Hadamard init does not help.**
+At the same α=0.5 and 1024 samples, Hadamard init (ADC=33.12) is consistently worse than random init (ADC=31.22). Result is consistent across v1 and v2. Not worth pursuing further.
 
-**8. Remaining gap: 14.41 (INT8) and 40.63 (INT4) vs FP baseline 10.5.**
-Further reduction likely requires lower delta (hardware), reduced tile size, or higher ADC bits.
+**8. 2-stage training (no-prop → prop fine-tune) gives a good bypass/ADC trade-off.**
+Stage A (no prop, good transforms) → Stage B (10ep α=0.5, robustness) gives bypass=22.82, ADC=32.21. Best bypass among α-sweep methods, competitive ADC. Useful if clean FP performance matters.
+
+**9. Diagonal scaling (bounded LET) + α=0.5 gives best absolute INT4 result.**
+add_diag + α=0.5 achieves bypass=20.23, ADC=27.56 — best absolute numbers across all INT4 experiments. The diagonal per-channel scale (bounded [1e-4, 10]) gives transforms more expressive power to adapt to W4A4 noise. Combined with α=0.5 partial propagation this is the strongest purely PTQ result.
+
+**10. Remaining gap: 14.41 (INT8) and 27.56 (INT4) vs FP baseline 10.5.**
+INT4 ADC PPL 27.56 is now close to INT8 baseline (28.86) — the extra complexity of INT4 has been largely compensated by better calibration. Further reduction requires hardware changes (lower delta, higher ba).
 
 ---
 

@@ -1079,6 +1079,10 @@ def calibrate_flat_quant(
     lambda_center: float = 0.0,
     propagate_quant_inputs: bool = False,
     propagate_quant_alpha: float = 1.0,
+    prop_alpha_early: float | None = None,
+    prop_late_start: int = 8,
+    diag_attn: bool = True,
+    diag_mlp: bool = True,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1264,8 +1268,10 @@ def calibrate_flat_quant(
 
         # (b) Initialise diagonal scales from activation / weight stats
         if add_diag:
-            layer.self_attn.init_diag_scale(alpha=diag_alpha)
-            layer.mlp.init_diag_scale(alpha=diag_alpha)
+            if diag_attn:
+                layer.self_attn.init_diag_scale(alpha=diag_alpha)
+            if diag_mlp:
+                layer.mlp.init_diag_scale(alpha=diag_alpha)
 
         # (b2) Optionally re-initialize Kronecker factors to Hadamard rotation
         if kronecker_init == "hadamard":
@@ -1292,10 +1298,18 @@ def calibrate_flat_quant(
             },
         ]
         if add_diag:
-            trained_params.append({
-                "params": _get_params_by_pattern(layer, ["trans.diag_scale"]),
-                "lr": flat_lr,
-            })
+            _diag_params = []
+            for _n, _p in layer.named_parameters():
+                if "diag_scale" not in _n:
+                    continue
+                _is_attn_diag = "self_attn" in _n
+                _is_mlp_diag  = "mlp" in _n
+                if (_is_attn_diag and diag_attn) or (_is_mlp_diag and diag_mlp):
+                    _diag_params.append(_p)
+                else:
+                    _p.requires_grad_(False)
+            if _diag_params:
+                trained_params.append({"params": _diag_params, "lr": flat_lr})
         if lwc and not freeze_clip:
             trained_params.append({
                 "params": _get_params_by_pattern(layer, ["clip_factor_w"]),
@@ -1337,6 +1351,12 @@ def calibrate_flat_quant(
         )
 
         # (d) Train transforms via MSE loss ─────────────────────────
+        # Layer-wise alpha: early layers (i < prop_late_start) can use a
+        # smaller propagation weight to preserve FP signal in the first blocks.
+        _layer_alpha = propagate_quant_alpha
+        if prop_alpha_early is not None and i < prop_late_start:
+            _layer_alpha = prop_alpha_early
+
         n_batches = actual_nsamples // cali_bsz
 
         # Attach forward hooks to catch the first NaN-producing tensor (only
@@ -1374,15 +1394,15 @@ def calibrate_flat_quant(
                 # to avoid float16 overflow (1/loss can exceed float16 max).
                 with traincast():
                     _fp_ref = fp_outs[idx:idx + cali_bsz]
-                    if propagate_quant_inputs and 0.0 < propagate_quant_alpha < 1.0:
+                    if propagate_quant_inputs and 0.0 < _layer_alpha < 1.0:
                         # Dual forward: mix FP-input loss and quantized-input loss.
                         # (1-alpha)*MSE(layer(fp_inp), fp_ref) + alpha*MSE(layer(quant_inp), fp_ref)
                         _out_fp = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
                         _fp_hidden = _out_fp[0] if isinstance(_out_fp, tuple) else _out_fp
                         _out_q = layer(quant_inps[idx:idx + cali_bsz], **batch_kwargs)
                         quant_out = _out_q[0] if isinstance(_out_q, tuple) else _out_q
-                        loss = ((1.0 - propagate_quant_alpha) * loss_func(_fp_ref, _fp_hidden)
-                                + propagate_quant_alpha * loss_func(_fp_ref, quant_out))
+                        loss = ((1.0 - _layer_alpha) * loss_func(_fp_ref, _fp_hidden)
+                                + _layer_alpha * loss_func(_fp_ref, quant_out))
                     else:
                         _train_inp = quant_inps[idx:idx + cali_bsz] if propagate_quant_inputs else fp_inps[idx:idx + cali_bsz]
                         out = layer(_train_inp, **batch_kwargs)

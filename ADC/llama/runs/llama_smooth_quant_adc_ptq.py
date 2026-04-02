@@ -1847,6 +1847,14 @@ def main():
                         help="Stage B epochs: after main calibration, run a second pass with propagation (0=disabled)")
     parser.add_argument("--fq_stage_b_prop_alpha", type=float, default=0.5,
                         help="Stage B propagation alpha (default 0.5)")
+    parser.add_argument("--fq_prop_alpha_early", type=float, default=None,
+                        help="Propagation alpha for early layers (0..fq_prop_late_start-1). If None, fq_prop_alpha used for all.")
+    parser.add_argument("--fq_prop_late_start", type=int, default=8,
+                        help="Layer index where 'late' alpha starts (default 8, halfway for 16-layer Llama).")
+    parser.add_argument("--fq_diag_attn", action="store_true",
+                        help="Train diag_scale only for attention blocks (requires --fq_add_diag). If neither --fq_diag_attn nor --fq_diag_mlp is set, both are trained.")
+    parser.add_argument("--fq_diag_mlp", action="store_true",
+                        help="Train diag_scale only for MLP blocks (requires --fq_add_diag). If neither --fq_diag_attn nor --fq_diag_mlp is set, both are trained.")
     # Knowledge Distillation fine-tuning (post-ADC-calibration)
     parser.add_argument("--kd_epochs", type=int, default=0,
                         help="KD fine-tuning epochs after ADC calibration (0 = disabled)")
@@ -1995,7 +2003,10 @@ def main():
                 + (f"_lct{args.fq_lambda_center}" if args.fq_lambda_center > 0 else "")
                 + ("_prop" if args.fq_propagate_quant else "")
                 + (f"_pa{args.fq_prop_alpha}" if args.fq_propagate_quant and args.fq_prop_alpha < 1.0 else "")
+                + (f"_pae{args.fq_prop_alpha_early}" if args.fq_prop_alpha_early is not None else "")
                 + (f"_sb{args.fq_stage_b_epochs}" if args.fq_stage_b_epochs > 0 else "")
+                + ("_diagattn" if args.fq_add_diag and args.fq_diag_attn and not args.fq_diag_mlp else "")
+                + ("_diagmlp"  if args.fq_add_diag and args.fq_diag_mlp  and not args.fq_diag_attn else "")
                 + ("_pact" if args.pact_inference else "")
             )
         else:
@@ -2307,6 +2318,10 @@ def main():
                     lambda_center=args.fq_lambda_center,
                     propagate_quant_inputs=args.fq_propagate_quant,
                     propagate_quant_alpha=args.fq_prop_alpha,
+                    prop_alpha_early=args.fq_prop_alpha_early,
+                    prop_late_start=args.fq_prop_late_start,
+                    diag_attn=(not args.fq_diag_attn and not args.fq_diag_mlp) or args.fq_diag_attn,
+                    diag_mlp=(not args.fq_diag_attn and not args.fq_diag_mlp) or args.fq_diag_mlp,
                 )
 
             if args.fq_stage_b_epochs > 0:
