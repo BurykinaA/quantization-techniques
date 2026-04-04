@@ -136,27 +136,13 @@ json.dump(data, open(p, 'w'), indent=2)
 # ============================================================
 
 # 1. CONTROL: reproduce best v2 result (add_diag + α=0.5) on v3 code
-#    Expected: bypass≈20.23, ADC≈27.56. If different → bug in refactor.
+#    Expected: bypass≈20.23, ADC≈27.56.
 run_experiment "repro_diagboth_alpha05" \
     --fq_add_diag \
     --fq_propagate_quant \
     --fq_prop_alpha 0.5
 
-# 2. Layer-wise α: early=0.25, late=0.5, no diag
-#    Hypothesis: early layers receive less ADC noise → smaller α avoids overfitting
-run_experiment "propalpha_early025_late05" \
-    --fq_propagate_quant \
-    --fq_prop_alpha 0.5 \
-    --fq_prop_alpha_early 0.25 \
-    --fq_prop_late_start 8
-
-# 3. Layer-wise α: early=0.5, late=0.75, no diag
-#    Push late layers harder while protecting early layers
-run_experiment "propalpha_early05_late075" \
-    --fq_propagate_quant \
-    --fq_prop_alpha 0.75 \
-    --fq_prop_alpha_early 0.5 \
-    --fq_prop_late_start 8
+# (2, 3 already ran correctly — no diag, layer-wise α only — skipped)
 
 # 4. Attention diag only + α=0.5
 #    Isolate: does attn diag_scale contribute to the add_diag gain?

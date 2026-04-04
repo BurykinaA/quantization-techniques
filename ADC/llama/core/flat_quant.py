@@ -1305,6 +1305,7 @@ def calibrate_flat_quant(
                 _is_attn_diag = "self_attn" in _n
                 _is_mlp_diag  = "mlp" in _n
                 if (_is_attn_diag and diag_attn) or (_is_mlp_diag and diag_mlp):
+                    _p.requires_grad_(True)
                     _diag_params.append(_p)
                 else:
                     _p.requires_grad_(False)

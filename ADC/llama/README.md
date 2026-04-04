@@ -174,6 +174,27 @@ We discovered this when running the E2-equivalent baseline on the pact branch: t
 
 ---
 
+#### Branch `llama-flatquant-adc-int4-v3` — layer-wise alpha + selective diag (1024 samples)
+
+**New features:**
+- `--fq_prop_alpha_early` / `--fq_prop_late_start` — use different α for early layers (0..N-1) vs late layers
+- `--fq_diag_attn` / `--fq_diag_mlp` — train `diag_scale` only for attention or MLP blocks respectively
+
+**Layer-wise α results (clean — no diag involved):**
+
+| Experiment | Description | PPL bypass | PPL ADC | gap | dead_rate |
+|------------|-------------|------------|---------|-----|-----------|
+| **propalpha_early025_late05** | α: 0.25 early / 0.5 late | 23.26 | 32.98 | ×1.42 | 10.4% |
+| **propalpha_early05_late075** | α: 0.5 early / 0.75 late | 28.14 | 33.49 | ×1.19 | 10.4% |
+
+**Observations:**
+- Layer-wise α alone is neutral vs flat α=0.5 (ADC 31.22): better bypass but worse ADC for early025/late05, worse both for early05/late075.
+- Higher α in late layers hurts — late layers don't benefit from more propagation.
+
+**Bug note:** First run (repro + diag experiments 1, 4–8) had `requires_grad_(True)` missing in selective-diag loop — `diag_scale` was initialized but not trained. Bug fixed; diag experiments will be rerun.
+
+---
+
 #### New baseline (per-token inference, improved transforms)
 
 | Experiment | Description | PPL bypass | PPL ADC | dead_rate (mean) | reconstruction_rel | Notes |
@@ -198,6 +219,10 @@ bash ADC/llama/run_overnight_int4.sh
 # INT4 v2 sweep: partial propagation α-sweep + 2-stage + bounded LET
 bash ADC/llama/run_overnight_int4_v2.sh
 # Results: ADC/llama/results/overnight_int4_v2_YYYYMMDD.json
+
+# INT4 v3 sweep: layer-wise alpha + selective diag (run after bug fix)
+bash ADC/llama/run_overnight_int4_v3.sh
+# Results: ADC/llama/results/overnight_int4_v3_YYYYMMDD.json
 ```
 
 **WandB project:** `llama-flat-quant-adc-ptq-blocks`
@@ -268,3 +293,5 @@ INT4 ADC PPL 27.56 is now close to INT8 baseline (28.86) — the extra complexit
 | `runs/llama_smooth_quant_adc_ptq.py` | Main PTQ script |
 | `run_flat_quant_adc_ptq_e7e8e9.sh` | INT8 experiment launcher (baseline/center/prop/prop+center) |
 | `run_overnight_int4.sh` | INT4 overnight batch runner (8 experiments, JSON results) |
+| `run_overnight_int4_v2.sh` | INT4 v2: partial propagation α-sweep + 2-stage + bounded LET |
+| `run_overnight_int4_v3.sh` | INT4 v3: layer-wise alpha + selective diag_scale per block type |
