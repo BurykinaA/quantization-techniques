@@ -180,18 +180,52 @@ We discovered this when running the E2-equivalent baseline on the pact branch: t
 - `--fq_prop_alpha_early` / `--fq_prop_late_start` — use different α for early layers (0..N-1) vs late layers
 - `--fq_diag_attn` / `--fq_diag_mlp` — train `diag_scale` only for attention or MLP blocks respectively
 
-**Layer-wise α results (clean — no diag involved):**
+**Layer-wise α only (no diag, clean from first run):**
 
 | Experiment | Description | PPL bypass | PPL ADC | gap | dead_rate |
 |------------|-------------|------------|---------|-----|-----------|
 | **propalpha_early025_late05** | α: 0.25 early / 0.5 late | 23.26 | 32.98 | ×1.42 | 10.4% |
 | **propalpha_early05_late075** | α: 0.5 early / 0.75 late | 28.14 | 33.49 | ×1.19 | 10.4% |
 
-**Observations:**
-- Layer-wise α alone is neutral vs flat α=0.5 (ADC 31.22): better bypass but worse ADC for early025/late05, worse both for early05/late075.
-- Higher α in late layers hurts — late layers don't benefit from more propagation.
+**Selective diag + layer-wise α (fixed run):**
 
-**Bug note:** First run (repro + diag experiments 1, 4–8) had `requires_grad_(True)` missing in selective-diag loop — `diag_scale` was initialized but not trained. Bug fixed; diag experiments will be rerun.
+| Experiment | Description | PPL bypass | PPL ADC | gap | dead_rate |
+|------------|-------------|------------|---------|-----|-----------|
+| **repro_diagboth_alpha05** | both diag + flat α=0.5 (control) | 19.69 | **28.46** | ×1.45 | 10.4% |
+| **diagattn_propalpha05** | attn diag only + flat α=0.5 | 24.98 | 29.41 | ×1.18 | 10.4% |
+| **diagmlp_propalpha05** | MLP diag only + flat α=0.5 | **19.37** | 31.65 | ×1.63 | 10.4% |
+| **diagmlp_early025_late05** | MLP diag + α 0.25/0.5 | **19.00** | 28.66 | ×1.51 | 10.4% |
+| **diagattn_early025_late05** | attn diag + α 0.25/0.5 | 22.71 | 30.53 | ×1.34 | 10.4% |
+| **diagboth_early025_late05** | both diag + α 0.25/0.5 | 19.39 | **28.55** | ×1.47 | 10.4% |
+
+**Key observations:**
+- **Control reproduced v2:** repro gives bypass=19.69, ADC=28.46 vs v2's 20.23/27.56 — within run-to-run variance. Bug fix confirmed.
+- **MLP diag alone has a split personality:** best bypass of all (19.37) but worst ADC (31.65). MLP diag flattens weight distributions well (low bypass PPL) but without attn diag the ADC gap widens.
+- **Attn diag alone is worse than both:** bypass=24.98 (much worse than both=19.69). Attn diag does not drive the bypass improvement — that comes from MLP diag.
+- **Layer-wise α rescues MLP diag for ADC:** diagmlp alone → ADC=31.65; diagmlp + early025/late05 → ADC=28.66. Adding less propagation in early layers compensates for the attn-diag absence.
+- **diagmlp_early025_late05 has best bypass (19.00) and ADC competitive with both-diag (28.66 vs 28.46)** — with half the diag parameters trained.
+- **diagboth + layer-wise α ≈ flat α:** 28.55 vs 28.46 — no benefit from layer-wise α when both diag are active.
+- **No experiment beats v2 best (27.56)** — all results cluster at ADC=28.4–31.6. The v2 `add_diag + α=0.5` result may have benefited from a favorable random seed.
+
+---
+
+#### Branch `llama-flatquant-adc-int4-v4` — MLP diag split + staged selective diag (1024 samples)
+
+**Motivation:** v3 showed MLP diag improves bypass, attn diag closes ADC gap. Two questions:
+1. Inside MLP diag: is it `up_gate_trans` or `down_trans` that drives the effect?
+2. Is staged training (MLP diag first, then attn diag) better than training both simultaneously?
+
+**New features:**
+- `--fq_diag_mlp_up` / `--fq_diag_mlp_down` — split MLP diag into up_gate_trans vs down_trans
+- `--fq_stage_b_diag_attn` / `--fq_stage_b_diag_mlp` — Stage B can use different diag than Stage A
+
+| Experiment | Description | PPL bypass | PPL ADC | gap | dead_rate |
+|------------|-------------|------------|---------|-----|-----------|
+| **diag_up_propalpha05** | up_gate_trans diag only + α=0.5 | — | — | — | — |
+| **diag_down_propalpha05** | down_trans diag only + α=0.5 | — | — | — | — |
+| **staged_mlpdiag_then_attn** | Stage A: MLP diag, no prop → Stage B: attn diag + α=0.5, 10ep | — | — | — | — |
+
+*Results pending.*
 
 ---
 
@@ -223,6 +257,10 @@ bash ADC/llama/run_overnight_int4_v2.sh
 # INT4 v3 sweep: layer-wise alpha + selective diag (run after bug fix)
 bash ADC/llama/run_overnight_int4_v3.sh
 # Results: ADC/llama/results/overnight_int4_v3_YYYYMMDD.json
+
+# INT4 v4 sweep: MLP diag split (up vs down) + staged selective diag
+bash ADC/llama/run_overnight_int4_v4.sh
+# Results: ADC/llama/results/overnight_int4_v4_YYYYMMDD.json
 ```
 
 **WandB project:** `llama-flat-quant-adc-ptq-blocks`
@@ -295,3 +333,4 @@ INT4 ADC PPL 27.56 is now close to INT8 baseline (28.86) — the extra complexit
 | `run_overnight_int4.sh` | INT4 overnight batch runner (8 experiments, JSON results) |
 | `run_overnight_int4_v2.sh` | INT4 v2: partial propagation α-sweep + 2-stage + bounded LET |
 | `run_overnight_int4_v3.sh` | INT4 v3: layer-wise alpha + selective diag_scale per block type |
+| `run_overnight_int4_v4.sh` | INT4 v4: MLP diag split (up_gate vs down) + staged selective diag |

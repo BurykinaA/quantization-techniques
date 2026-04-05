@@ -1083,6 +1083,8 @@ def calibrate_flat_quant(
     prop_late_start: int = 8,
     diag_attn: bool = True,
     diag_mlp: bool = True,
+    diag_mlp_up: bool = True,
+    diag_mlp_down: bool = True,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1302,9 +1304,15 @@ def calibrate_flat_quant(
             for _n, _p in layer.named_parameters():
                 if "diag_scale" not in _n:
                     continue
-                _is_attn_diag = "self_attn" in _n
-                _is_mlp_diag  = "mlp" in _n
-                if (_is_attn_diag and diag_attn) or (_is_mlp_diag and diag_mlp):
+                _is_attn   = "self_attn" in _n
+                _is_mlp_up = "up_gate_trans" in _n
+                _is_mlp_dn = "down_trans" in _n
+                _should_train = (
+                    (_is_attn   and diag_attn) or
+                    (_is_mlp_up and diag_mlp and diag_mlp_up) or
+                    (_is_mlp_dn and diag_mlp and diag_mlp_down)
+                )
+                if _should_train:
                     _p.requires_grad_(True)
                     _diag_params.append(_p)
                 else:

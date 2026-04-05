@@ -1855,6 +1855,14 @@ def main():
                         help="Train diag_scale only for attention blocks (requires --fq_add_diag). If neither --fq_diag_attn nor --fq_diag_mlp is set, both are trained.")
     parser.add_argument("--fq_diag_mlp", action="store_true",
                         help="Train diag_scale only for MLP blocks (requires --fq_add_diag). If neither --fq_diag_attn nor --fq_diag_mlp is set, both are trained.")
+    parser.add_argument("--fq_diag_mlp_up", action="store_true",
+                        help="Within MLP diag: train only up_gate_trans.diag_scale. If neither --fq_diag_mlp_up nor --fq_diag_mlp_down is set, both are trained.")
+    parser.add_argument("--fq_diag_mlp_down", action="store_true",
+                        help="Within MLP diag: train only down_trans.diag_scale. If neither --fq_diag_mlp_up nor --fq_diag_mlp_down is set, both are trained.")
+    parser.add_argument("--fq_stage_b_diag_attn", action="store_true",
+                        help="Stage B: train diag_scale for attention blocks (overrides Stage A diag_attn setting).")
+    parser.add_argument("--fq_stage_b_diag_mlp", action="store_true",
+                        help="Stage B: train diag_scale for MLP blocks (overrides Stage A diag_mlp setting).")
     # Knowledge Distillation fine-tuning (post-ADC-calibration)
     parser.add_argument("--kd_epochs", type=int, default=0,
                         help="KD fine-tuning epochs after ADC calibration (0 = disabled)")
@@ -2007,6 +2015,9 @@ def main():
                 + (f"_sb{args.fq_stage_b_epochs}" if args.fq_stage_b_epochs > 0 else "")
                 + ("_diagattn" if args.fq_add_diag and args.fq_diag_attn and not args.fq_diag_mlp else "")
                 + ("_diagmlp"  if args.fq_add_diag and args.fq_diag_mlp  and not args.fq_diag_attn else "")
+                + ("_diagup"   if args.fq_add_diag and args.fq_diag_mlp_up   and not args.fq_diag_mlp_down else "")
+                + ("_diagdown" if args.fq_add_diag and args.fq_diag_mlp_down and not args.fq_diag_mlp_up   else "")
+                + ("_stagedb"  if args.fq_stage_b_epochs > 0 and (args.fq_stage_b_diag_attn or args.fq_stage_b_diag_mlp) else "")
                 + ("_pact" if args.pact_inference else "")
             )
         else:
@@ -2322,12 +2333,23 @@ def main():
                     prop_late_start=args.fq_prop_late_start,
                     diag_attn=(not args.fq_diag_attn and not args.fq_diag_mlp) or args.fq_diag_attn,
                     diag_mlp=(not args.fq_diag_attn and not args.fq_diag_mlp) or args.fq_diag_mlp,
+                    diag_mlp_up=(not args.fq_diag_mlp_up and not args.fq_diag_mlp_down) or args.fq_diag_mlp_up,
+                    diag_mlp_down=(not args.fq_diag_mlp_up and not args.fq_diag_mlp_down) or args.fq_diag_mlp_down,
                 )
 
             if args.fq_stage_b_epochs > 0:
+                # Stage B diag selection:
+                # If --fq_stage_b_diag_attn or --fq_stage_b_diag_mlp are set, use those.
+                # Otherwise inherit Stage A diag settings.
+                _sb_neither = not args.fq_stage_b_diag_attn and not args.fq_stage_b_diag_mlp
+                _stage_a_diag_attn = (not args.fq_diag_attn and not args.fq_diag_mlp) or args.fq_diag_attn
+                _stage_a_diag_mlp  = (not args.fq_diag_attn and not args.fq_diag_mlp) or args.fq_diag_mlp
+                _sb_diag_attn = (_stage_a_diag_attn if _sb_neither else args.fq_stage_b_diag_attn)
+                _sb_diag_mlp  = (_stage_a_diag_mlp  if _sb_neither else args.fq_stage_b_diag_mlp)
                 logger.info(
                     f"Stage B: {args.fq_stage_b_epochs} epochs, "
-                    f"prop=True, prop_alpha={args.fq_stage_b_prop_alpha}"
+                    f"prop=True, prop_alpha={args.fq_stage_b_prop_alpha}, "
+                    f"diag_attn={_sb_diag_attn}, diag_mlp={_sb_diag_mlp}"
                 )
                 model = calibrate_flat_quant(
                     model,
@@ -2345,6 +2367,10 @@ def main():
                     loss_type=args.fq_loss_type,
                     propagate_quant_inputs=True,
                     propagate_quant_alpha=args.fq_stage_b_prop_alpha,
+                    diag_attn=_sb_diag_attn,
+                    diag_mlp=_sb_diag_mlp,
+                    diag_mlp_up=True,
+                    diag_mlp_down=True,
                 )
 
             if args.fq_save_transforms:
