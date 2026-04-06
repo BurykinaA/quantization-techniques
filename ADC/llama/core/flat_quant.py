@@ -1087,7 +1087,7 @@ def calibrate_flat_quant(
     diag_mlp_down: bool = True,
     stochastic_prop: bool = False,
     stochastic_mode: str = "bernoulli",  # "bernoulli" | "beta"
-    beta_param: float = 1.0,
+    beta_param: float = 2.0,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 

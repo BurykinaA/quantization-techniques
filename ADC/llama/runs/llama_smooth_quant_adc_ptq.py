@@ -38,6 +38,7 @@ from ADC.llama.core.smooth_quant import (
     calibrate_smooth_scales,
     apply_smooth_quant,
 )
+from ADC.llama.core.adc_lora import apply_adc_lora, calibrate_adc_lora
 from ADC.llama.core.flat_quant import (
     apply_flatquant_to_model,
     calibrate_flat_quant,
@@ -1881,6 +1882,17 @@ def main():
                         help="Number of calibration batches per KD epoch")
     parser.add_argument("--kd_teacher_on_cpu", action="store_true",
                         help="Load FP teacher model on CPU to save GPU memory")
+    # ADC-LoRA post-correction (post-ADC-calibration)
+    parser.add_argument("--lora_rank", type=int, default=0,
+                        help="LoRA rank for ADC-LoRA post-correction (0 = disabled)")
+    parser.add_argument("--lora_alpha", type=float, default=8.0,
+                        help="LoRA scaling alpha (scaling = lora_alpha / lora_rank)")
+    parser.add_argument("--lora_target_modules", nargs="+", default=["down_proj"],
+                        help="Projection names to apply LoRA to, e.g. down_proj o_proj")
+    parser.add_argument("--lora_epochs", type=int, default=30,
+                        help="Training epochs for LoRA calibration")
+    parser.add_argument("--lora_lr", type=float, default=1e-3,
+                        help="Learning rate for LoRA AdamW optimizer")
 
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
@@ -2028,6 +2040,7 @@ def main():
                 + (f"_stoch{args.fq_stochastic_mode}" if args.fq_stochastic_prop else "")
                 + (f"_b{args.fq_beta_param}" if args.fq_stochastic_prop and args.fq_stochastic_mode == "beta" else "")
                 + ("_pact" if args.pact_inference else "")
+                + (f"_lora_r{args.lora_rank}" if args.lora_rank > 0 else "")
             )
         else:
             default_run_name = (
@@ -2608,6 +2621,38 @@ def main():
             teacher_on_cpu=args.kd_teacher_on_cpu,
             use_wandb=use_wandb,
         )
+
+    # =========================================================================
+    # STEP 2.4 (optional): ADC-LoRA post-correction
+    # =========================================================================
+    if args.lora_rank > 0:
+        logger.info(
+            f"[LoRA] Applying rank={args.lora_rank} α={args.lora_alpha} "
+            f"to {args.lora_target_modules}"
+        )
+        model = apply_adc_lora(
+            model,
+            target_modules=args.lora_target_modules,
+            rank=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+        )
+        model = calibrate_adc_lora(
+            model,
+            dataloader=calibration_loader,
+            device=device,
+            nsamples=args.fq_nsamples,
+            cali_bsz=args.fq_cali_bsz,
+            epochs=args.lora_epochs,
+            lora_lr=args.lora_lr,
+        )
+        if use_wandb:
+            wandb.log({
+                "lora_rank": args.lora_rank,
+                "lora_alpha": args.lora_alpha,
+                "lora_target_modules": str(args.lora_target_modules),
+                "lora_epochs": args.lora_epochs,
+                "lora_lr": args.lora_lr,
+            })
 
     # E3: capture inference-path outputs and compare with calibration-path
     if args.run_e3_check and e3_calib_outputs is not None and e3_sample is not None:

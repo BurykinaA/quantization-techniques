@@ -244,12 +244,38 @@ We discovered this when running the E2-equivalent baseline on the pact branch: t
 
 | Experiment | Description | PPL bypass | PPL ADC | gap | dead_rate |
 |------------|-------------|------------|---------|-----|-----------|
-| **stoch_bern_propalpha05** | Bernoulli stochastic, flat, no diag | — | — | — | — |
-| **stoch_beta2_propalpha05** | Beta(2,2) stochastic, flat, no diag | — | — | — | — |
-| **staged_stoch_bern** | staged (MLP diag → attn diag) + Bernoulli Stage B | — | — | — | — |
-| **staged_stoch_beta2** | staged (MLP diag → attn diag) + Beta(2,2) Stage B | — | — | — | — |
+| Experiment | Description | PPL bypass | PPL ADC | gap | dead_rate |
+|------------|-------------|------------|---------|-----|-----------|
+| **stoch_bern_propalpha05** | Bernoulli stochastic, flat, no diag | 19.25 | 35.38 | ×1.84 | 10.4% |
+| **stoch_beta2_propalpha05** | Beta(2,2) stochastic, flat, no diag | 22.90 | 31.40 | ×1.37 | 10.4% |
+| **staged_stoch_bern** | staged (MLP diag → attn diag) + Bernoulli Stage B | **16.94** | 32.44 | ×1.92 | 10.4% |
+| **staged_stoch_beta2** | staged (MLP diag → attn diag) + Beta(2,2) Stage B | 17.16 | **27.82** | **×1.62** | 10.3% |
 
-*Results pending.*
+**Key observations:**
+- **Beta(2,2) > Bernoulli across the board.** Bernoulli gives excellent bypass (19.25 flat / 16.94 staged) but poor ADC — the hard 0/1 switching is too noisy for ADC-path training. Beta samples near 0.5 every batch → smooth interpolation → better ADC at the cost of bypass.
+- **`staged_stoch_beta2` is the new best ADC PPL: 27.82** — marginal improvement over v4 staged (27.60) and v2 best (27.56). Bypass=17.16 is also among the best seen.
+- **Bernoulli staged explodes the gap (×1.92):** bypass=16.94 (best ever) but ADC=32.44 — Stage B Bernoulli batches with fp_inp don't carry ADC signal at all; the attn diag ends up learning for FP distribution, not ADC-corrupted inputs.
+- **Flat stoch_bern vs stoch_beta2:** Bernoulli bypass=19.25 is better than Beta bypass=22.90 but ADC is much worse (35.38 vs 31.40). Consistent with staged results.
+- **Pattern:** Beta(2,2) ≈ deterministic α=0.5 in expectation, with extra randomness → slightly better ADC (31.40 vs 31.22 for flat; 27.82 vs 27.60 for staged). The stochasticity is mildly helpful but not a large effect.
+
+---
+
+#### Branch `llama-flatquant-adc-int4-v6` — ADC-LoRA post-correction (1024 samples)
+
+**Motivation:** Pure PTQ approaches a plateau (~27.5–28.5 ADC PPL across v3–v5). Next step: apply low-rank adapters on top of the frozen PTQ checkpoint, trained through the full ADC quantization pipeline.
+
+**Design:** For each target `FlatQuantLinear`, replace `module.linear` (`TiledLinearADC`) with `LoRATiledLinearADC`. The effective weight per tile is `W_i + scaling * A_i @ B_i`, quantized through `Qx → Qw → integer MVM → ADC clamp`. Adapters are trained via LM cross-entropy (frozen quantized model, trainable LoRA A/B).
+
+**New params:** `--lora_rank`, `--lora_alpha`, `--lora_target_modules`, `--lora_epochs`, `--lora_lr`
+
+**Base PTQ:** `staged_mlpdiag_then_attn` → bypass=18.50, ADC=27.60
+
+| Experiment | LoRA targets | rank | PPL bypass | PPL ADC | gap | Notes |
+|------------|-------------|------|------------|---------|-----|-------|
+| **lora_r4_down** | down_proj | 4 | — | — | — | *pending* |
+| **lora_r8_down** | down_proj | 8 | — | — | — | *pending* |
+| **lora_r4_down_o** | down_proj + o_proj | 4 | — | — | — | *pending* |
+| **lora_r4_all** | all 7 projections | 4 | — | — | — | *pending* |
 
 ---
 
@@ -289,6 +315,10 @@ bash ADC/llama/run_overnight_int4_v4.sh
 # INT4 v5 sweep: stochastic propagation
 bash ADC/llama/run_overnight_int4_v5.sh
 # Results: ADC/llama/results/overnight_int4_v5_YYYYMMDD.json
+
+# INT4 v6 sweep: ADC-LoRA post-correction
+bash ADC/llama/run_overnight_int4_v6.sh
+# Results: ADC/llama/results/overnight_int4_v6_YYYYMMDD.json
 ```
 
 **WandB project:** `llama-flat-quant-adc-ptq-blocks`
@@ -364,3 +394,5 @@ INT4 ADC PPL 27.56 is now close to INT8 baseline (28.86) — the extra complexit
 | `run_overnight_int4_v3.sh` | INT4 v3: layer-wise alpha + selective diag_scale per block type |
 | `run_overnight_int4_v4.sh` | INT4 v4: MLP diag split (up_gate vs down) + staged selective diag |
 | `run_overnight_int4_v5.sh` | INT4 v5: stochastic propagation (Bernoulli / Beta) |
+| `run_overnight_int4_v6.sh` | INT4 v6: ADC-LoRA post-correction (rank 4/8, various targets) |
+| `core/adc_lora.py` | LoRATiledLinearADC, apply_adc_lora, calibrate_adc_lora |
