@@ -1863,6 +1863,13 @@ def main():
                         help="Stage B: train diag_scale for attention blocks (overrides Stage A diag_attn setting).")
     parser.add_argument("--fq_stage_b_diag_mlp", action="store_true",
                         help="Stage B: train diag_scale for MLP blocks (overrides Stage A diag_mlp setting).")
+    parser.add_argument("--fq_stochastic_prop", action="store_true",
+                        help="Use stochastic propagation instead of fixed alpha: per-batch random alpha.")
+    parser.add_argument("--fq_stochastic_mode", type=str, default="bernoulli",
+                        choices=["bernoulli", "beta"],
+                        help="Stochastic mode: 'bernoulli' (randomly pick fp or quant, single forward) or 'beta' (sample alpha~Beta(β,β), dual forward).")
+    parser.add_argument("--fq_beta_param", type=float, default=2.0,
+                        help="Beta distribution parameter β for stochastic_mode=beta. β=1 → uniform[0,1]; β=2 → concentrated near 0.5.")
     # Knowledge Distillation fine-tuning (post-ADC-calibration)
     parser.add_argument("--kd_epochs", type=int, default=0,
                         help="KD fine-tuning epochs after ADC calibration (0 = disabled)")
@@ -2018,6 +2025,8 @@ def main():
                 + ("_diagup"   if args.fq_add_diag and args.fq_diag_mlp_up   and not args.fq_diag_mlp_down else "")
                 + ("_diagdown" if args.fq_add_diag and args.fq_diag_mlp_down and not args.fq_diag_mlp_up   else "")
                 + ("_stagedb"  if args.fq_stage_b_epochs > 0 and (args.fq_stage_b_diag_attn or args.fq_stage_b_diag_mlp) else "")
+                + (f"_stoch{args.fq_stochastic_mode}" if args.fq_stochastic_prop else "")
+                + (f"_b{args.fq_beta_param}" if args.fq_stochastic_prop and args.fq_stochastic_mode == "beta" else "")
                 + ("_pact" if args.pact_inference else "")
             )
         else:
@@ -2335,6 +2344,9 @@ def main():
                     diag_mlp=(not args.fq_diag_attn and not args.fq_diag_mlp) or args.fq_diag_mlp,
                     diag_mlp_up=(not args.fq_diag_mlp_up and not args.fq_diag_mlp_down) or args.fq_diag_mlp_up,
                     diag_mlp_down=(not args.fq_diag_mlp_up and not args.fq_diag_mlp_down) or args.fq_diag_mlp_down,
+                    stochastic_prop=args.fq_stochastic_prop,
+                    stochastic_mode=args.fq_stochastic_mode,
+                    beta_param=args.fq_beta_param,
                 )
 
             if args.fq_stage_b_epochs > 0:
@@ -2371,6 +2383,9 @@ def main():
                     diag_mlp=_sb_diag_mlp,
                     diag_mlp_up=True,
                     diag_mlp_down=True,
+                    stochastic_prop=args.fq_stochastic_prop,
+                    stochastic_mode=args.fq_stochastic_mode,
+                    beta_param=args.fq_beta_param,
                 )
 
             if args.fq_save_transforms:

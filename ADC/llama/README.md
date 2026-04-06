@@ -221,9 +221,33 @@ We discovered this when running the E2-equivalent baseline on the pact branch: t
 
 | Experiment | Description | PPL bypass | PPL ADC | gap | dead_rate |
 |------------|-------------|------------|---------|-----|-----------|
-| **diag_up_propalpha05** | up_gate_trans diag only + α=0.5 | — | — | — | — |
-| **diag_down_propalpha05** | down_trans diag only + α=0.5 | — | — | — | — |
-| **staged_mlpdiag_then_attn** | Stage A: MLP diag, no prop → Stage B: attn diag + α=0.5, 10ep | — | — | — | — |
+| Experiment | Description | PPL bypass | PPL ADC | gap | dead_rate |
+|------------|-------------|------------|---------|-----|-----------|
+| **diag_up_propalpha05** | up_gate_trans diag only + α=0.5 | 23.22 | 39.59 | ×1.70 | 10.3% |
+| **diag_down_propalpha05** | down_trans diag only + α=0.5 | 20.42 | 31.26 | ×1.53 | 10.4% |
+| **staged_mlpdiag_then_attn** | Stage A: MLP diag no prop → Stage B: attn diag + α=0.5, 10ep | **18.50** | **27.60** | **×1.49** | 10.4% |
+
+**Key observations:**
+- **`down_trans` diag is the key driver, not `up_gate_trans`:** `diag_down` gives bypass=20.42, ADC=31.26 — close to full MLP diag (19.37/31.65 from v3). `diag_up` gives bypass=23.22, ADC=39.59 — much worse. `down_proj` sits right before the ADC-quantized accumulation; its scale directly affects the z=y_int/delta distribution.
+- **Staged training is the new best:** `staged_mlpdiag_then_attn` achieves bypass=18.50, ADC=27.60 — best bypass across all INT4 experiments, and ADC PPL matching v2 best (27.56). Two-phase training works: Stage A (no prop) learns clean MLP-diag transforms without ADC-noise interference; Stage B (attn diag + prop) adds robustness without destroying Stage A's gains.
+- **Stage A `fq_propagate_quant=false` confirmed in JSON** — bypass=18.50 is the best INT4 bypass seen, consistent with clean FP training in Stage A.
+
+---
+
+#### Branch `llama-flatquant-adc-int4-v5` — stochastic propagation (1024 samples)
+
+**Motivation:** deterministic α=0.5 mixes FP and quant losses in fixed proportion every batch. Stochastic propagation (QDrop-style) randomly varies the mix:
+- **Bernoulli**: each batch randomly uses fp_inp OR quant_inp (single forward, 50/50). Cost = 1 forward vs 2 for deterministic dual.
+- **Beta(β,β)**: each batch samples α ~ Beta(β,β), dual forward. β=2 → concentrated near 0.5; β=1 → uniform[0,1].
+
+**New params:** `--fq_stochastic_prop`, `--fq_stochastic_mode {bernoulli,beta}`, `--fq_beta_param`
+
+| Experiment | Description | PPL bypass | PPL ADC | gap | dead_rate |
+|------------|-------------|------------|---------|-----|-----------|
+| **stoch_bern_propalpha05** | Bernoulli stochastic, flat, no diag | — | — | — | — |
+| **stoch_beta2_propalpha05** | Beta(2,2) stochastic, flat, no diag | — | — | — | — |
+| **staged_stoch_bern** | staged (MLP diag → attn diag) + Bernoulli Stage B | — | — | — | — |
+| **staged_stoch_beta2** | staged (MLP diag → attn diag) + Beta(2,2) Stage B | — | — | — | — |
 
 *Results pending.*
 
@@ -261,6 +285,10 @@ bash ADC/llama/run_overnight_int4_v3.sh
 # INT4 v4 sweep: MLP diag split (up vs down) + staged selective diag
 bash ADC/llama/run_overnight_int4_v4.sh
 # Results: ADC/llama/results/overnight_int4_v4_YYYYMMDD.json
+
+# INT4 v5 sweep: stochastic propagation
+bash ADC/llama/run_overnight_int4_v5.sh
+# Results: ADC/llama/results/overnight_int4_v5_YYYYMMDD.json
 ```
 
 **WandB project:** `llama-flat-quant-adc-ptq-blocks`
@@ -286,7 +314,8 @@ bash ADC/llama/run_overnight_int4_v4.sh
 | INT4 prop α=0.75 (1024s) | w4a4 | 1024 | 27.46 | 35.92 | +24% |
 | **INT4 prop α=0.5 (1024s)** | w4a4 | 1024 | 24.24 | **31.22** | **+8%** |
 | INT4 2-stage α=0.5 (1024s) | w4a4 | 1024 | 22.82 | 32.21 | +12% |
-| **INT4 add_diag + α=0.5 (1024s)** | w4a4 | 1024 | **20.23** | **27.56** | **−5%** |
+| **INT4 add_diag + α=0.5 (1024s)** | w4a4 | 1024 | 20.23 | 27.56 | −5% |
+| **INT4 staged: MLP diag → attn diag + α=0.5** | w4a4 | 1024 | **18.50** | **27.60** | **−4%** |
 
 ### Key takeaways
 
@@ -334,3 +363,4 @@ INT4 ADC PPL 27.56 is now close to INT8 baseline (28.86) — the extra complexit
 | `run_overnight_int4_v2.sh` | INT4 v2: partial propagation α-sweep + 2-stage + bounded LET |
 | `run_overnight_int4_v3.sh` | INT4 v3: layer-wise alpha + selective diag_scale per block type |
 | `run_overnight_int4_v4.sh` | INT4 v4: MLP diag split (up_gate vs down) + staged selective diag |
+| `run_overnight_int4_v5.sh` | INT4 v5: stochastic propagation (Bernoulli / Beta) |

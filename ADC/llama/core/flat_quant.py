@@ -1085,6 +1085,9 @@ def calibrate_flat_quant(
     diag_mlp: bool = True,
     diag_mlp_up: bool = True,
     diag_mlp_down: bool = True,
+    stochastic_prop: bool = False,
+    stochastic_mode: str = "bernoulli",  # "bernoulli" | "beta"
+    beta_param: float = 1.0,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1403,17 +1406,35 @@ def calibrate_flat_quant(
                 # to avoid float16 overflow (1/loss can exceed float16 max).
                 with traincast():
                     _fp_ref = fp_outs[idx:idx + cali_bsz]
-                    if propagate_quant_inputs and 0.0 < _layer_alpha < 1.0:
+                    # Per-batch alpha: deterministic or stochastic.
+                    # Bernoulli: each batch randomly uses either fp_inp or quant_inp
+                    #   (single forward, half the batches each). QDrop-style.
+                    # Beta: sample α ~ Beta(β,β) each batch, dual forward.
+                    #   β=1 → uniform[0,1]; β=2 → concentrated near 0.5.
+                    if propagate_quant_inputs and stochastic_prop:
+                        if stochastic_mode == "bernoulli":
+                            _batch_alpha = float(torch.bernoulli(torch.tensor(0.5)).item())
+                        else:  # beta
+                            _batch_alpha = float(
+                                torch.distributions.Beta(beta_param, beta_param).sample().item()
+                            )
+                    else:
+                        _batch_alpha = _layer_alpha
+                    if propagate_quant_inputs and 0.0 < _batch_alpha < 1.0:
                         # Dual forward: mix FP-input loss and quantized-input loss.
                         # (1-alpha)*MSE(layer(fp_inp), fp_ref) + alpha*MSE(layer(quant_inp), fp_ref)
                         _out_fp = layer(fp_inps[idx:idx + cali_bsz], **batch_kwargs)
                         _fp_hidden = _out_fp[0] if isinstance(_out_fp, tuple) else _out_fp
                         _out_q = layer(quant_inps[idx:idx + cali_bsz], **batch_kwargs)
                         quant_out = _out_q[0] if isinstance(_out_q, tuple) else _out_q
-                        loss = ((1.0 - _layer_alpha) * loss_func(_fp_ref, _fp_hidden)
-                                + _layer_alpha * loss_func(_fp_ref, quant_out))
+                        loss = ((1.0 - _batch_alpha) * loss_func(_fp_ref, _fp_hidden)
+                                + _batch_alpha * loss_func(_fp_ref, quant_out))
                     else:
-                        _train_inp = quant_inps[idx:idx + cali_bsz] if propagate_quant_inputs else fp_inps[idx:idx + cali_bsz]
+                        # alpha=0 → fp path; alpha=1 or no prop → quant/fp path
+                        if propagate_quant_inputs and _batch_alpha > 0.0:
+                            _train_inp = quant_inps[idx:idx + cali_bsz]
+                        else:
+                            _train_inp = fp_inps[idx:idx + cali_bsz]
                         out = layer(_train_inp, **batch_kwargs)
                         quant_out = out[0] if isinstance(out, tuple) else out
                         loss = loss_func(_fp_ref, quant_out)
