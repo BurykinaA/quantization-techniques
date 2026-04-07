@@ -52,13 +52,16 @@ class LoRATiledLinearADC(nn.Module):
             if tile.bias is not None:
                 tile.bias.requires_grad = False
 
+        # Create LoRA params on the same device as the tile weights
+        _device = tiled_layer.tiles[0].weight.device
+
         # Per-tile LoRA: A (out_features, r), B (r, in_features_tile)
         self.lora_A = nn.ParameterList([
-            nn.Parameter(torch.zeros(self.out_features, r))
+            nn.Parameter(torch.zeros(self.out_features, r, device=_device))
             for _ in range(self.n_tiles)
         ])
         self.lora_B = nn.ParameterList([
-            nn.Parameter(torch.zeros(r, self.in_features_tile))
+            nn.Parameter(torch.zeros(r, self.in_features_tile, device=_device))
             for _ in range(self.n_tiles)
         ])
 
