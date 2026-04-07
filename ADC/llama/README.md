@@ -260,11 +260,18 @@ We discovered this when running the E2-equivalent baseline on the pact branch: t
 
 ---
 
-#### Branch `llama-flatquant-adc-int4-v6` — ADC-LoRA post-correction (1024 samples)
+#### Branch `llama-flatquant-adc-int4-v6` — Residual post-ADC LoRA (1024 samples)
 
-**Motivation:** Pure PTQ approaches a plateau (~27.5–28.5 ADC PPL across v3–v5). Next step: apply low-rank adapters on top of the frozen PTQ checkpoint, trained through the full ADC quantization pipeline.
+**Motivation:** Pure PTQ approaches a plateau (~27.5–28.5 ADC PPL across v3–v5). Next step: apply low-rank residual correction on top of the frozen PTQ checkpoint.
 
-**Design:** For each target `FlatQuantLinear`, replace `module.linear` (`TiledLinearADC`) with `LoRATiledLinearADC`. The effective weight per tile is `W_i + scaling * A_i @ B_i`, quantized through `Qx → Qw → integer MVM → ADC clamp`. Adapters are trained via LM cross-entropy (frozen quantized model, trainable LoRA A/B).
+**Design (residual / QLoRA-style):**
+```
+y = frozen_TiledLinearADC(x)              # exact calibrated ADC path, frozen
+y += scaling * lora_B(lora_A(x.float()))  # FP32 residual, added AFTER ADC output
+```
+- LoRA params always in float32; base model frozen in fp16
+- Gradients never touch `round_ste` or ADC clamp → stable training
+- Trained via LM cross-entropy, 5 epochs, lr=1e-4
 
 **New params:** `--lora_rank`, `--lora_alpha`, `--lora_target_modules`, `--lora_epochs`, `--lora_lr`
 

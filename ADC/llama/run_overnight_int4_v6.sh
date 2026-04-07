@@ -119,13 +119,13 @@ json.dump(data, open(p, 'w'), indent=2)
 
 # 1. LoRA rank=4 on down_proj only
 #    down_proj is the key ADC contributor (v4: down-only ADC=31.26 vs up-only=39.59)
-#    Baseline question: does any LoRA correction help?
+#    Baseline question: does residual LoRA help at all?
 run_experiment "lora_r4_down" \
     --lora_rank 4 \
     --lora_alpha 8.0 \
     --lora_target_modules down_proj \
-    --lora_epochs 30 \
-    --lora_lr 1e-3
+    --lora_epochs 5 \
+    --lora_lr 1e-4
 
 # 2. LoRA rank=8 on down_proj only
 #    Higher rank = more correction capacity; compare vs rank=4
@@ -133,8 +133,8 @@ run_experiment "lora_r8_down" \
     --lora_rank 8 \
     --lora_alpha 16.0 \
     --lora_target_modules down_proj \
-    --lora_epochs 30 \
-    --lora_lr 1e-3
+    --lora_epochs 5 \
+    --lora_lr 1e-4
 
 # 3. LoRA rank=4 on down_proj + o_proj
 #    o_proj is the attn output projection (feeds into residual stream directly)
@@ -143,8 +143,8 @@ run_experiment "lora_r4_down_o" \
     --lora_rank 4 \
     --lora_alpha 8.0 \
     --lora_target_modules down_proj o_proj \
-    --lora_epochs 30 \
-    --lora_lr 1e-3
+    --lora_epochs 5 \
+    --lora_lr 1e-4
 
 # 4. LoRA rank=4 on all 7 projections
 #    Full coverage — ceiling of what LoRA can achieve at rank=4
@@ -152,8 +152,8 @@ run_experiment "lora_r4_all" \
     --lora_rank 4 \
     --lora_alpha 8.0 \
     --lora_target_modules down_proj up_proj gate_proj q_proj k_proj v_proj o_proj \
-    --lora_epochs 30 \
-    --lora_lr 1e-3
+    --lora_epochs 5 \
+    --lora_lr 1e-4
 
 # ============================================================
 echo ""

@@ -1891,7 +1891,7 @@ def main():
                         help="Projection names to apply LoRA to, e.g. down_proj o_proj")
     parser.add_argument("--lora_epochs", type=int, default=30,
                         help="Training epochs for LoRA calibration")
-    parser.add_argument("--lora_lr", type=float, default=1e-3,
+    parser.add_argument("--lora_lr", type=float, default=1e-4,
                         help="Learning rate for LoRA AdamW optimizer")
 
     parser.add_argument("--fq_save_transforms", action="store_true",
