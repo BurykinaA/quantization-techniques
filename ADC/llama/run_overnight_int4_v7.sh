@@ -47,7 +47,7 @@ OUTPUT_BASE="$SCRIPT_DIR/checkpoints/overnight_int4_v7_${DATE_TAG}"
 # ── Base PTQ: staged_mlpdiag_then_attn (best from v4) ──────────────────────
 # Fixes vs v6 BASE_ARGS:
 #   - removed --fq_no_diag (was a no-op conflicting with --fq_add_diag, confusing)
-#   - added --calibration_max_length 2048 (default is 512 — must be explicit)
+#   - explicit --calibration_max_length 512 (same as v6 default, keeps results comparable)
 BASE_ARGS=(
     --model_name "$MODEL_NAME"
     --preprocess_method flat_quant
@@ -66,7 +66,7 @@ BASE_ARGS=(
     --fq_stage_b_diag_attn
     --fq_save_transforms
     --calibration_method percentile
-    --calibration_max_length 2048
+    --calibration_max_length 512
     --eval_datasets wikitext2
     --run_no_adc_eval
     --results_json_path "$RESULTS_JSON"
