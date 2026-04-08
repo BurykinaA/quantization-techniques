@@ -1889,10 +1889,24 @@ def main():
                         help="LoRA scaling alpha (scaling = lora_alpha / lora_rank)")
     parser.add_argument("--lora_target_modules", nargs="+", default=["down_proj"],
                         help="Projection names to apply LoRA to, e.g. down_proj o_proj")
-    parser.add_argument("--lora_epochs", type=int, default=30,
+    parser.add_argument("--lora_epochs", type=int, default=5,
                         help="Training epochs for LoRA calibration")
     parser.add_argument("--lora_lr", type=float, default=1e-4,
                         help="Learning rate for LoRA AdamW optimizer")
+    parser.add_argument("--lora_mode", type=str, default="residual",
+                        choices=["residual", "pre_adc"],
+                        help="LoRA mode: 'residual' (post-ADC, QLoRA-style) or "
+                             "'pre_adc' (inside quantization, RAOQ-style)")
+    parser.add_argument("--lora_layer_indices", nargs="+", type=int, default=None,
+                        help="Transformer layer indices to apply LoRA to (None=all layers)")
+    parser.add_argument("--lora_loss", type=str, default="ce",
+                        choices=["ce", "ce_kl"],
+                        help="LoRA training loss: 'ce' (cross-entropy) or "
+                             "'ce_kl' (CE + KL divergence from FP teacher)")
+    parser.add_argument("--lora_kl_weight", type=float, default=0.5,
+                        help="Weight λ for KL term in ce_kl loss: L = CE + λ·KL")
+    parser.add_argument("--lora_kl_temperature", type=float, default=2.0,
+                        help="Softmax temperature T for KL divergence")
 
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
@@ -2040,7 +2054,9 @@ def main():
                 + (f"_stoch{args.fq_stochastic_mode}" if args.fq_stochastic_prop else "")
                 + (f"_b{args.fq_beta_param}" if args.fq_stochastic_prop and args.fq_stochastic_mode == "beta" else "")
                 + ("_pact" if args.pact_inference else "")
-                + (f"_lora_r{args.lora_rank}" if args.lora_rank > 0 else "")
+                + (f"_lora_{args.lora_mode}_r{args.lora_rank}" if args.lora_rank > 0 else "")
+                + (f"_kl" if args.lora_rank > 0 and args.lora_loss == "ce_kl" else "")
+                + (f"_top{len(args.lora_layer_indices)}" if args.lora_rank > 0 and args.lora_layer_indices else "")
             )
         else:
             default_run_name = (
@@ -2630,11 +2646,15 @@ def main():
             f"[LoRA] Applying rank={args.lora_rank} α={args.lora_alpha} "
             f"to {args.lora_target_modules}"
         )
+        _lora_layer_indices = (set(args.lora_layer_indices)
+                               if args.lora_layer_indices else None)
         model = apply_adc_lora(
             model,
             target_modules=args.lora_target_modules,
             rank=args.lora_rank,
             lora_alpha=args.lora_alpha,
+            mode=args.lora_mode,
+            layer_indices=_lora_layer_indices,
         )
         model = calibrate_adc_lora(
             model,
@@ -2644,14 +2664,22 @@ def main():
             cali_bsz=args.fq_cali_bsz,
             epochs=args.lora_epochs,
             lora_lr=args.lora_lr,
+            lora_loss=args.lora_loss,
+            teacher_name_or_path=args.model_name if args.lora_loss == "ce_kl" else None,
+            kl_weight=args.lora_kl_weight,
+            kl_temperature=args.lora_kl_temperature,
         )
         if use_wandb:
             wandb.log({
                 "lora_rank": args.lora_rank,
                 "lora_alpha": args.lora_alpha,
+                "lora_mode": args.lora_mode,
                 "lora_target_modules": str(args.lora_target_modules),
+                "lora_layer_indices": str(args.lora_layer_indices),
                 "lora_epochs": args.lora_epochs,
                 "lora_lr": args.lora_lr,
+                "lora_loss": args.lora_loss,
+                "lora_kl_weight": args.lora_kl_weight,
             })
 
     # E3: capture inference-path outputs and compare with calibration-path
