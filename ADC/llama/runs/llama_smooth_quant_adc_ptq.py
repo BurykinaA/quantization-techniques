@@ -228,13 +228,16 @@ def load_and_tokenize_for_sliding_window(
     Load and tokenize a dataset into one long sequence for sliding window evaluation.
     This is the standard approach used in papers like GPTQ, AWQ, FlatQuant.
     """
-    logger.info(f"Loading {dataset_name} ({split} split) for sliding window evaluation...")
+    _effective_split = ("validation" if (dataset_name == "c4" and split == "test") else split)
+    logger.info(f"Loading {dataset_name} ({_effective_split} split) for sliding window evaluation...")
 
     if dataset_name == "wikitext2":
         raw = load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
         text = "\n\n".join([t for t in raw["text"] if t.strip()])
     elif dataset_name == "c4":
-        raw = load_dataset("allenai/c4", "en", split=split, streaming=True)
+        # c4 has only 'train' and 'validation' — map 'test' to 'validation'
+        c4_split = "validation" if split == "test" else split
+        raw = load_dataset("allenai/c4", "en", split=c4_split, streaming=True)
         texts = []
         for i, example in enumerate(raw):
             if max_samples and i >= max_samples:
@@ -3010,6 +3013,8 @@ def main():
                 _existing = _json.load(_f)
         except (FileNotFoundError, _json.JSONDecodeError):
             pass
+        # Replace any existing entry with the same run_name (deduplicates retries)
+        _existing = [r for r in _existing if r.get("run_name") != _record["run_name"]]
         _existing.append(_record)
         os.makedirs(os.path.dirname(os.path.abspath(args.results_json_path)), exist_ok=True)
         with open(args.results_json_path, "w") as _f:

@@ -107,8 +107,10 @@ try:
     data = json.load(open(p))
 except (FileNotFoundError, json.JSONDecodeError):
     pass
-data.append({'run_name': '$name', 'status': 'failed', 'exit_code': $exit_code,
-             'timestamp': datetime.datetime.now().isoformat()})
+record = {'run_name': '$name', 'status': 'failed', 'exit_code': $exit_code,
+          'timestamp': datetime.datetime.now().isoformat()}
+data = [r for r in data if r.get('run_name') != '$name']
+data.append(record)
 os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
 json.dump(data, open(p, 'w'), indent=2)
 " 2>/dev/null || true
