@@ -320,54 +320,77 @@ y += scaling * lora_B(lora_A(x.float()))  # FP32 residual, added AFTER ADC outpu
 
 | Experiment | seed | PPL bypass | PPL ADC | gap | Notes |
 |------------|------|------------|---------|-----|-------|
-| seed1_r4_down_o | 1 | — | — | — | *pending* |
-| seed2_r4_down_o | 2 | — | — | — | *pending* |
-| seed3_r4_down_o | 3 | — | — | — | *pending* |
+| seed1_r4_down_o | 1 | — | **15.79** | — | |
+| seed2_r4_down_o | 2 | — | **15.88** | — | |
+| seed3_r4_down_o | 3 | — | **15.93** | — | σ≈0.07 across 3 seeds |
 
 ##### Group B — Rank sweep (down_proj + o_proj)
 
 | Experiment | rank | PPL bypass | PPL ADC | gap | Notes |
 |------------|------|------------|---------|-----|-------|
-| rank1_down_o | 1 | — | — | — | *pending* |
-| rank2_down_o | 2 | — | — | — | *pending* |
-| rank4_down_o | 4 | — | — | — | *pending* |
-| rank8_down_o | 8 | — | — | — | *pending* |
+| rank1_down_o | 1 | — | 15.90 | — | |
+| rank2_down_o | 2 | — | 15.60 | — | |
+| rank4_down_o | 4 | — | **15.57** | — | |
+| rank8_down_o | 8 | — | **15.24** | — | marginal gain r4→r8 |
 
 ##### Group C — Loss ablation
 
 | Experiment | loss | PPL bypass | PPL ADC | gap | Notes |
 |------------|------|------------|---------|-----|-------|
 | r4_down_o (v6 reference) | CE | 18.68 | 15.63 | ×0.84 | v6 best |
-| r4_down_o_ce_kl | CE+KL | — | — | — | *pending* |
+| r4_down_o_ce_kl | CE+KL | 19.54 | **14.33** | **×0.73** | +1.3 PPL improvement over CE |
 
 ##### Group D — Layer-selective LoRA (r=4, down+o)
 
 | Experiment | layers | PPL bypass | PPL ADC | gap | Notes |
 |------------|--------|------------|---------|-----|-------|
 | r4_down_o (all layers) | 0–15 | 18.68 | 15.63 | ×0.84 | v6 best |
-| r4_down_o_last8 | 8–15 | — | — | — | *pending* |
-| r4_down_o_first8 | 0–7 | — | — | — | *pending* |
+| r4_down_o_last8 | 8–15 | 18.62 | 20.08 | ×1.08 | worse than all-layers |
+| r4_down_o_first8 | 0–7 | 18.42 | **16.64** | **×0.90** | first 8 carry more ADC error |
 
 ##### Group E — Pre-ADC vs Post-ADC LoRA (r=4, down+o)
 
 | Experiment | mode | PPL bypass | PPL ADC | gap | Notes |
 |------------|------|------------|---------|-----|-------|
 | lora_r4_down_o (residual) | post-ADC | 18.68 | 15.63 | ×0.84 | v6 best |
-| pre_adc_r4_down_o | pre-ADC (RAOQ-style) | — | — | — | *pending* |
+| pre_adc_r4_down_o | pre-ADC (RAOQ-style) | 123.34 | 105.63 | ×0.86 | **catastrophic divergence** |
 
 ##### Group F — Full coverage (CE then CE+KL)
 
 | Experiment | targets | loss | PPL bypass | PPL ADC | gap | Notes |
 |------------|---------|------|------------|---------|-----|-------|
 | lora_r4_all (v6, CE) | all 7 | CE | 17.73 | 16.53 | ×0.93 | v6 reference |
-| r4_all_ce | all 7 | CE | — | — | — | *pending* (within-v7 control) |
-| r4_all_ce_kl | all 7 | CE+KL | — | — | — | *pending* |
+| r4_all_ce | all 7 | CE | 17.62 | 16.68 | ×0.95 | |
+| r4_all_ce_kl | all 7 | CE+KL | 19.13 | **14.03** | **×0.73** | **new best** |
 
 ##### Control
 
 | Experiment | LoRA | PPL bypass | PPL ADC | Notes |
 |------------|------|------------|---------|-------|
-| base_staged_no_lora | none | — | — | *pending* — v7 PTQ control |
+| base_staged_no_lora | none | 17.89 | 27.55 | consistent with v6 (27.60) |
+
+**Analysis:**
+
+- **Best result: `r4_all_ce_kl` ADC=14.03** — new overall best, beating v6's 15.63 by 1.6 PPL. CE+KL loss with all 7 projections is the winning combination.
+- **CE+KL consistently beats CE** (+1.3 PPL on down+o: 15.57→14.33; +2.65 PPL on all targets: 16.68→14.03). The FP teacher signal provides information that CE on the quantized model alone cannot.
+- **Rank saturation at r=1** (15.90 vs 15.24 at r=8 — only 0.66 PPL difference across all ranks). Most of the correction capacity is captured at rank=1; higher ranks give diminishing returns.
+- **Seeds stable** (σ≈0.07 across seeds 1/2/3, all ~15.8 ADC PPL). The end-to-end pipeline (PTQ + LoRA) is reproducible.
+- **Pre-ADC LoRA fails** (bypass=123.34, ADC=105.63 — catastrophic divergence). Even with fp32 parameters, gradients through `round_ste(Qw(W+ΔW))` and the ADC clamp are too noisy for CE loss from step 0 without MSE warmup. This confirms residual post-ADC is the correct architecture.
+- **First 8 layers beat last 8** (16.64 vs 20.08 ADC PPL). ADC distortion is stronger in early layers — they accumulate errors that propagate through the rest of the network. Concentrating LoRA on layers 8–15 misses the main source of error.
+- **PTQ control validates v7 branch** (bypass=17.89, ADC=27.55 vs v6 baseline 18.50/27.60 — within expected PTQ variance).
+
+---
+
+#### Branch `llama-flatquant-adc-int4-v8` — C4 generalisation check (best-3 LoRA configs)
+
+**Motivation:** v7 validated LoRA configs on wikitext2. v8 re-runs the top-3 with both wikitext2 and C4 evaluation to check whether LoRA correction generalises to out-of-domain web text.
+
+| Experiment | targets | loss | rank | wiki bypass | wiki ADC | C4 bypass | C4 ADC | Notes |
+|------------|---------|------|------|-------------|----------|-----------|--------|-------|
+| base_no_lora | none | — | — | *pending* | *pending* | *pending* | *pending* | PTQ control |
+| r4_all_ce_kl | all 7 | CE+KL | 4 | *pending* | *pending* | *pending* | *pending* | v7 best (wiki ADC=14.03) |
+| r4_down_o_ce_kl | down+o | CE+KL | 4 | *pending* | *pending* | *pending* | *pending* | v7 2nd (wiki ADC=14.33) |
+| rank8_down_o | down+o | CE | 8 | *pending* | *pending* | *pending* | *pending* | v7 3rd (wiki ADC=15.24) |
 
 ---
 
@@ -415,6 +438,10 @@ bash ADC/llama/run_overnight_int4_v6.sh
 # INT4 v7 sweep: ADC-LoRA ablation (seeds, rank, loss, layers, pre vs post ADC)
 bash ADC/llama/run_overnight_int4_v7.sh
 # Results: ADC/llama/results/overnight_int4_v7_YYYYMMDD.json
+
+# INT4 v8 sweep: best-3 LoRA configs, wikitext2 + C4 eval
+bash ADC/llama/run_overnight_int4_v8.sh
+# Results: ADC/llama/results/overnight_int4_v8_YYYYMMDD.json
 ```
 
 **WandB project:** `llama-flat-quant-adc-ptq-blocks`
@@ -492,4 +519,5 @@ INT4 ADC PPL 27.56 is now close to INT8 baseline (28.86) — the extra complexit
 | `run_overnight_int4_v5.sh` | INT4 v5: stochastic propagation (Bernoulli / Beta) |
 | `run_overnight_int4_v6.sh` | INT4 v6: ADC-LoRA post-correction (rank 4/8, various targets) |
 | `run_overnight_int4_v7.sh` | INT4 v7: ADC-LoRA ablation (seeds, rank, loss, layers, pre vs post ADC) |
+| `run_overnight_int4_v8.sh` | INT4 v8: best-3 LoRA configs, wikitext2 + C4 generalisation eval |
 | `core/adc_lora.py` | ResidualLoRATiledLinearADC, PreADCLoRATiledLinearADC, apply_adc_lora, calibrate_adc_lora |

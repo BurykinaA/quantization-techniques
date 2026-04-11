@@ -2789,7 +2789,8 @@ def main():
     # =========================================================================
     # STEP 2.5 (optional): Diagnostic -- quantized tiling WITHOUT ADC
     # =========================================================================
-    _diag_metrics = None  # bypass PPL (no ADC), set if --run_no_adc_eval
+    _diag_metrics = None      # bypass PPL (no ADC), first dataset — backward-compat
+    _all_diag_metrics = {}    # per-dataset bypass metrics
 
     if args.run_no_adc_eval:
         logger.info("=" * 80)
@@ -2802,21 +2803,24 @@ def main():
 
         model.eval()
 
-        _diag_ds = args.eval_datasets[0]
-        _diag_enc = load_and_tokenize_for_sliding_window(
-            _diag_ds, args.eval_split, tokenizer,
-            max_samples=args.max_eval_samples if _diag_ds == "c4" else None,
-        )
-        _diag_metrics = compute_perplexity_sliding_window(
-            model, _diag_enc, device,
-            max_length=args.max_length, stride=args.stride,
-            desc="NoADC eval",
-        )
-        logger.info(
-            f"WITHOUT ADC -> {_diag_ds.upper()} Perplexity: {_diag_metrics['perplexity']:.4f}  "
-            f"(Loss: {_diag_metrics['avg_loss']:.4f})"
-        )
-        if use_wandb:
+        for _diag_ds in args.eval_datasets:
+            _diag_enc = load_and_tokenize_for_sliding_window(
+                _diag_ds, args.eval_split, tokenizer,
+                max_samples=args.max_eval_samples if _diag_ds == "c4" else None,
+            )
+            _m = compute_perplexity_sliding_window(
+                model, _diag_enc, device,
+                max_length=args.max_length, stride=args.stride,
+                desc=f"NoADC eval {_diag_ds}",
+            )
+            _all_diag_metrics[_diag_ds] = _m
+            logger.info(
+                f"WITHOUT ADC -> {_diag_ds.upper()} Perplexity: {_m['perplexity']:.4f}  "
+                f"(Loss: {_m['avg_loss']:.4f})"
+            )
+        _diag_metrics = _all_diag_metrics.get(args.eval_datasets[0])  # backward-compat
+
+        if use_wandb and _diag_metrics is not None:
             wandb.log({
                 "diagnostic/no_adc_perplexity": _diag_metrics["perplexity"],
                 "diagnostic/no_adc_avg_loss": _diag_metrics["avg_loss"],
@@ -2991,6 +2995,10 @@ def main():
             "results": {
                 "ppl_bypass":            float(_diag_metrics["perplexity"]) if _diag_metrics else None,
                 "ppl_adc":               float(eval_metrics["perplexity"]),
+                **{f"ppl_bypass_{ds}": float(_all_diag_metrics[ds]["perplexity"])
+                   for ds in _all_diag_metrics},
+                **{f"ppl_adc_{ds}": float(all_eval_metrics[ds]["perplexity"])
+                   for ds in all_eval_metrics},
                 "dead_rate_mean":        float(np.mean(_dead_vals)) if _dead_vals else None,
                 "dead_rate_max":         float(np.max(_dead_vals))  if _dead_vals else None,
                 "reconstruction_rel_mean": float(np.mean(_rel_vals)) if _rel_vals else None,
