@@ -387,10 +387,17 @@ y += scaling * lora_B(lora_A(x.float()))  # FP32 residual, added AFTER ADC outpu
 
 | Experiment | targets | loss | rank | wiki bypass | wiki ADC | C4 bypass | C4 ADC | Notes |
 |------------|---------|------|------|-------------|----------|-----------|--------|-------|
-| base_no_lora | none | — | — | *pending* | *pending* | *pending* | *pending* | PTQ control |
-| r4_all_ce_kl | all 7 | CE+KL | 4 | *pending* | *pending* | *pending* | *pending* | v7 best (wiki ADC=14.03) |
-| r4_down_o_ce_kl | down+o | CE+KL | 4 | *pending* | *pending* | *pending* | *pending* | v7 2nd (wiki ADC=14.33) |
-| rank8_down_o | down+o | CE | 8 | *pending* | *pending* | *pending* | *pending* | v7 3rd (wiki ADC=15.24) |
+| base_no_lora | none | — | — | 18.49 | 27.26 | 29.41 | 46.40 | PTQ control |
+| **r4_all_ce_kl** | all 7 | CE+KL | 4 | 18.70 | **13.96** | 29.10 | **23.30** | **best both domains** |
+| r4_down_o_ce_kl | down+o | CE+KL | 4 | 19.05 | **14.27** | 29.37 | **23.88** | |
+| rank8_down_o | down+o | CE | 8 | 18.51 | 15.47 | 30.48 | 29.39 | CE alone: c4 barely improves |
+
+**Analysis:**
+
+- **LoRA correction generalises to C4.** PTQ control: c4 ADC=46.40 → `r4_all_ce_kl`: c4 ADC=23.30 (−50%). The correction learned on wikitext2 calibration data transfers to out-of-domain web text.
+- **CE+KL configs dominate on both domains.** `r4_all_ce_kl` and `r4_down_o_ce_kl` both achieve c4 ADC < 24, while `rank8_down_o` (CE only) gives c4 ADC=29.39 — barely better than PTQ bypass (29.41). KL teacher signal is key for generalisation, not just wikitext2 tuning.
+- **Wikitext2 gap (bypass→ADC) flips negative; C4 gap stays positive.** For CE+KL runs: wiki ADC < wiki bypass (the model "benefits" from ADC in wiki mode); c4 ADC > c4 bypass. The LoRA residual over-corrects for wikitext2 statistics but the C4 improvement (46→23) is still massive.
+- **`r4_all_ce_kl` is the best checkpoint overall** — best on both datasets.
 
 ---
 

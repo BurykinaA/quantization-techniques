@@ -1961,6 +1961,10 @@ def main():
                         help="Append a JSON record with key metrics to this file after each run. "
                              "Creates the file if it does not exist.")
 
+    # Model serialization
+    parser.add_argument("--save_full_model_pt", action="store_true",
+                        help="Save model_full.pt + model_info.json for the chat server (torch.save)")
+
     # Visualization settings
     parser.add_argument("--disable_visualizations", action="store_true",
                         help="Disable ADC visualizations")
@@ -2910,6 +2914,36 @@ def main():
 
     model.save_pretrained(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
+
+    # Save full model object for chat server (torch.save)
+    if getattr(args, 'save_full_model_pt', False):
+        import json as _minfo_json
+        _pt_path = os.path.join(args.output_dir, 'model_full.pt')
+        logger.info(f"Saving full model object to: {_pt_path}")
+        torch.save(model, _pt_path)
+        _minfo = {
+            "model_name":   args.model_name,
+            "mvm_limit":    args.mvm_limit,
+            "ba":           args.ba, "bx": args.bx, "bw": args.bw, "k": args.k,
+            "lora_rank":    getattr(args, 'lora_rank', 0),
+            "lora_targets": list(getattr(args, 'lora_target_modules', None) or []),
+            "lora_mode":    getattr(args, 'lora_mode', None),
+            "lora_loss":    getattr(args, 'lora_loss', None),
+            "display_name": getattr(args, 'wandb_run_name', None) or os.path.basename(args.output_dir),
+            "results": {
+                "ppl_bypass_wikitext2": float(_all_diag_metrics["wikitext2"]["perplexity"])
+                    if "wikitext2" in _all_diag_metrics else None,
+                "ppl_adc_wikitext2":   float(all_eval_metrics["wikitext2"]["perplexity"])
+                    if "wikitext2" in all_eval_metrics else None,
+                "ppl_bypass_c4":       float(_all_diag_metrics["c4"]["perplexity"])
+                    if "c4" in _all_diag_metrics else None,
+                "ppl_adc_c4":          float(all_eval_metrics["c4"]["perplexity"])
+                    if "c4" in all_eval_metrics else None,
+            },
+        }
+        with open(os.path.join(args.output_dir, 'model_info.json'), 'w') as _f:
+            _minfo_json.dump(_minfo, _f, indent=2)
+        logger.info("model_info.json saved.")
 
     # Save calibration info
     with open(os.path.join(args.output_dir, "calibration_info.txt"), "w") as f:
