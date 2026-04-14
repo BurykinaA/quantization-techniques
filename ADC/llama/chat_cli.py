@@ -1,8 +1,12 @@
 """
-ADC Model CLI Chat
+ADC Model CLI Chat — with FP comparison
 
 Usage:
     python ADC/llama/chat_cli.py --checkpoints-dir <path>
+
+Every message shows two responses side by side:
+  [FP]  — original LLaMA in bfloat16 (reference)
+  [ADC] — selected quantized model
 """
 
 import sys
@@ -11,7 +15,7 @@ import argparse
 from pathlib import Path
 
 import torch
-from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -52,36 +56,48 @@ def pick_model(models):
         print(f"Enter a number between 1 and {len(names)}.")
 
 
-def load_model(info):
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Loading {info['pt_path']} onto {device} ...")
+def load_adc_model(info, device):
+    print(f"Loading ADC model from {info['pt_path']} ...")
     model = torch.load(info["pt_path"], map_location="cpu", weights_only=False)
     model = model.to(device)
     model.eval()
     tokenizer = AutoTokenizer.from_pretrained(info["checkpoint_dir"])
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    print("Ready.\n")
-    return model, tokenizer, device
+    return model, tokenizer
 
 
-def generate(model, tokenizer, device, history, user_message):
+def load_fp_model(model_name, device):
+    print(f"Loading FP model {model_name} ...")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name, torch_dtype=torch.bfloat16
+    ).to(device)
+    model.eval()
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    return model, tokenizer
+
+
+def build_prompt(history, user_message):
     parts = []
     for u, a in history:
         parts.append(f"User: {u}")
         parts.append(f"Assistant: {a}")
     parts.append(f"User: {user_message}")
     parts.append("Assistant:")
-    prompt = "\n".join(parts)
+    return "\n".join(parts)
 
+
+def generate(model, tokenizer, device, prompt, max_new_tokens):
     inputs = tokenizer(prompt, return_tensors="pt",
                        truncation=True, max_length=1024).to(device)
     with torch.no_grad():
         out = model.generate(
             **inputs,
-            max_new_tokens=256,
+            max_new_tokens=max_new_tokens,
             do_sample=True,
-            temperature=0.7,
+            temperature=0.0,
             top_p=0.9,
             repetition_penalty=1.1,
             pad_token_id=tokenizer.eos_token_id,
@@ -93,6 +109,7 @@ def generate(model, tokenizer, device, history, user_message):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoints-dir", required=True)
+    parser.add_argument("--max-tokens", type=int, default=100)
     args = parser.parse_args()
 
     models = discover_models(args.checkpoints_dir)
@@ -100,10 +117,15 @@ def main():
         print("No models found.")
         sys.exit(1)
 
-    model_name, info = pick_model(models)
-    model, tokenizer, device = load_model(info)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    print(f"Chatting with: {model_name}")
+    model_name, info = pick_model(models)
+    adc_model, adc_tok = load_adc_model(info, device)
+
+    fp_model_name = info.get("model_name", "meta-llama/Llama-3.2-1B")
+    fp_model, fp_tok = load_fp_model(fp_model_name, device)
+
+    print(f"\nReady. Comparing FP vs {model_name}")
     print("Type 'quit' to exit, 'clear' to reset history.\n")
 
     history = []
@@ -122,9 +144,16 @@ def main():
             print("History cleared.\n")
             continue
 
-        response = generate(model, tokenizer, device, history, user)
-        print(f"Model: {response}\n")
-        history.append((user, response))
+        prompt = build_prompt(history, user)
+
+        fp_response  = generate(fp_model,  fp_tok,  device, prompt, args.max_tokens)
+        adc_response = generate(adc_model, adc_tok, device, prompt, args.max_tokens)
+
+        print(f"\n[FP]  {fp_response}")
+        print(f"[ADC] {adc_response}\n")
+
+        # history tracks ADC responses for prompt continuity
+        history.append((user, adc_response))
         if len(history) > 20:
             history = history[-20:]
 

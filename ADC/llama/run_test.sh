@@ -15,6 +15,7 @@
 # Results: ADC/llama/results/test_YYYYMMDD.json
 
 # python ADC/llama/serve_chat.py --checkpoints-dir /home/coder/project/ADC/llama/checkpoints/test_20260413
+#python ADC/llama/chat_cli.py --checkpoints-dir /home/coder/project/ADC/llama/checkpoints/test_20260413
 
 set -u
 
