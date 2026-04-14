@@ -385,6 +385,25 @@ y += scaling * lora_B(lora_A(x.float()))  # FP32 residual, added AFTER ADC outpu
 
 **Motivation:** v7 validated LoRA configs on wikitext2. v8 re-runs the top-3 with both wikitext2 and C4 evaluation to check whether LoRA correction generalises to out-of-domain web text.
 
+---
+
+#### Branch `test` — mvm_limit=256 vs 1024, with/without best LoRA
+
+**Motivation:** Compare tile size effect (mvm_limit=256 → delta≈515 vs mvm_limit=1024 → delta≈2060) with and without `r4_all_ce_kl` LoRA.
+
+| Experiment | mvm_limit | delta | LoRA | wiki bypass | wiki ADC | C4 bypass | C4 ADC | Notes |
+|------------|-----------|-------|------|-------------|----------|-----------|--------|-------|
+| mvm256_no_lora | 256 | ≈515 | none | 17.61 | 27.00 | 28.12 | 45.38 | PTQ control |
+| **mvm256_r4_all_ce_kl** | 256 | ≈515 | r4, all 7, CE+KL | 18.55 | **14.03** | 28.85 | **23.41** | LoRA recovers ADC gap |
+| mvm1024_no_lora | 1024 | ≈2060 | none | 23.66 | 37.03 | 37.76 | 56.94 | coarser ADC → much worse |
+| mvm1024_r4_all_ce_kl | 1024 | ≈2060 | r4, all 7, CE+KL | — | — | — | — | failed |
+
+**Analysis:**
+
+- **mvm_limit=1024 is significantly worse without LoRA** (wiki ADC 37.03 vs 26.98 for mvm=256). Larger tiles → delta 4× larger → coarser floor quantization → more ADC rounding error. Bypass also degrades (23.66 vs 17.61) because FlatQuant transforms must handle wider tiles.
+- **mvm_limit=256 + r4_all_ce_kl matches v8 best** (wiki ADC=14.03, C4 ADC=23.41) — consistent result across runs.
+- **mvm1024 + LoRA failed** — likely OOM from larger tile matrices in LoRA adapters; needs investigation.
+
 | Experiment | targets | loss | rank | wiki bypass | wiki ADC | C4 bypass | C4 ADC | Notes |
 |------------|---------|------|------|-------------|----------|-----------|--------|-------|
 | base_no_lora | none | — | — | 18.49 | 27.26 | 29.41 | 46.40 | PTQ control |

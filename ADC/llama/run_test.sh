@@ -14,6 +14,8 @@
 # Usage: bash ADC/llama/run_test.sh
 # Results: ADC/llama/results/test_YYYYMMDD.json
 
+# python ADC/llama/serve_chat.py --checkpoints-dir /home/coder/project/ADC/llama/checkpoints/test_20260413
+
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,6 +24,10 @@ DATE_TAG="$(date +%Y%m%d)"
 RESULTS_JSON="$RESULTS_DIR/test_${DATE_TAG}.json"
 LOG_DIR="$RESULTS_DIR/logs_test_${DATE_TAG}"
 mkdir -p "$RESULTS_DIR" "$LOG_DIR"
+
+# Use cached datasets — server has no internet access
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 
 echo "============================================================"
 echo "INT4 Test: mvm256 vs mvm1024, with/without r4_all_ce_kl LoRA"

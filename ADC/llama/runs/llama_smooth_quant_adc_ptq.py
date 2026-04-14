@@ -237,15 +237,20 @@ def load_and_tokenize_for_sliding_window(
     elif dataset_name == "c4":
         # c4 has only 'train' and 'validation' — map 'test' to 'validation'
         c4_split = "validation" if split == "test" else split
-        raw = load_dataset("allenai/c4", "en", split=c4_split, streaming=True)
-        texts = []
-        for i, example in enumerate(raw):
-            if max_samples and i >= max_samples:
-                break
-            if example["text"].strip():
-                texts.append(example["text"])
-        text = "\n\n".join(texts)
-        logger.info(f"Loaded {len(texts)} samples from C4")
+        try:
+            raw = load_dataset("allenai/c4", "en", split=c4_split, streaming=True)
+            texts = []
+            for i, example in enumerate(raw):
+                if max_samples and i >= max_samples:
+                    break
+                if example["text"].strip():
+                    texts.append(example["text"])
+            text = "\n\n".join(texts)
+            logger.info(f"Loaded {len(texts)} samples from C4")
+        except Exception as e:
+            logger.warning(f"Could not load C4 (network unavailable?): {e}")
+            logger.warning("Skipping C4 evaluation — returning empty encodings.")
+            return None
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
 
@@ -2815,6 +2820,9 @@ def main():
                 _diag_ds, args.eval_split, tokenizer,
                 max_samples=args.max_eval_samples if _diag_ds == "c4" else None,
             )
+            if _diag_enc is None:
+                logger.warning(f"Skipping bypass eval for {_diag_ds} (dataset unavailable).")
+                continue
             _m = compute_perplexity_sliding_window(
                 model, _diag_enc, device,
                 max_length=args.max_length, stride=args.stride,
@@ -2863,6 +2871,10 @@ def main():
             tokenizer,
             max_samples=args.max_eval_samples if eval_dataset_name == "c4" else None
         )
+
+        if encodings is None:
+            logger.warning(f"Skipping eval for {eval_dataset_name} (dataset unavailable).")
+            continue
 
         metrics = compute_perplexity_sliding_window(
             model, encodings, device,
