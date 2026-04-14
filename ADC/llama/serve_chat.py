@@ -102,8 +102,7 @@ def chat(message, history, model_name):
 # ─── UI ──────────────────────────────────────────────────────────────────────
 
 def build_ui(model_names):
-    with gr.Blocks(theme=gr.themes.Default(), title="ADC LLaMA Chat",
-                   css=".gradio-container { max-width: 860px; margin: auto; }") as demo:
+    with gr.Blocks(title="ADC LLaMA Chat") as demo:
 
         gr.Markdown("# ADC Quantized LLaMA Chat")
 
@@ -113,12 +112,10 @@ def build_ui(model_names):
             label="Model",
         )
 
-        chatbot = gr.ChatInterface(
+        gr.ChatInterface(
             fn=chat,
             additional_inputs=[model_dd],
             chatbot=gr.Chatbot(height=480),
-            retry_btn=None,
-            undo_btn=None,
         )
 
     return demo
@@ -138,5 +135,6 @@ if __name__ == "__main__":
         sys.exit(1)
 
     build_ui(list(_registry.keys())).launch(
-        server_port=args.port, share=args.share
+        server_port=args.port, share=args.share,
+        theme=gr.themes.Default(),
     )
