@@ -1,0 +1,47 @@
+% ─── Slide: Contributions ─────────────────────────────────────────────────────
+\begin{frame}{Summary of Contributions}
+  \begin{columns}[T]
+    \begin{column}{0.54\textwidth}
+      \begin{enumerate}
+        \setlength\itemsep{0.55em}
+        \item \textbf{Dead-zone diagnosis.}\\
+              Showed that the 81\% dead-rate collapse was a
+              \emph{transform-quality problem}, not a hardware limit.
+              Directed all subsequent effort toward transform training, not ADC.
+
+        \item \textbf{ADC-aware INT8 PTQ.}\\
+              Propagated calibration reduces ADC PPL by $47\%$ (28.86 $\to$ 14.41),
+              approaching FP baseline (10.5).
+
+        \item \textbf{Structured INT4 PTQ.}\\
+              $\alpha$-mixed dual-forward loss + bounded diagonal scaling closes
+              the INT4 gap from $\times$153 to $\times$1.4 vs.\ bypass.
+
+        \item \textbf{Mechanistic MLP/Attn insight.}\\
+              MLP-\texttt{down\_trans} drives bypass quality;
+              attn diag closes the ADC gap.
+              Staged training combines both effects.
+
+        \item \textbf{Post-ADC residual LoRA.}\\
+              Tiny adapter (r=4, all 7 projections, CE+KL) breaks the PTQ plateau:
+              INT4 ADC $13.96$ $<$ INT8 PTQ best $14.41$.
+              Generalises to C4 ($-50\%$).
+      \end{enumerate}
+    \end{column}
+    \begin{column}{0.42\textwidth}
+      % fig_contributions_summary.pdf
+      \iffalse
+        \includegraphics[width=\linewidth]{figs/fig_contributions_summary.pdf}
+      \else
+        \figplaceholder[0.75\textheight]{Flow diagram:
+          ``Dead zone (81\%)'' $\xrightarrow{\text{better FlatQuant}}$ ``Dead zone (10\%)''
+          $\xrightarrow{\text{propagated PTQ}}$ ``INT8: 14.41''
+          $\xrightarrow{\text{diag + }\alpha}$ ``INT4 PTQ: 27.56''
+          $\xrightarrow{\text{plateau}}$ ``barrier''
+          $\xrightarrow{\text{post-ADC LoRA}}$ ``INT4: 13.96''
+          $\xrightarrow{\text{KL + C4}}$ ``Generalisation: 23.30''.
+          Connect each arrow with a short label of the contribution.}
+      \fi
+    \end{column}
+  \end{columns}
+\end{frame}

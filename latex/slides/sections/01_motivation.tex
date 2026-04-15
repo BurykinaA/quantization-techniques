@@ -1,0 +1,29 @@
+% ─── Slide: Motivation ────────────────────────────────────────────────────────
+\begin{frame}{Why Analog Inference? Why This Is Hard.}
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \textbf{The opportunity: analog MVM}
+      \begin{itemize}
+        \item LLM inference is memory- and compute-bound
+        \item Analog \emph{multiply-accumulate} is $10\text{--}100\times$ more energy-efficient vs. digital
+        \item Real benefit only if output precision is sufficient
+      \end{itemize}
+      \vspace{0.8em}
+      \textbf{The bottleneck: ADC}
+      \begin{itemize}
+        \item After each tile MVM, an ADC digitises the analog accumulator
+        \item ADC resolution is \emph{coarse}: $\delta \approx 2016$ (INT8 tile)
+        \item Poor activation distributions $\Rightarrow$ most outputs fall in the \alert{dead zone} ($|y_\mathrm{int}| < \delta$)
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      % fig_digital_vs_analog_path.pdf
+      \iffalse % replace with \iftrue once figure is ready
+        \includegraphics[width=\linewidth]{figs/fig_digital_vs_analog_path.pdf}
+      \else
+        \figplaceholder[0.55\textheight]{Digital path (left) vs Analog MVM + ADC path (right).
+          Highlight: ADC is the bottleneck.}
+      \fi
+    \end{column}
+  \end{columns}
+\end{frame}

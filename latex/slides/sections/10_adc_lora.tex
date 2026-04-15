@@ -1,0 +1,48 @@
+% ─── Slide: ADC-LoRA — main idea ─────────────────────────────────────────────
+\begin{frame}{Post-ADC Residual LoRA: Breaking the Plateau}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      \textbf{Architecture:}
+      \[
+        y = \underbrace{\text{frozen ADC}(x)}_{\text{PTQ path}} +\;
+            \frac{\alpha}{r}\, B\bigl(A(x_{\mathbb{R}})\bigr)
+      \]
+      \begin{itemize}
+        \item Correction applied \textbf{after} ADC output
+        \item Base model frozen in fp16; LoRA adapters in fp32
+        \item Gradients never touch \texttt{round\_ste} / ADC clamp $\Rightarrow$ stable
+        \item Trained with LM cross-entropy (+ optional KL teacher), 5 epochs
+      \end{itemize}
+
+      \vspace{0.5em}
+      \begin{alertblock}{\textcolor{myred}{\textbf{Pre-ADC LoRA failed}}}
+        \texttt{pre\_adc\_r4\_down\_o}: bypass=123, ADC=105 — catastrophic divergence.\\
+        Gradients through $\texttt{round\_ste}(\mathbf{W}{+}\Delta\mathbf{W})$ are too noisy
+        from step 0.
+      \end{alertblock}
+
+      \vspace{0.5em}
+      \textbf{Best result} (\texttt{r4\_all\_ce\_kl}):
+      \begin{center}
+        \begin{tabular}{lc}
+          \toprule
+          PTQ base & $\adcppl = 27.60$ \\
+          + LoRA (all 7, r=4, CE+KL) & \best{$\adcppl = 13.96$} \\
+          \bottomrule
+        \end{tabular}
+      \end{center}
+    \end{column}
+    \begin{column}{0.46\textwidth}
+      % fig_adc_lora_post_vs_pre.pdf
+      \iffalse
+        \includegraphics[width=\linewidth]{figs/fig_adc_lora_post_vs_pre.pdf}
+      \else
+        \figplaceholder[0.72\textheight]{Diagram with two branches from x:
+          Top (frozen): $x \to$ quantize $\to$ tile MVM $\to$ ADC floor $\to y_\mathrm{base}$
+          Bottom (LoRA): $x \to A \to B \to$ (scaled) $\to$ residual.
+          Then $y = y_\mathrm{base} + \mathrm{residual}$.
+          Red box off to the side: ``Pre-ADC LoRA: gradients through round\_ste = FAILED''.}
+      \fi
+    \end{column}
+  \end{columns}
+\end{frame}

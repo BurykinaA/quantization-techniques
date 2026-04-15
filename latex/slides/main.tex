@@ -1,0 +1,103 @@
+\documentclass[10pt, aspectratio=169]{beamer}
+
+% ─── Theme ────────────────────────────────────────────────────────────────────
+\usetheme[progressbar=frametitle, block=fill]{metropolis}
+\usepackage{appendixnumberbeamer}
+
+% ─── Packages ─────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{pgfplotstable}
+\usepackage{xcolor}
+\usepackage{amsmath, amssymb}
+\usepackage{mathtools}
+\usepackage{graphicx}
+\usepackage{colortbl}
+\usepackage{multirow}
+
+\usetikzlibrary{arrows.meta, positioning, fit, backgrounds, shapes.geometric, calc}
+
+% ─── Colors ───────────────────────────────────────────────────────────────────
+\definecolor{myblue}{HTML}{2E86AB}
+\definecolor{myorange}{HTML}{E07A5F}
+\definecolor{mygreen}{HTML}{3D9970}
+\definecolor{mygray}{HTML}{AAAAAA}
+\definecolor{myyellow}{HTML}{F2CC8F}
+\definecolor{myred}{HTML}{C0392B}
+\definecolor{mybluedark}{HTML}{1A5276}
+
+\setbeamercolor{progress bar}{fg=myorange}
+\setbeamercolor{frametitle}{bg=mybluedark}
+\setbeamercolor{alerted text}{fg=myorange}
+
+% ─── Placeholder macros ───────────────────────────────────────────────────────
+\newcommand{\figplaceholder}[2][0.50\textheight]{%
+  \begin{center}
+    \fbox{%
+      \parbox[c][#1][c]{0.90\linewidth}{%
+        \centering
+        \textcolor{myorange}{\large\textbf{TODO figure}}\\[0.4em]
+        \small #2
+      }%
+    }
+  \end{center}%
+}
+
+\newcommand{\tableplaceholder}[2][0.30\textheight]{%
+  \begin{center}
+    \fbox{%
+      \parbox[c][#1][c]{0.90\linewidth}{%
+        \centering
+        \textcolor{myblue}{\large\textbf{TODO table}}\\[0.4em]
+        \small #2
+      }%
+    }
+  \end{center}%
+}
+
+% ─── Convenience macros ───────────────────────────────────────────────────────
+\newcommand{\ppl}[1]{\ensuremath{\mathrm{PPL}_{#1}}}
+\newcommand{\bypass}{\ppl{\mathrm{bypass}}}
+\newcommand{\adcppl}{\ppl{\mathrm{ADC}}}
+\newcommand{\fp}{\texttt{FP}}
+\newcommand{\inteight}{\texttt{INT8}}
+\newcommand{\intfour}{\texttt{INT4}}
+\newcommand{\better}[1]{\textcolor{mygreen}{\textbf{#1}}}
+\newcommand{\worse}[1]{\textcolor{myred}{\textbf{#1}}}
+\newcommand{\best}[1]{\cellcolor{mygreen!25}\textbf{#1}}
+
+% ─── Metadata ─────────────────────────────────────────────────────────────────
+\title{ADC-aware PTQ and Post-ADC\\Low-Rank Correction for Llama}
+\subtitle{From Dead-Zone Diagnosis to INT4~$\approx$~INT8 PTQ Quality}
+\author{Alina Burykina}
+\institute{TODO: University / Lab}
+\date{April 2026}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{document}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\maketitle
+
+\input{sections/01_motivation}
+\input{sections/02_problem_setup}
+\input{sections/03_flatquant_intuition}
+\input{sections/04_dead_zone}
+\input{sections/05_int8}
+\input{sections/06_int4_ptq_progression}
+\input{sections/07_int4_insights}
+\input{sections/08_loss_landscape}
+\input{sections/09_ptq_plateau}
+\input{sections/10_adc_lora}
+\input{sections/11_lora_ablations}
+\input{sections/12_final_results}
+\input{sections/13_contributions}
+
+% ─── Appendix ─────────────────────────────────────────────────────────────────
+\appendix
+\input{sections/A_backup}
+
+\end{document}

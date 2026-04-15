@@ -1,0 +1,156 @@
+% ─── Appendix / Backup slides ─────────────────────────────────────────────────
+
+\begin{frame}{Backup: Complete INT8 Results (v2)}
+  \begin{center}
+  \small
+  \begin{tabular}{llcccc}
+    \toprule
+    Experiment & Description & $\bypass$ & $\adcppl$ & dead\_rate \\
+    \midrule
+    baseline       & FlatQuant w8a8               & 10.01 & 28.86 & 10.3\% \\
+    center mid     & bin-centre $\lambda=0.1$      & 10.01 & 28.86 & 10.3\% \\
+    prop           & propagated calibration        & 11.01 & \better{14.55} & 10.3\% \\
+    prop+center    & propagated + bin-centre       & 11.00 & \best{14.41} & 10.3\% \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
+% ──────────────────────────────────────────────────────────────────────────────
+
+\begin{frame}{Backup: Complete INT4 v2 Alpha-Sweep}
+  \begin{center}
+  \small
+  \begin{tabular}{llccc}
+    \toprule
+    Experiment & $\alpha$ & $\bypass$ & $\adcppl$ & gap \\
+    \midrule
+    baseline\_1024        & 0.0 & 19.80 & 56.83 & $\times$2.87 \\
+    prop\_full\_1024      & 1.0 & 30.32 & 40.20 & $\times$1.32 \\
+    propalpha\_075\_1024  & 0.75 & 27.46 & 35.92 & $\times$1.31 \\
+    propalpha\_05\_1024   & 0.5 & 24.24 & \better{31.22} & \best{$\times$1.29} \\
+    propalpha\_025\_1024  & 0.25 & 21.65 & 32.35 & $\times$1.49 \\
+    add\_diag + $\alpha$=0.5 & 0.5 & 20.23 & \best{27.56} & $\times$1.36 \\
+    staged\_mlp\_attn    & 0.5 & \best{18.50} & \best{27.60} & $\times$1.49 \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
+% ──────────────────────────────────────────────────────────────────────────────
+
+\begin{frame}{Backup: Complete v7 LoRA Ablation}
+  \begin{center}
+  \small
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabular}{llcccc}
+    \toprule
+    Experiment & Targets & Loss & Rank & $\bypass$ & $\adcppl$ \\
+    \midrule
+    base (no LoRA)         & —       & —     & — & 17.89 & 27.55 \\
+    \midrule
+    r1\_down\_o            & down+o  & CE    & 1 & —     & 15.90 \\
+    r2\_down\_o            & down+o  & CE    & 2 & —     & 15.60 \\
+    r4\_down\_o            & down+o  & CE    & 4 & 18.68 & 15.57 \\
+    r8\_down\_o            & down+o  & CE    & 8 & —     & 15.24 \\
+    r4\_down\_o\_ce\_kl    & down+o  & CE+KL & 4 & 19.54 & \better{14.33} \\
+    \midrule
+    r4\_down\_o\_first8    & down+o  & CE    & 4 & 18.42 & 16.64 \\
+    r4\_down\_o\_last8     & down+o  & CE    & 4 & 18.62 & 20.08 \\
+    \midrule
+    pre\_adc\_r4\_down\_o  & down+o  & CE    & 4 & 123.34 & \worse{105.63} \\
+    \midrule
+    r4\_all\_ce            & all 7   & CE    & 4 & 17.62 & 16.68 \\
+    r4\_all\_ce\_kl        & all 7   & CE+KL & 4 & 19.13 & \best{14.03} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
+% ──────────────────────────────────────────────────────────────────────────────
+
+\begin{frame}{Backup: v8 Generalisation to C4}
+  \begin{center}
+  \small
+  \begin{tabular}{llcccc}
+    \toprule
+    Experiment & Targets & Wiki bypass & Wiki ADC & C4 bypass & C4 ADC \\
+    \midrule
+    base (no LoRA)       & —      & 18.49 & 27.26 & 29.41 & 46.40 \\
+    rank8\_down\_o (CE)  & down+o & 18.51 & 15.47 & 30.48 & 29.39 \\
+    r4\_down\_o\_ce\_kl  & down+o & 19.05 & \better{14.27} & 29.37 & \better{23.88} \\
+    \textbf{r4\_all\_ce\_kl} & all 7 & 18.70 & \best{13.96} & 29.10 & \best{23.30} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+\end{frame}
+
+% ──────────────────────────────────────────────────────────────────────────────
+
+\begin{frame}{Backup: Stochastic Propagation (v5)}
+  \begin{center}
+  \small
+  \begin{tabular}{llccc}
+    \toprule
+    Experiment & Mode & $\bypass$ & $\adcppl$ & gap \\
+    \midrule
+    stoch\_bern (flat)    & Bernoulli & 19.25 & 35.38 & $\times$1.84 \\
+    stoch\_beta2 (flat)   & Beta(2,2) & 22.90 & 31.40 & $\times$1.37 \\
+    staged + Bernoulli    & Bernoulli & \best{16.94} & 32.44 & $\times$1.92 \\
+    staged + Beta(2,2)    & Beta(2,2) & 17.16 & \better{27.82} & $\times$1.62 \\
+    deterministic $\alpha$=0.5 & — & 24.24 & 31.22 & $\times$1.29 \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace{0.5em}
+  Bernoulli gives best bypass but worst ADC gap (hard 0/1 switching provides
+  no ADC signal on FP batches). Beta(2,2) $\approx$ deterministic $\alpha$=0.5 in expectation.
+\end{frame}
+
+% ──────────────────────────────────────────────────────────────────────────────
+
+\begin{frame}{Backup: Hardware Config \& Delta Formula}
+  \begin{columns}[T]
+    \begin{column}{0.45\textwidth}
+      \begin{center}
+      \small
+      \begin{tabular}{ll}
+        \toprule
+        Parameter & Value \\
+        \midrule
+        $b_w$ (weight bits)   & 4 / 8 \\
+        $b_x$ (act.\ bits)    & 4 / 8 \\
+        $b_a$ (ADC bits)      & 8 \\
+        \texttt{mvm\_limit}   & 256 / 1024 \\
+        $k$ (ADC parallelism) & 16 \\
+        $\delta$ (mvm=256, INT8) & $\approx 2016$ \\
+        $\delta$ (mvm=256, INT4) & $\approx 515$ \\
+        $\delta$ (mvm=1024, INT8) & $\approx 2060$ \\
+        \midrule
+        FlatQuant epochs      & 30 \\
+        FlatQuant LR          & 0.005 \\
+        Cal.\ samples (INT4)  & 1024 \\
+        Cal.\ samples (INT8)  & 128 \\
+        \bottomrule
+      \end{tabular}
+      \end{center}
+    \end{column}
+    \begin{column}{0.50\textwidth}
+      \textbf{Delta formula:}
+      \[
+        \delta = \frac{2 \cdot \texttt{tile\_in} \cdot 127^2}{2^{b_a} \cdot k}
+      \]
+      \[
+        = \frac{2 \cdot 256 \cdot 127^2}{256 \cdot 16} \approx 2016 \quad (\text{INT8})
+      \]
+
+      \vspace{0.5em}
+      \textbf{Number of ADC bins} in $\pm \sigma_z$:
+      \[
+        N_\text{bins} \approx \frac{2\sigma_z}{\delta / z_\text{range}}
+                      \approx 15\text{--}30
+      \]
+      Very coarse — explains why PTQ alone plateaus.
+    \end{column}
+  \end{columns}
+\end{frame}

@@ -1,0 +1,61 @@
+% ─── Slide: Hardware model / Problem setup ────────────────────────────────────
+\begin{frame}{Hardware Model \& Metrics}
+  \begin{columns}[T]
+    \begin{column}{0.52\textwidth}
+
+      \textbf{One tile of analog MVM}
+      \begin{center}
+      \begin{tikzpicture}[
+          every node/.style={font=\small},
+          box/.style={draw, rounded corners=2pt, minimum width=1.6cm, minimum height=0.55cm, align=center},
+          arr/.style={-{Latex[length=2mm]}, thick}
+        ]
+        \node[box, fill=myblue!20]  (q)   {Quantize\\$x \to \hat{x}$};
+        \node[box, fill=mygray!20, right=0.5cm of q]  (mvm) {Integer\\MVM};
+        \node[box, fill=myorange!20, right=0.5cm of mvm] (adc) {ADC\\$\lfloor y / \delta \rfloor$};
+        \node[box, fill=mygreen!20, right=0.5cm of adc] (dq)  {Dequant};
+        \draw[arr] (q) -- (mvm);
+        \draw[arr] (mvm) -- (adc);
+        \draw[arr] (adc) -- (dq);
+        \node[above=0.15cm of q, font=\footnotesize] {$x$};
+        \node[above=0.15cm of mvm, font=\footnotesize] {$y_\mathrm{int}$};
+        \node[above=0.15cm of adc, font=\footnotesize] {$z = y_\mathrm{int}/\delta$};
+      \end{tikzpicture}
+      \end{center}
+
+      \vspace{0.5em}
+      \textbf{Dead zone:} $|y_\mathrm{int}| < \delta \Rightarrow z = 0$ (ADC outputs nothing)\\[0.3em]
+      $\delta = \dfrac{2 \cdot \text{tile\_in} \cdot 127^2}{2^{b_a} \cdot k}
+               = \dfrac{2 \cdot 256 \cdot 127^2}{256 \cdot 16} \approx 2016$
+
+      \vspace{0.5em}
+      \textbf{Key metrics}
+      \begin{itemize}
+        \item $\bypass$ — PPL with ADC disabled (transform quality proxy)
+        \item $\adcppl$ — PPL with full ADC pipeline (what matters)
+        \item \texttt{dead\_rate} — fraction of channels with $z=0$
+      \end{itemize}
+
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      \vspace{0.3em}
+      \begin{center}
+      \begin{tabular}{ll}
+        \toprule
+        \textbf{Parameter} & \textbf{Value} \\
+        \midrule
+        Model & Llama-3.2-1B \\
+        $b_w, b_x$ & 4 or 8 bits \\
+        $b_a$ (ADC) & 8 bits \\
+        Tile size & 256 \\
+        $k$ (parallelism) & 16 \\
+        $\delta$ (INT4) & $\approx 515$ \\
+        $\delta$ (INT8) & $\approx 2016$ \\
+        FP baseline PPL & $\approx 10.5$ \\
+        Cal.\ samples & 128–1024 \\
+        \bottomrule
+      \end{tabular}
+      \end{center}
+    \end{column}
+  \end{columns}
+\end{frame}

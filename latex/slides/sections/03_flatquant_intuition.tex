@@ -1,0 +1,39 @@
+% ─── Slide: FlatQuant intuition ───────────────────────────────────────────────
+\begin{frame}{Why FlatQuant Transforms Matter for ADC}
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \textbf{Without transform: sparse codes}
+      \begin{itemize}
+        \item Per-token scale $s = \max(|x_\mathrm{tile}|) / 127$
+        \item One large feature gets code $\approx\!127$, rest get codes $\approx\!1\text{--}10$
+        \item Dot product: $y_\mathrm{int} \approx 1 \cdot w_\mathrm{max} \approx$ small $\Rightarrow$ \alert{dead zone}
+      \end{itemize}
+
+      \vspace{0.7em}
+      \textbf{With FlatQuant transform}
+      \begin{itemize}
+        \item Kronecker-decomposed orthogonal $T$ learned per layer
+        \item After rotation: all features have similar magnitude
+        \item Codes $\approx 50\text{--}100$ for all channels
+        \item $y_\mathrm{int} \approx 64 \cdot \sum w_i \gg \delta$ $\Rightarrow$ no dead zone
+      \end{itemize}
+
+      \vspace{0.7em}
+      \begin{alertblock}{Key proxy}
+        $\bypass$ = quality of the transforms.\\
+        Lower $\bypass$ $\Rightarrow$ more uniform codes $\Rightarrow$ less dead zone.
+      \end{alertblock}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      % fig_flatquant_intuition.pdf
+      \iffalse % replace with \iftrue once figure is ready
+        \includegraphics[width=\linewidth]{figs/fig_flatquant_intuition.pdf}
+      \else
+        \figplaceholder[0.62\textheight]{Left: activation histogram before transform
+          (one dominant spike at 127, rest near 0).
+          Right: after transform (flat, codes 40--100).
+          Below: resulting y\_int distribution crossing delta threshold.}
+      \fi
+    \end{column}
+  \end{columns}
+\end{frame}
