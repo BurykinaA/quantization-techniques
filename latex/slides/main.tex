@@ -58,6 +58,13 @@
   \end{center}%
 }
 
+% ─── Global layout tuning ────────────────────────────────────────────────────
+% Reduce base font to \small (9pt) and tighten list spacing
+\setbeamerfont{normal text}{size=\small}
+\AtBeginDocument{\usebeamerfont{normal text}}
+\setlength{\leftmargini}{1.2em}
+\setlength{\leftmarginii}{1.0em}
+
 % ─── Convenience macros ───────────────────────────────────────────────────────
 \newcommand{\ppl}[1]{\ensuremath{\mathrm{PPL}_{#1}}}
 \newcommand{\bypass}{\ppl{\mathrm{bypass}}}
@@ -73,15 +80,19 @@
 \title{ADC-aware PTQ and Post-ADC\\Low-Rank Correction for Llama}
 \subtitle{From Dead-Zone Diagnosis to INT4~$\approx$~INT8 PTQ Quality}
 \author{Alina Burykina}
-\institute{TODO: University / Lab}
+\institute{Constructor University}
 \date{April 2026}
 
 % ══════════════════════════════════════════════════════════════════════════════
 \begin{document}
 % ══════════════════════════════════════════════════════════════════════════════
 
-\maketitle
+\begin{frame}[plain, noframenumbering, shrink=10]
+  \titlepage
+\end{frame}
 
+\input{sections/problem}
+\input{sections/research_questions}
 \input{sections/01_motivation}
 \input{sections/02_problem_setup}
 \input{sections/03_flatquant_intuition}
@@ -89,7 +100,6 @@
 \input{sections/05_int8}
 \input{sections/06_int4_ptq_progression}
 \input{sections/07_int4_insights}
-\input{sections/08_loss_landscape}
 \input{sections/09_ptq_plateau}
 \input{sections/10_adc_lora}
 \input{sections/11_lora_ablations}
@@ -99,5 +109,9 @@
 % ─── Appendix ─────────────────────────────────────────────────────────────────
 \appendix
 \input{sections/A_backup}
+\input{sections/08_loss_landscape}
+\input{sections/related_work}
+\input{sections/lora_overhead}
+\input{sections/thankyou}
 
 \end{document}

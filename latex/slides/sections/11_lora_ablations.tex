@@ -1,32 +1,31 @@
 % ─── Slide: LoRA ablations ────────────────────────────────────────────────────
-\begin{frame}{ADC-LoRA Ablations: Four Key Findings}
+\begin{frame}[shrink=20]{ADC-LoRA Ablations: Key Findings}
   \begin{columns}[T]
     \begin{column}{0.50\textwidth}
       \textbf{1. CE+KL consistently beats CE}
       \begin{itemize}
-        \item \texttt{down+o, r4}: CE $\to$ 15.57; CE+KL $\to$ \better{14.33} ($-1.2$)
-        \item \texttt{all 7, r4}: CE $\to$ 16.68; CE+KL $\to$ \better{14.03} ($-2.7$)
-        \item FP teacher gives information CE alone cannot
+        \item \texttt{down+o, r4}: CE $\to$ 15.57; CE+KL $\to$ \better{14.33}
+        \item \texttt{all 7, r4}: CE $\to$ 16.68; CE+KL $\to$ \better{14.03}
+        \item FP teacher provides signal CE alone cannot
       \end{itemize}
-      \vspace{0.5em}
-      \textbf{2. Rank saturates early}
+      \vspace{0.2em}
+      \textbf{2. Early layers carry more ADC error}
       \begin{itemize}
-        \item r=1: 15.90 \quad r=2: 15.60 \quad r=4: 15.57 \quad r=8: 15.24
-        \item Most capacity captured at r=1; higher ranks: diminishing returns
+        \item \texttt{first8}: 16.64 \quad \texttt{last8}: 20.08
+        \item Early layers accumulate and \emph{propagate} errors downstream
+        \item All 16 layers (r=4, CE+KL): \best{13.96} — best result
       \end{itemize}
-      \vspace{0.5em}
-      \textbf{3. First 8 layers beat last 8}
+      \vspace{0.2em}
+      \textbf{3. Post-ADC is the only stable placement}
       \begin{itemize}
-        \item \texttt{first8}: 16.64 \qquad \texttt{last8}: 20.08
-        \item Early layers accumulate and \emph{propagate} ADC errors downstream
+        \item Pre-ADC LoRA: bypass=123, ADC=105 — catastrophic failure
+        \item Gradients through $\texttt{round\_ste}$ are too noisy from step 0
+        \item Post-ADC: stable from epoch 1
       \end{itemize}
-      \vspace{0.5em}
-      \textbf{4. Seeds stable} ($\sigma \approx 0.07$ across seeds 1/2/3)\\
-      End-to-end pipeline (PTQ + LoRA) is reproducible.
     \end{column}
     \begin{column}{0.46\textwidth}
       % 4 mini panels
-      \iffalse
+      \iftrue
         \includegraphics[width=\linewidth]{figs/plot_lora_ablations_grid.pdf}
       \else
         \figplaceholder[0.82\textheight]{2$\times$2 grid of small bar charts.

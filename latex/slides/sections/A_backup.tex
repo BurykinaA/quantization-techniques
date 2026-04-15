@@ -1,6 +1,6 @@
 % ─── Appendix / Backup slides ─────────────────────────────────────────────────
 
-\begin{frame}{Backup: Complete INT8 Results (v2)}
+\begin{frame}[shrink=20]{Backup: Complete INT8 Results (v2)}
   \begin{center}
   \small
   \begin{tabular}{llcccc}
@@ -18,7 +18,7 @@
 
 % ──────────────────────────────────────────────────────────────────────────────
 
-\begin{frame}{Backup: Complete INT4 v2 Alpha-Sweep}
+\begin{frame}[shrink=20]{Backup: Complete INT4 v2 Alpha-Sweep}
   \begin{center}
   \small
   \begin{tabular}{llccc}
@@ -39,7 +39,7 @@
 
 % ──────────────────────────────────────────────────────────────────────────────
 
-\begin{frame}{Backup: Complete v7 LoRA Ablation}
+\begin{frame}[shrink=20]{Backup: Complete v7 LoRA Ablation}
   \begin{center}
   \small
   \renewcommand{\arraystretch}{1.15}
@@ -69,7 +69,7 @@
 
 % ──────────────────────────────────────────────────────────────────────────────
 
-\begin{frame}{Backup: v8 Generalisation to C4}
+\begin{frame}[shrink=20]{Backup: v8 Generalisation to C4}
   \begin{center}
   \small
   \begin{tabular}{llcccc}
@@ -87,7 +87,7 @@
 
 % ──────────────────────────────────────────────────────────────────────────────
 
-\begin{frame}{Backup: Stochastic Propagation (v5)}
+\begin{frame}[shrink=20]{Backup: Stochastic Propagation (v5)}
   \begin{center}
   \small
   \begin{tabular}{llccc}
@@ -102,14 +102,14 @@
     \bottomrule
   \end{tabular}
   \end{center}
-  \vspace{0.5em}
+  \vspace{0.15em}
   Bernoulli gives best bypass but worst ADC gap (hard 0/1 switching provides
   no ADC signal on FP batches). Beta(2,2) $\approx$ deterministic $\alpha$=0.5 in expectation.
 \end{frame}
 
 % ──────────────────────────────────────────────────────────────────────────────
 
-\begin{frame}{Backup: Hardware Config \& Delta Formula}
+\begin{frame}[shrink=20]{Backup: Hardware Config \& Delta Formula}
   \begin{columns}[T]
     \begin{column}{0.45\textwidth}
       \begin{center}
@@ -124,8 +124,8 @@
         \texttt{mvm\_limit}   & 256 / 1024 \\
         $k$ (ADC parallelism) & 16 \\
         $\delta$ (mvm=256, INT8) & $\approx 2016$ \\
-        $\delta$ (mvm=256, INT4) & $\approx 515$ \\
-        $\delta$ (mvm=1024, INT8) & $\approx 2060$ \\
+        $\delta$ (mvm=256, INT4) & $\approx 6.12$ \\
+        $\delta$ (mvm=1024, INT8) & $\approx 8064$ \\
         \midrule
         FlatQuant epochs      & 30 \\
         FlatQuant LR          & 0.005 \\
@@ -136,21 +136,22 @@
       \end{center}
     \end{column}
     \begin{column}{0.50\textwidth}
-      \textbf{Delta formula:}
+      \textbf{Delta formula} ($q = 2^{b-1}{-}1$):
       \[
-        \delta = \frac{2 \cdot \texttt{tile\_in} \cdot 127^2}{2^{b_a} \cdot k}
+        \delta = \frac{2 \cdot \texttt{tile\_in} \cdot q_x \cdot q_w}{2^{b_a} \cdot k}
       \]
-      \[
-        = \frac{2 \cdot 256 \cdot 127^2}{256 \cdot 16} \approx 2016 \quad (\text{INT8})
-      \]
+      \begin{itemize}\small
+        \item INT8 ($q{=}127$, mvm=256):
+              $\frac{2\cdot256\cdot127^2}{256\cdot16}\approx2016$
+        \item INT4 ($q{=}7$, mvm=256):
+              $\frac{2\cdot256\cdot7^2}{256\cdot16}\approx6.12$
+        \item INT8, mvm=1024:
+              $\frac{2\cdot1024\cdot127^2}{256\cdot16}\approx8064$
+      \end{itemize}
 
-      \vspace{0.5em}
-      \textbf{Number of ADC bins} in $\pm \sigma_z$:
-      \[
-        N_\text{bins} \approx \frac{2\sigma_z}{\delta / z_\text{range}}
-                      \approx 15\text{--}30
-      \]
-      Very coarse — explains why PTQ alone plateaus.
+      \vspace{0.1em}
+      \textbf{INT8: useful ADC bins} in $\pm\sigma_z \approx 15$--$30$
+      (empirical) — explains why INT8 PTQ alone plateaus.
     \end{column}
   \end{columns}
 \end{frame}

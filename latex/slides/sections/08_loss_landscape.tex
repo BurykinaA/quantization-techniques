@@ -1,5 +1,5 @@
 % ─── Slide: Loss landscape — why α=0.5 is the sweet spot ─────────────────────
-\begin{frame}{Loss Landscape: Why $\alpha{=}0.5$ Is the Sweet Spot}
+\begin{frame}[shrink=20]{Loss Landscape: Why $\alpha{=}0.5$ Is the Sweet Spot}
   \begin{columns}[T]
     \begin{column}{0.48\textwidth}
       \textbf{Dual-forward mixing loss:}
@@ -14,7 +14,7 @@
               and $\mathcal{L}_\mathrm{ADC}$
       \end{itemize}
 
-      \vspace{0.6em}
+      \vspace{0.15em}
       \textbf{Visualisation (Li et al.\ "Filter Normalisation" method):}
       \begin{enumerate}
         \item Train FlatQuant to convergence at $\alpha \in \{0, 0.5, 1\}$
@@ -34,7 +34,7 @@
       \iffalse
         \includegraphics[width=\linewidth]{figs/plot_loss_landscape_alpha.pdf}
       \else
-        \figplaceholder[0.72\textheight]{3 panels (one per $\alpha$): 2D contour heatmap of
+        \figplaceholder[0.35\textheight]{3 panels (one per $\alpha$): 2D contour heatmap of
           ADC PPL as a function of perturbation $(a, b)$ around $\theta^*$.
           Color: low PPL = blue (flat/wide), high PPL = red (sharp).
           Panel 1 ($\alpha{=}0$): narrow deep valley in bypass dim, flat in ADC dim.

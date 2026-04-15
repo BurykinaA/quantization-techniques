@@ -1,10 +1,11 @@
 % ─── Slide: Hardware model / Problem setup ────────────────────────────────────
-\begin{frame}{Hardware Model \& Metrics}
+\begin{frame}[shrink=20]{Hardware Model \& Metrics}
   \begin{columns}[T]
     \begin{column}{0.52\textwidth}
 
       \textbf{One tile of analog MVM}
       \begin{center}
+      \resizebox{\linewidth}{!}{%
       \begin{tikzpicture}[
           every node/.style={font=\small},
           box/.style={draw, rounded corners=2pt, minimum width=1.6cm, minimum height=0.55cm, align=center},
@@ -20,15 +21,15 @@
         \node[above=0.15cm of q, font=\footnotesize] {$x$};
         \node[above=0.15cm of mvm, font=\footnotesize] {$y_\mathrm{int}$};
         \node[above=0.15cm of adc, font=\footnotesize] {$z = y_\mathrm{int}/\delta$};
-      \end{tikzpicture}
+      \end{tikzpicture}}%
       \end{center}
 
-      \vspace{0.5em}
+      \vspace{0.15em}
       \textbf{Dead zone:} $|y_\mathrm{int}| < \delta \Rightarrow z = 0$ (ADC outputs nothing)\\[0.3em]
-      $\delta = \dfrac{2 \cdot \text{tile\_in} \cdot 127^2}{2^{b_a} \cdot k}
-               = \dfrac{2 \cdot 256 \cdot 127^2}{256 \cdot 16} \approx 2016$
+      $\delta = \dfrac{2\,\text{tile\_in}\cdot q_x q_w}{2^{b_a}\cdot k}$
+      \quad{\small INT8 ($q{=}127$): ${\approx}2016$;\; INT4 ($q{=}7$): ${\approx}6.12$}
 
-      \vspace{0.5em}
+      \vspace{0.15em}
       \textbf{Key metrics}
       \begin{itemize}
         \item $\bypass$ — PPL with ADC disabled (transform quality proxy)
@@ -49,7 +50,7 @@
         $b_a$ (ADC) & 8 bits \\
         Tile size & 256 \\
         $k$ (parallelism) & 16 \\
-        $\delta$ (INT4) & $\approx 515$ \\
+        $\delta$ (INT4) & $\approx 6.12$ \\
         $\delta$ (INT8) & $\approx 2016$ \\
         FP baseline PPL & $\approx 10.5$ \\
         Cal.\ samples & 128–1024 \\

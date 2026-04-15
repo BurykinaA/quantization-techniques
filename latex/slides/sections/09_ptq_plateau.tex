@@ -1,5 +1,5 @@
 % ─── Slide: PTQ plateau ───────────────────────────────────────────────────────
-\begin{frame}{Pure PTQ Hits a Plateau — a Different Tool Is Needed}
+\begin{frame}[shrink=20]{Pure PTQ Hits a Plateau — a Different Tool Is Needed}
   \begin{columns}[T]
     \begin{column}{0.50\textwidth}
       After all PTQ improvements (v2 through v5):
@@ -7,12 +7,13 @@
         \item Best $\adcppl \approx 27.5\text{--}28.5$ across all INT4 variants
         \item Adding more calibration samples / stochastic propagation / Hadamard
               gives $< 0.5$ PPL gain
-        \item \textbf{Root cause:} transform-only PTQ is limited by the
-              coarse ADC floor quantizer ($\delta \approx 515$, only
-              $\sim$25--40 bins in the typical $z$ range)
+        \item \textbf{Root cause:} 4-bit weight quantisation introduces
+              systematic residual error that transform calibration
+              cannot recover — transforms redistribute information,
+              but cannot add it back after INT4 rounding
       \end{itemize}
 
-      \vspace{0.8em}
+      \vspace{0.15em}
       \begin{alertblock}{Key realisation}
         We need a \textbf{post-hoc correction} that can learn to model
         the ADC residual \emph{after} quantisation, without
@@ -21,7 +22,7 @@
     \end{column}
     \begin{column}{0.46\textwidth}
       % plot_ptq_plateau.pdf
-      \iffalse
+      \iftrue
         \includegraphics[width=\linewidth]{figs/plot_ptq_plateau.pdf}
       \else
         \figplaceholder[0.65\textheight]{Scatter / step plot: all INT4 PTQ variants (v1--v5)

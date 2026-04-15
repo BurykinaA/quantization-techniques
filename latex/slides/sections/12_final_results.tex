@@ -1,5 +1,5 @@
 % ─── Slide: Final results ─────────────────────────────────────────────────────
-\begin{frame}{Final Results: INT4 + LoRA $\approx$ FP Baseline}
+\begin{frame}[shrink=20]{Final Results: INT4 + LoRA Surpasses INT8 PTQ}
   \begin{columns}[T]
     \begin{column}{0.52\textwidth}
       \begin{center}
@@ -22,19 +22,20 @@
       \end{tabular}
       \end{center}
 
-      \vspace{0.8em}
+      \vspace{0.15em}
       \begin{exampleblock}{Key messages}
         \begin{itemize}
-          \item \textbf{INT4 + LoRA surpasses best INT8 PTQ} on WikiText2
-          \item \textbf{Correction generalises to C4} ($-50\%$ vs PTQ baseline):
-                not overfit to calibration domain
+          \item \textbf{INT4 + LoRA surpasses best INT8 PTQ on WikiText2}
+                (13.96 vs.\ 14.41)
+          \item \textbf{Generalises to C4} ($-50\%$ vs.\ INT4 PTQ baseline):
+                correction is not overfit to calibration domain
           \item CE+KL with all 7 projections is the winning config
         \end{itemize}
       \end{exampleblock}
     \end{column}
     \begin{column}{0.44\textwidth}
       % plot_final_results_wiki_c4.pdf
-      \iffalse
+      \iftrue
         \includegraphics[width=\linewidth]{figs/plot_final_results_wiki_c4.pdf}
       \else
         \figplaceholder[0.68\textheight]{Grouped bar chart (5 methods on x-axis).

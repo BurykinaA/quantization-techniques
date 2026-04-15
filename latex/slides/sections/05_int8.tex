@@ -1,5 +1,5 @@
 % ─── Slide: INT8 results ──────────────────────────────────────────────────────
-\begin{frame}{INT8: Propagated Calibration Fixes the Real Problem}
+\begin{frame}[shrink=20]{INT8: Propagated Calibration Fixes the Real Problem}
   \begin{columns}[T]
     \begin{column}{0.46\textwidth}
       \textbf{Two ideas for closing the $10 \to 29$ gap:}
@@ -9,21 +9,21 @@
           nudge $y_\mathrm{int}$ toward bin centres.\\
           \textit{Result: no improvement.}
 
-        \vspace{0.5em}
+        \vspace{0.15em}
         \item \textbf{Propagated calibration}:\\
           train layer $i$ on \emph{ADC-quantised} inputs from layer $i-1$\\
           (not clean FP inputs).\\
           \textit{Result: $-47\%$ ADC PPL.}
       \end{enumerate}
 
-      \vspace{0.8em}
+      \vspace{0.15em}
       \begin{alertblock}{Why propagation works}
         Standard layer-wise PTQ with FP inputs \emph{underestimates}
         the reconstruction difficulty at inference, where upstream ADC
         errors accumulate across layers.
       \end{alertblock}
 
-      \vspace{0.5em}
+      \vspace{0.15em}
       \begin{center}
       \small
       \begin{tabular}{lcc}
@@ -40,7 +40,7 @@
     \end{column}
     \begin{column}{0.50\textwidth}
       % plot_int8_main_results.pdf
-      \iffalse
+      \iftrue
         \includegraphics[width=\linewidth]{figs/plot_int8_main_results.pdf}
       \else
         \figplaceholder[0.65\textheight]{Grouped bar chart (4 methods on x-axis).

@@ -1,5 +1,5 @@
 % ─── Slide: Dead zone was NOT hardware-fundamental ────────────────────────────
-\begin{frame}{First Key Discovery: Dead Zone Was Not Hardware-Fundamental}
+\begin{frame}[shrink=20]{First Key Discovery: Dead Zone Was Not Hardware-Fundamental}
   \begin{columns}[T]
     \begin{column}{0.50\textwidth}
       \begin{block}{Early baseline (branch \texttt{llama-flatquant-adc})}
@@ -10,7 +10,7 @@
         \end{itemize}
       \end{block}
 
-      \vspace{0.5em}
+      \vspace{0.15em}
       \begin{exampleblock}{Improved baseline (branch \texttt{pact})}
         \begin{itemize}
           \item $\bypass = 10.0$, $\adcppl = 28.86$
@@ -20,16 +20,17 @@
         \end{itemize}
       \end{exampleblock}
 
-      \vspace{0.7em}
+      \vspace{0.15em}
       \textbf{Implication:}\\
       Dead-zone collapse was a \alert{transform quality problem},\\
       not a fundamental ADC hardware constraint.\\[0.4em]
-      Remaining gap $\bypass{=}10 \to \adcppl{=}29$\\
-      is \textbf{ADC resolution} (only $\sim$15--30 bins in $\pm\sigma_z$).
+      Remaining INT8 gap $\bypass{=}10 \to \adcppl{=}29$:\\
+      \textbf{ADC resolution} — empirically only $\sim$15--30 useful
+      bins in $\pm\sigma_z$ (INT8, $\delta{\approx}2016$).
     \end{column}
     \begin{column}{0.46\textwidth}
       % plot_deadzone_not_fundamental.pdf
-      \iffalse
+      \iftrue
         \includegraphics[width=\linewidth]{figs/plot_deadzone_not_fundamental.pdf}
       \else
         \figplaceholder[0.65\textheight]{Grouped bar chart:

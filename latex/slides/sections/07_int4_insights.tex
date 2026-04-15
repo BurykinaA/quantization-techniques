@@ -1,5 +1,5 @@
 % ─── Slide: Mechanistic insight — MLP vs Attention roles ─────────────────────
-\begin{frame}{Mechanistic Insight: MLP and Attention Play Different Roles}
+\begin{frame}[shrink=20]{Mechanistic Insight: MLP and Attention Play Different Roles}
   \begin{columns}[T]
     \begin{column}{0.50\textwidth}
       \textbf{Finding (v3/v4 ablation):}
@@ -13,31 +13,17 @@
               (\texttt{down\_proj} sits right before ADC accumulation)
       \end{itemize}
 
-      \vspace{0.7em}
+      \vspace{0.15em}
       \textbf{Staged training exploits this:}
       \begin{enumerate}
         \item Stage A (no prop): learn clean MLP diag transforms
         \item Stage B (10 ep, $\alpha{=}0.5$): add attn diag, fine-tune for ADC robustness
       \end{enumerate}
 
-      \vspace{0.3em}
-      \begin{center}
-      \small
-      \begin{tabular}{lcc}
-        \toprule
-        Config & $\bypass$ & $\adcppl$ \\
-        \midrule
-        diag MLP only   & \best{19.37} & 31.65 \\
-        diag attn only  & 24.98 & 29.41 \\
-        diag both       & 19.69 & 28.46 \\
-        \textbf{staged} & \best{18.50} & \best{27.60} \\
-        \bottomrule
-      \end{tabular}
-      \end{center}
     \end{column}
     \begin{column}{0.46\textwidth}
       % plot_diag_roles.pdf
-      \iffalse
+      \iftrue
         \includegraphics[width=0.95\linewidth]{figs/plot_diag_roles.pdf}
       \else
         \figplaceholder[0.38\textheight]{Grouped bars: \{MLP only, Attn only, Both, Staged\}.
@@ -45,9 +31,9 @@
           Highlight: MLP drives bypass, attn drives ADC gap closure.}
       \fi
 
-      \vspace{0.5em}
+      \vspace{0.15em}
       % plot_mlp_split_up_down.pdf
-      \iffalse
+      \iftrue
         \includegraphics[width=0.95\linewidth]{figs/plot_mlp_split_up_down.pdf}
       \else
         \figplaceholder[0.30\textheight]{Grouped bars: \{diag up\_gate, diag down, diag both\}.

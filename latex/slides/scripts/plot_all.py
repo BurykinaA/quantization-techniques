@@ -40,9 +40,9 @@ C_BEST   = "#F2CC8F"   # yellow highlight
 # 1. Dead zone: not hardware-fundamental
 # ════════════════════════════════════════════════════════════════════════════════
 def plot_deadzone():
-    labels    = ["Early baseline\n(branch adc)", "Improved baseline\n(branch pact)"]
-    dead_rate = [81.0, 10.3]
-    adc_ppl   = [28.99, 28.86]
+    labels     = ["Early baseline\n(branch adc)", "Improved baseline\n(branch pact)"]
+    dead_rate  = [81.0, 10.3]
+    bypass_ppl = [21.6, 10.01]   # bypass PPL — transform quality proxy
 
     x = np.arange(len(labels))
     w = 0.35
@@ -52,26 +52,26 @@ def plot_deadzone():
 
     b1 = ax1.bar(x - w/2, dead_rate, w, label="dead_rate (%)",
                  color=C_ADC, alpha=0.85, zorder=3)
-    b2 = ax2.bar(x + w/2, adc_ppl, w, label="ADC PPL",
+    b2 = ax2.bar(x + w/2, bypass_ppl, w, label="bypass PPL",
                  color=C_BYPASS, alpha=0.85, zorder=3)
 
     ax1.set_ylabel("dead_rate (%)", color=C_ADC)
-    ax2.set_ylabel("ADC PPL", color=C_BYPASS)
+    ax2.set_ylabel("bypass PPL (transform quality)", color=C_BYPASS)
     ax1.set_xticks(x); ax1.set_xticklabels(labels)
-    ax1.set_ylim(0, 100); ax2.set_ylim(0, 40)
+    ax1.set_ylim(0, 100); ax2.set_ylim(0, 30)
 
     # annotate
     for bar, v in zip(b1, dead_rate):
         ax1.text(bar.get_x() + bar.get_width()/2, v + 1.5,
                  f"{v}%", ha="center", fontsize=9, color=C_ADC, fontweight="bold")
-    for bar, v in zip(b2, adc_ppl):
-        ax2.text(bar.get_x() + bar.get_width()/2, v + 0.5,
+    for bar, v in zip(b2, bypass_ppl):
+        ax2.text(bar.get_x() + bar.get_width()/2, v + 0.4,
                  f"{v:.2f}", ha="center", fontsize=9, color=C_BYPASS, fontweight="bold")
 
     handles = [mpatches.Patch(color=C_ADC, label="dead_rate (%)"),
-               mpatches.Patch(color=C_BYPASS, label="ADC PPL")]
+               mpatches.Patch(color=C_BYPASS, label="bypass PPL")]
     ax1.legend(handles=handles, loc="upper right")
-    ax1.set_title("Dead zone was a transform quality problem,\nnot a hardware constraint")
+    ax1.set_title("Dead zone collapse was a transform quality problem,\nnot a hardware constraint")
     fig.tight_layout()
     fig.savefig(OUT / "plot_deadzone_not_fundamental.pdf")
     print("✓  plot_deadzone_not_fundamental.pdf")
