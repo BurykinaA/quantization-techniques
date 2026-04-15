@@ -81,7 +81,6 @@ run_experiment() {
 
     python "$SCRIPT_DIR/runs/llama_smooth_quant_adc_ptq.py" \
         --output_dir "$out_dir" \
-        --run_name "${name}" \
         --wandb_run_name "${name}_landscape" \
         "$@" \
         > "$logfile" 2>&1
