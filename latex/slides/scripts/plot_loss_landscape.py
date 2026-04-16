@@ -134,20 +134,27 @@ def get_cal_batch(tokenizer_name: str, batch_size: int, seq_len: int,
 
 def get_fp32_params(model) -> dict:
     """
-    Extract FlatQuant transform parameters.
+    Extract FlatQuant Kronecker factor matrices for perturbation.
 
-    FlatQuant Kronecker factors are small (< 100K elements, e.g. 64×64).
-    LLM weight matrices are large (4096×4096 = 16M+).
-    Filter by dtype==float32 AND numel < 100_000 to isolate transforms only.
+    Rules:
+      - dtype == float32  (FlatQuant transforms; base LLM weights are fp16)
+      - dim >= 2          (matrices only — excludes LWC/LAC clip scalars and
+                           bias vectors which go to 0 under perturbation → NaN)
+      - numel < 100_000   (Kronecker factors are small, e.g. 64×64;
+                           LLM weight matrices are 16M+)
     """
     params = {k: p.data.clone().cpu()
               for k, p in model.named_parameters()
-              if p.dtype == torch.float32 and p.numel() < 100_000}
+              if p.dtype == torch.float32
+              and p.dim() >= 2
+              and p.numel() < 100_000}
     if not params:
-        # fallback: loosen threshold to 1M if nothing found at 100K
+        # fallback: loosen size threshold to 1M
         params = {k: p.data.clone().cpu()
                   for k, p in model.named_parameters()
-                  if p.dtype == torch.float32 and p.numel() < 1_000_000}
+                  if p.dtype == torch.float32
+                  and p.dim() >= 2
+                  and p.numel() < 1_000_000}
     return params
 
 
@@ -161,6 +168,8 @@ def eval_loss(model, input_ids: torch.Tensor) -> float:
             loss = out.loss.item()
         except Exception:
             loss = 20.0
+    if not np.isfinite(loss):
+        loss = 20.0
     return min(float(loss), 20.0)
 
 
@@ -287,6 +296,9 @@ def main():
     base_params_ref = get_fp32_params(model0)
     print(f"  float32 params: {len(base_params_ref)} tensors, "
           f"{sum(v.numel() for v in base_params_ref.values()):,} values")
+    # Debug: show first 5 param names and shapes
+    for i, (k, v) in enumerate(list(base_params_ref.items())[:5]):
+        print(f"    [{i}] {k}  shape={tuple(v.shape)}")
 
     torch.manual_seed(0)
     d1 = random_direction(base_params_ref)
