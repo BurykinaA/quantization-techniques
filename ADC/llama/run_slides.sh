@@ -143,11 +143,24 @@ echo "[2/3] plot_flatquant_intuition.py — synthetic histogram"
 python scripts/plot_flatquant_intuition.py
 
 echo "[3/3] plot_loss_landscape.py — loss landscape"
-python scripts/plot_loss_landscape.py \
-    --checkpoint_alpha0  "$CKPT_DIR/landscape_alpha0/model_full.pt" \
-    --checkpoint_alpha05 "$CKPT_DIR/landscape_alpha05/model_full.pt" \
-    --checkpoint_alpha1  "$CKPT_DIR/landscape_alpha1/model_full.pt" \
-    --output             "$SLIDES_DIR/figs/plot_loss_landscape_alpha.pdf"
+# PTQ script appends a date/run suffix to the output_dir name — find robustly
+alpha0_pt=$(find "$CKPT_DIR" -name "model_full.pt" -path "*alpha0*" ! -path "*alpha05*" | head -1)
+alpha05_pt=$(find "$CKPT_DIR" -name "model_full.pt" -path "*alpha05*" | head -1)
+alpha1_pt=$(find "$CKPT_DIR" -name "model_full.pt" -path "*alpha1*" ! -path "*alpha05*" | head -1)
+
+echo "  alpha0  : ${alpha0_pt:-NOT FOUND}"
+echo "  alpha05 : ${alpha05_pt:-NOT FOUND}"
+echo "  alpha1  : ${alpha1_pt:-NOT FOUND}"
+
+if [ -n "$alpha0_pt" ] && [ -n "$alpha05_pt" ] && [ -n "$alpha1_pt" ]; then
+    python scripts/plot_loss_landscape.py \
+        --checkpoint_alpha0  "$alpha0_pt" \
+        --checkpoint_alpha05 "$alpha05_pt" \
+        --checkpoint_alpha1  "$alpha1_pt" \
+        --output             "$SLIDES_DIR/figs/plot_loss_landscape_alpha.pdf"
+else
+    echo "  [skip] one or more checkpoints missing — skipping landscape plot"
+fi
 
 echo ""
 echo "============================================================"
