@@ -134,12 +134,21 @@ def get_cal_batch(tokenizer_name: str, batch_size: int, seq_len: int,
 
 def get_fp32_params(model) -> dict:
     """
-    Extract learnable float32 parameters — these are the FlatQuant transform
-    matrices. The base model weights are fp16; fp32 = FlatQuant params.
+    Extract FlatQuant transform parameters.
+
+    FlatQuant Kronecker factors are small (< 100K elements, e.g. 64×64).
+    LLM weight matrices are large (4096×4096 = 16M+).
+    Filter by dtype==float32 AND numel < 100_000 to isolate transforms only.
     """
-    return {k: p.data.clone().cpu()
-            for k, p in model.named_parameters()
-            if p.dtype == torch.float32}
+    params = {k: p.data.clone().cpu()
+              for k, p in model.named_parameters()
+              if p.dtype == torch.float32 and p.numel() < 100_000}
+    if not params:
+        # fallback: loosen threshold to 1M if nothing found at 100K
+        params = {k: p.data.clone().cpu()
+                  for k, p in model.named_parameters()
+                  if p.dtype == torch.float32 and p.numel() < 1_000_000}
+    return params
 
 
 def eval_loss(model, input_ids: torch.Tensor) -> float:
