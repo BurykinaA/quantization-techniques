@@ -272,7 +272,7 @@ class _ADCCalibrator:
                 w_scale   = max(w_scale,   1e-8)
 
                 if hasattr(tile, "activation_quantizer"):
-                    tile.activation_quantizer.scale.fill_(act_scale)
+                    tile.activation_quantizer.scale.data.fill_(act_scale)
                 if hasattr(tile, "weight_quantizer"):
                     aq = tile.weight_quantizer
                     if aq.per_channel:
@@ -280,14 +280,25 @@ class _ADCCalibrator:
                         per_ch = w.abs().max(dim=1)[0].clamp(min=1e-6) / q_w
                         aq.scale.data.copy_(per_ch)
                     else:
-                        aq.scale.fill_(w_scale)
+                        aq.scale.data.fill_(w_scale)
                 updated += 1
 
         logger.info(f"  Applied calibration scales to {updated} layer tiles")
 
 
+def _fq_cache_key(cfg: _SharedFlatQuantConfig) -> str:
+    """Short hash of all FlatQuant+ADC config params that affect the trained model."""
+    import hashlib
+    key_str = (f"{cfg.fq_epochs}_{cfg.fq_stage_b_epochs}_{cfg.fq_nsamples}"
+               f"_{cfg.fq_lr}_{cfg.fq_w_bits}_{cfg.fq_a_bits}"
+               f"_{cfg.bx}_{cfg.bw}_{cfg.ba}_{cfg.k}_{cfg.mvm_limit}"
+               f"_{cfg.fq_add_diag}_{cfg.fq_lwc}_{cfg.fq_lac}"
+               f"_{cfg.fq_stage_b_prop_alpha}_{cfg.fq_stage_b_diag_attn}")
+    return hashlib.md5(key_str.encode()).hexdigest()[:10]
+
+
 def apply_flatquant(model: nn.Module, loader: DataLoader, cfg: _SharedFlatQuantConfig,
-                    device: torch.device) -> nn.Module:
+                    device: torch.device, cache_dir: str | None = None) -> nn.Module:
     """
     Full FlatQuant pipeline:
       Stage A — 30 epochs, MLP diagonal scaling, no propagation
@@ -295,7 +306,21 @@ def apply_flatquant(model: nn.Module, loader: DataLoader, cfg: _SharedFlatQuantC
       Reparameterize — bake learned transforms into weight matrices
       ADC conversion — replace nn.Linear with TiledLinearADC
       ADC calibration — set per-channel quantization scales
+
+    If cache_dir is set, saves the fully-calibrated model after the first run and
+    reloads it on subsequent runs — skipping the ~1 hour FlatQuant training.
     """
+    # ── Cache check ──────────────────────────────────────────────────────────
+    cache_path = None
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(cache_dir, f"fq_adc_{_fq_cache_key(cfg)}.pt")
+        if os.path.exists(cache_path):
+            logger.info(f"Loading cached FlatQuant+ADC model: {cache_path}")
+            model = torch.load(cache_path, weights_only=False, map_location=device)
+            model = model.to(device)
+            return model
+        logger.info(f"FlatQuant cache not found — will save to: {cache_path}")
     logger.info("─── FlatQuant Stage A ───────────────────────────────────────")
     logger.info(f"  {cfg.fq_epochs} epochs, lr={cfg.fq_lr}, nsamples={cfg.fq_nsamples}")
     logger.info("  Diagonal scaling: MLP blocks only")
@@ -360,6 +385,11 @@ def apply_flatquant(model: nn.Module, loader: DataLoader, cfg: _SharedFlatQuantC
     for _, m in model.named_modules():
         if hasattr(m, "set_quantizer_mode"):
             m.set_quantizer_mode("fixed")
+
+    # ── Save cache ───────────────────────────────────────────────────────────
+    if cache_path:
+        logger.info(f"Saving FlatQuant+ADC model to cache: {cache_path}")
+        torch.save(model, cache_path)
 
     return model
 
@@ -472,7 +502,7 @@ def run_evaluation(model: nn.Module, tokenizer, cfg: BaseConfig,
 # Orchestrator: run one configuration end-to-end
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_config(cfg: BaseConfig) -> dict:
+def run_config(cfg: BaseConfig, cache_dir: str | None = None) -> dict:
     """Run a single configuration and return evaluation results."""
     logger.info("")
     logger.info("=" * 70)
@@ -491,7 +521,7 @@ def run_config(cfg: BaseConfig) -> dict:
     else:
         # All quantized configs share the same FlatQuant training
         loader = build_calibration_loader(tokenizer, cfg)
-        model = apply_flatquant(model, loader, cfg, device)
+        model = apply_flatquant(model, loader, cfg, device, cache_dir=cache_dir)
 
         if isinstance(cfg, INT4NoADCConfig):
             # Evaluate WITHOUT ADC floor quantization → isolates INT4 quantization
@@ -552,7 +582,13 @@ def main():
     )
     parser.add_argument("--output_dir", default="./outputs",
                         help="Where to save results.json")
+    parser.add_argument("--fq_cache_dir", default="./outputs/fq_cache",
+                        help="Directory to cache FlatQuant+ADC models (skips ~1h training on re-runs)")
+    parser.add_argument("--no_fq_cache", action="store_true",
+                        help="Disable FlatQuant caching (always retrain from scratch)")
     args = parser.parse_args()
+
+    cache_dir = None if args.no_fq_cache else args.fq_cache_dir
 
     # Select configs to run
     config_map = {c.name: c for c in ALL_CONFIGS}
@@ -568,7 +604,7 @@ def main():
     all_results = {}
     for cfg in selected:
         try:
-            all_results[cfg.name] = run_config(cfg)
+            all_results[cfg.name] = run_config(cfg, cache_dir=cache_dir)
         except Exception as e:
             logger.error(f"Config '{cfg.name}' failed: {e}", exc_info=True)
             all_results[cfg.name] = {"error": str(e)}
