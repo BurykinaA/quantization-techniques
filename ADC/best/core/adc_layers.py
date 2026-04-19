@@ -359,7 +359,7 @@ class QATLinearADC(nn.Linear):
 
         if self.bypass_adc:
             adc_output = y_int
-        elif self.unipolar_adc:
+        elif getattr(self, 'unipolar_adc', False):
             # Unipolar ADC: weights and activations must be non-negative.
             # Zero-point shift: shift both code_x and code_w to [0, 2*q] before MVM,
             # then subtract correction terms in digital domain after ADC.
@@ -385,6 +385,8 @@ class QATLinearADC(nn.Linear):
             # Delta for unsigned range: 2× larger than bipolar delta
             delta_uni = 2.0 * self.delta
             pa_uni = -self.na + self.pa   # = 255 for ba=8
+            if not hasattr(self, '_adc_offset_codes'):
+                self._adc_offset_codes = -self.na
 
             y_pos_codes = floor_ste(y_pos / delta_uni)
             y_pos_codes = torch.clamp(y_pos_codes, 0, pa_uni)

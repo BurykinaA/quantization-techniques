@@ -302,7 +302,8 @@ def _fq_cache_key(cfg: _SharedFlatQuantConfig) -> str:
                f"_{cfg.fq_lr}_{cfg.fq_w_bits}_{cfg.fq_a_bits}"
                f"_{cfg.bx}_{cfg.bw}_{cfg.ba}_{cfg.k}_{cfg.mvm_limit}"
                f"_{cfg.fq_add_diag}_{cfg.fq_lwc}_{cfg.fq_lac}"
-               f"_{cfg.fq_stage_b_prop_alpha}_{cfg.fq_stage_b_diag_attn}")
+               f"_{cfg.fq_stage_b_prop_alpha}_{cfg.fq_stage_b_diag_attn}"
+               f"_unipolar{getattr(cfg, 'unipolar_adc', False)}")
     return hashlib.md5(key_str.encode()).hexdigest()[:10]
 
 
