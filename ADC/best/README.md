@@ -80,18 +80,34 @@ e.g. for ba=8: na=−128, pa=127  →  z ∈ [−128, 127]
 
 5. **Unipolar ADC (optical hardware, this branch):**
 
-The physical device outputs only non-negative codes `[0, 2^ba − 1]`.
-We shift the integer dot product before the ADC and subtract after:
+The physical device accepts only **non-negative** weights and activations and
+reads non-negative codes `[0, 2^ba − 1]`.  We use a zero-point shift: shift
+both codes to non-negative before the MVM, then subtract correction terms
+digitally after the ADC:
+
 ```
-offset = 2^(ba−1)                             # = 128 for ba=8
-z_shifted_raw = floor(z_int / δ) + offset    # shift to positive region
-z_shifted     = clamp(z_shifted_raw, 0, 2^ba − 1)   # physical ADC range [0, 255]
-z             = z_shifted − offset            # recover signed → same as bipolar
+q_x = 2^(b_x−1) − 1        # e.g. 7 for INT4 (magnitude of qmin)
+q_w = 2^(b_w−1) − 1
+
+x_pos = code_x + q_x        # [-q_x, q_x]  →  [0, 2·q_x]
+W_pos = code_w + q_w        # [-q_w, q_w]  →  [0, 2·q_w]
+
+y_pos = x_pos · W_pos^T     # ∈ [0, tile_in · (2q_x) · (2q_w)]  — always ≥ 0 ✓
 ```
 
-Note: `z_shifted_raw` can still be negative when the dot product underflows
-below `−M` (extreme saturation case with k>1). The clamp to `[0, …]` models
-the hardware saturating at zero — identical to the bipolar clamp at `na`.
+ADC reads `y_pos` with `δ_uni = 2·δ` (range is 2× wider on the positive side):
+```
+z_pos = clamp(floor(y_pos / δ_uni), 0, 2^ba − 1)   # unipolar ADC output [0, 255]
+```
+
+Digital correction (subtracted after ADC, no hardware cost):
+```
+correction = q_x · Σ_j W_int_j   (per output channel, precomputed)
+           + q_w · Σ_j x_int_j   (per token, cheap)
+           + q_x · q_w · tile_in  (scalar constant)
+
+y_int ≈ z_pos · δ_uni − correction   →   dequantize as usual
+```
 
 ### Delta (ADC Resolution)
 

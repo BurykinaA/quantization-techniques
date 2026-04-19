@@ -360,14 +360,44 @@ class QATLinearADC(nn.Linear):
         if self.bypass_adc:
             adc_output = y_int
         elif self.unipolar_adc:
-            # Unipolar ADC: shift y_int to [0, 2M] before reading, subtract after.
-            # offset = |na| · δ  →  shift by offset_codes = |na| = 2^(ba-1) codes.
-            # z_shifted ∈ [0, 2^ba − 1]  (guaranteed non-negative — real hardware).
-            # z = z_shifted + na  (equivalent to bipolar result, but hardware path is correct)
-            y_adc_codes = floor_ste(y_int / self.delta) + self._adc_offset_codes
-            y_adc_codes = torch.clamp(y_adc_codes, 0, self._adc_offset_codes + self.pa)
-            y_adc_codes = y_adc_codes + self.na   # recover signed
-            adc_output = y_adc_codes * self.delta
+            # Unipolar ADC: weights and activations must be non-negative.
+            # Zero-point shift: shift both code_x and code_w to [0, 2*q] before MVM,
+            # then subtract correction terms in digital domain after ADC.
+            #
+            # x_pos = code_x + q_x,  w_pos = code_w + q_w   (both in [0, 2*q])
+            # y_pos = x_pos · w_pos^T
+            #       = code_x·code_w^T
+            #         + q_x · rowsum(code_w)         [out_features]
+            #         + q_w · colsum(code_x)          [batch, 1]
+            #         + q_x · q_w · tile_in           scalar
+            #
+            # ADC reads y_pos (non-negative).  delta is scaled ×2 because the
+            # unsigned range [0, 4M] is 2× wider than the signed range [−M, +M].
+            # After ADC, subtract the correction → recovers code_x·code_w^T.
+            q_x = float(-qmin_x)          # = 7 for signed INT4  (= |qmin|)
+            q_w = float(-w_q.qmin)        # = 7 for signed INT4
+
+            x_pos = code_x + q_x          # [0, 2*q_x]
+            w_pos = code_w + q_w          # [0, 2*q_w]
+
+            y_pos = F.linear(x_pos, w_pos, bias=None)  # ∈ [0, tile_in*(2q_x)*(2q_w)]
+
+            # Delta for unsigned range: 2× larger than bipolar delta
+            delta_uni = 2.0 * self.delta
+            pa_uni = -self.na + self.pa   # = 255 for ba=8
+
+            y_pos_codes = floor_ste(y_pos / delta_uni)
+            y_pos_codes = torch.clamp(y_pos_codes, 0, pa_uni)
+            y_pos_adc = y_pos_codes * delta_uni   # in integer dot-product units
+
+            # Digital correction (exact, no ADC involved)
+            W_rowsum = code_w.sum(dim=1)                        # [out_features]
+            x_colsum = code_x.sum(dim=-1, keepdim=True)         # [batch, 1]
+            correction = (q_x * W_rowsum
+                          + q_w * x_colsum
+                          + q_x * q_w * self.in_features)
+
+            adc_output = y_pos_adc - correction
         else:
             y_adc_codes = floor_ste(y_int / self.delta)
             y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)

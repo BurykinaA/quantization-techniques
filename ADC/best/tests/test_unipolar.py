@@ -73,13 +73,11 @@ def test_bipolar_unipolar_equivalence():
 
 # ── Test 2: z_shifted >= 0 ────────────────────────────────────────────────────
 
-def test_z_shifted_nonnegative():
-    """z_shifted after clamping to the unipolar range [0, 2^ba-1] must be >= 0.
+def test_y_pos_nonnegative():
+    """y_pos (the value sent to the optical ADC) must be non-negative.
 
-    Note: before the clamp, floor(y_int/delta) can range [-2^(ba-1)*k, +2^(ba-1)*k]
-    (e.g. [-2048, 2048] for ba=8, k=16), so z_shifted_raw = floor(...) + 128 can
-    still be negative.  The clamp to [0, 255] is what the physical hardware does —
-    values below 0 saturate at 0 (underflow).  We verify the post-clamp value.
+    After zero-point shift: x_pos = code_x + q_x  and  W_pos = code_w + q_w.
+    Both are non-negative, so y_pos = x_pos · W_pos^T is also non-negative.
     """
     torch.manual_seed(1)
     in_f, out_f = 16, 8
@@ -96,17 +94,20 @@ def test_z_shifted_nonnegative():
         s_w = layer.weight_quantizer.scale.view(-1, 1)
         code_w = torch.round(layer.weight / s_w).clamp(
             layer.weight_quantizer.qmin, layer.weight_quantizer.qmax)
-        y_int = F.linear(code_x, code_w, None)
 
-        # Same as the unipolar forward: shift then clamp to [0, 2^ba-1]
-        z_shifted_raw    = floor_ste(y_int / layer.delta) + layer._adc_offset_codes
-        unipolar_max     = layer._adc_offset_codes + layer.pa  # = 255 for ba=8
-        z_shifted_clamped = torch.clamp(z_shifted_raw, 0, unipolar_max)
+        q_x = float(-layer.activation_quantizer.qmin)  # = 7 for signed INT4
+        q_w = float(-layer.weight_quantizer.qmin)
 
-    min_val = z_shifted_clamped.min().item()
-    max_val = z_shifted_clamped.max().item()
-    assert min_val >= 0, f"z_shifted (post-clamp) has negative values: min = {min_val}"
-    assert max_val <= unipolar_max, f"z_shifted (post-clamp) exceeds {unipolar_max}: max = {max_val}"
+        x_pos = code_x + q_x   # [0, 14]
+        w_pos = code_w + q_w   # [0, 14]
+        y_pos = F.linear(x_pos, w_pos, None)
+
+    min_x = x_pos.min().item()
+    min_w = w_pos.min().item()
+    min_y = y_pos.min().item()
+    assert min_x >= 0, f"x_pos has negative values: min = {min_x}"
+    assert min_w >= 0, f"w_pos has negative values: min = {min_w}"
+    assert min_y >= 0, f"y_pos (sent to ADC) has negative values: min = {min_y}"
 
 
 # ── Test 3: Saturation equivalence ───────────────────────────────────────────
