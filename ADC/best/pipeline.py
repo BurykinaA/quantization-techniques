@@ -278,7 +278,9 @@ class _ADCCalibrator:
                     if aq.per_channel:
                         w = tile.weight.detach().float()
                         per_ch = w.abs().max(dim=1)[0].clamp(min=1e-6) / q_w
-                        aq.scale.data.copy_(per_ch)
+                        # Assign .data directly — avoids broadcast error when
+                        # scale was initialised as shape [1] but per_ch is [C]
+                        aq.scale.data = per_ch.to(aq.scale.device)
                     else:
                         aq.scale.data.fill_(w_scale)
                 updated += 1
