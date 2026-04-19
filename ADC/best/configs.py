@@ -89,6 +89,13 @@ class _SharedFlatQuantConfig(BaseConfig):
     fq_stage_b_prop_alpha: float = 0.5   # x_cal = 0.5·x_adc + 0.5·x_fp
     fq_stage_b_diag_attn: bool = True    # add attention diagonal in stage B
 
+    # Unipolar ADC: physical optical device has range [0, 2^ba − 1] only.
+    # Mathematically equivalent to bipolar (shift-and-subtract), but models real hardware.
+    unipolar_adc: bool = True
+
+    # WandB project for result logging (empty string = no logging)
+    wandb_project: str = "adc-optical-ptq"
+
 
 @dataclass
 class INT4NoADCConfig(_SharedFlatQuantConfig):

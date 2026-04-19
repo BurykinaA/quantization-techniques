@@ -257,6 +257,13 @@ class QATLinearADC(nn.Linear):
         else:
             self.C = 0
         
+        # When True, model unipolar ADC (shift before floor, subtract after).
+        # Physical optical device has range [0, 2^ba − 1] — only positive codes.
+        # Mathematically equivalent to bipolar but z_shifted is guaranteed ≥ 0.
+        self.unipolar_adc = False
+        # offset_codes = |na| = 2^(ba-1), e.g. 128 for ba=8 — exact integer
+        self._adc_offset_codes = -self.na
+
         # When True, skip ADC quantization (floor/clamp) in forward pass.
         self.bypass_adc = False
         # When True, skip ALL quantization (plain F.linear).
@@ -295,6 +302,7 @@ class QATLinearADC(nn.Linear):
         # Recalculate clipping values
         self.na = -(2 ** (ba - 1))
         self.pa = 2 ** (ba - 1) - 1
+        self._adc_offset_codes = -self.na
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.bypass_all:
@@ -351,6 +359,15 @@ class QATLinearADC(nn.Linear):
 
         if self.bypass_adc:
             adc_output = y_int
+        elif self.unipolar_adc:
+            # Unipolar ADC: shift y_int to [0, 2M] before reading, subtract after.
+            # offset = |na| · δ  →  shift by offset_codes = |na| = 2^(ba-1) codes.
+            # z_shifted ∈ [0, 2^ba − 1]  (guaranteed non-negative — real hardware).
+            # z = z_shifted + na  (equivalent to bipolar result, but hardware path is correct)
+            y_adc_codes = floor_ste(y_int / self.delta) + self._adc_offset_codes
+            y_adc_codes = torch.clamp(y_adc_codes, 0, self._adc_offset_codes + self.pa)
+            y_adc_codes = y_adc_codes + self.na   # recover signed
+            adc_output = y_adc_codes * self.delta
         else:
             y_adc_codes = floor_ste(y_int / self.delta)
             y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)
@@ -394,6 +411,7 @@ class TiledLinearADC(nn.Module):
                  ashift: bool = False,
                  signed_activations: bool = False,
                  mvm_limit: int = 512,
+                 unipolar_adc: bool = False,
                  # W-reshape (kurtosis) parameters from paper
                  use_kurtosis_loss: bool = True,
                  kurtosis_weight: float = 0.0006,
@@ -415,23 +433,24 @@ class TiledLinearADC(nn.Module):
 
         self.n_tiles = n_tiles
         self.in_features_tile = tile_in
+        self.unipolar_adc = unipolar_adc
 
         self.tiles = nn.ModuleList()
         for i in range(n_tiles):
             use_bias = bias if i == 0 else False
-            self.tiles.append(
-                QATLinearADC(
-                    in_features=tile_in,
-                    out_features=out_features,
-                    bias=use_bias,
-                    bx=bx, bw=bw, ba=ba, k=k,
-                    ashift=ashift,
-                    signed_activations=signed_activations,
-                    use_kurtosis_loss=use_kurtosis_loss,
-                    kurtosis_weight=kurtosis_weight,
-                    target_kurtosis=target_kurtosis,
-                )
+            tile = QATLinearADC(
+                in_features=tile_in,
+                out_features=out_features,
+                bias=use_bias,
+                bx=bx, bw=bw, ba=ba, k=k,
+                ashift=ashift,
+                signed_activations=signed_activations,
+                use_kurtosis_loss=use_kurtosis_loss,
+                kurtosis_weight=kurtosis_weight,
+                target_kurtosis=target_kurtosis,
             )
+            tile.unipolar_adc = unipolar_adc
+            self.tiles.append(tile)
     
     def set_alpha_adc(self, alpha: "float | list[float] | None") -> None:
         """Set PACT-style activation clip threshold.

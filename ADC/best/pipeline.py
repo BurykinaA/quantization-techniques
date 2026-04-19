@@ -27,6 +27,12 @@ import os
 import sys
 import time
 
+try:
+    import wandb
+    _WANDB_AVAILABLE = True
+except ImportError:
+    _WANDB_AVAILABLE = False
+
 import torch
 import torch.nn as nn
 from datasets import load_dataset
@@ -178,6 +184,7 @@ def _replace_linear_with_adc(model: nn.Module, cfg: _SharedFlatQuantConfig) -> n
                     ashift=False,
                     signed_activations=True,
                     mvm_limit=cfg.mvm_limit,
+                    unipolar_adc=getattr(cfg, "unipolar_adc", False),
                 )
                 adc.load_weights(child)
                 setattr(module, name, adc)
@@ -543,6 +550,24 @@ def run_config(cfg: BaseConfig, cache_dir: str | None = None) -> dict:
 
     elapsed = time.time() - t0
     logger.info(f"Config '{cfg.name}' finished in {elapsed / 60:.1f} min")
+
+    wandb_project = getattr(cfg, "wandb_project", "")
+    if wandb_project and _WANDB_AVAILABLE:
+        try:
+            import dataclasses
+            cfg_dict = dataclasses.asdict(cfg) if dataclasses.is_dataclass(cfg) else vars(cfg)
+            wandb.init(project=wandb_project, name=cfg.name, config=cfg_dict, reinit=True)
+            wandb.log({
+                "ppl_wikitext2": results.get("wikitext2"),
+                "ppl_c4":        results.get("c4"),
+                "latency_ms":    results.get("latency_mean_ms"),
+                "throughput":    results.get("throughput_tok_s"),
+            })
+            wandb.finish()
+            logger.info(f"  WandB logged to project '{wandb_project}', run '{cfg.name}'")
+        except Exception as e:
+            logger.warning(f"  WandB logging failed: {e}")
+
     return results
 
 
