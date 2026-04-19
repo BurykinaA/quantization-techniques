@@ -10,18 +10,19 @@ of the pipeline costs, and how post-ADC LoRA correction recovers it.
 
 ## Results (Llama-3.2-1B)
 
-| Config | Description | Wiki PPL | C4 PPL | Latency (ms) |
-|---|---|---|---|---|
-| `fp` | Full precision (FP16) | **10.5** | **20.6** | baseline |
-| `int4_no_adc` | INT4 FlatQuant, no ADC floor | ~19.1 | ~29.1 | — |
-| `best_ptq` | INT4 FlatQuant + ADC hardware | ~27.6 | ~46.4 | — |
-| `best_lora` | INT4 + ADC + LoRA correction | **~14.0** | **~23.3** | — |
+| Config | Description | Wiki PPL | C4 PPL | Latency (ms) | Tok/s |
+|---|---|---|---|---|---|
+| `fp` | Full precision (FP16) | **8.68** | **13.13** | 11.4 | 44888 |
+| `int4_no_adc` | INT4 FlatQuant, no ADC floor | 12.56 | 20.13 | 74.8 | 6847 |
+| `best_ptq` | INT4 FlatQuant + ADC hardware | 26.78 | 45.40 | 444.0 | 1153 |
+| `best_lora` | INT4 + ADC + LoRA correction | **14.01** | **23.14** | 447.8 | 1143 |
 
 Key observations:
-- **INT4 cost alone** (no ADC): FP 10.5 → INT4 19.1 (+8.6 PPL)
-- **ADC hardware overhead**: INT4 19.1 → INT4+ADC 27.6 (+8.5 PPL)
-- **LoRA correction**: INT4+ADC 27.6 → INT4+ADC+LoRA **14.0** (−13.6 PPL)
-- **Final result beats INT8 PTQ** (best INT8 PTQ = 14.4 PPL)
+- **INT4 cost alone** (no ADC): FP 8.68 → INT4 12.56 (+3.9 PPL)
+- **ADC hardware overhead**: INT4 12.56 → INT4+ADC 26.78 (+14.2 PPL)
+- **LoRA correction**: INT4+ADC 26.78 → INT4+ADC+LoRA **14.01** (−12.8 PPL)
+- **Final result beats INT8 PTQ** (best INT8 PTQ ≈ 14.4 PPL)
+- **Latency cost of ADC**: 74.8 ms → 444.0 ms (×5.9) — LoRA adds negligible overhead (+3.8 ms)
 
 ---
 
