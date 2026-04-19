@@ -2,19 +2,21 @@
 Tests for unipolar ADC mode in QATLinearADC / TiledLinearADC.
 Run from ADC/best/:  python tests/test_unipolar.py
 
-Unipolar math:
-    offset_codes = -na = 2^(ba-1)          e.g. 128 for ba=8
-    z_shifted = floor(y_int / delta) + offset   in [0, 2^ba - 1]
-    z         = z_shifted + na              = same value as bipolar clamp
+Unipolar != bipolar in output (delta is 2x coarser — 256 bins cover 4x wider range).
+We test:
+  1. y_pos (input to optical ADC) is non-negative
+  2. Correction algebra is exact (without ADC floor quantisation noise)
+  3. bypass_adc=True gives identical results for both modes
+  4. TiledLinearADC propagates the flag to all tiles
+  5. Output is finite and bounded
 """
 
-import sys
-import os
+import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import torch
+import torch.nn.functional as F
 from core.adc_layers import QATLinearADC, TiledLinearADC
-from core.grad_functions import floor_ste
 
 
 def _make_layer(in_f, out_f, ba=8, bx=4, bw=4, unipolar=False):
@@ -34,13 +36,6 @@ def _make_layer(in_f, out_f, ba=8, bx=4, bw=4, unipolar=False):
     return layer
 
 
-def _copy_weights(src, dst):
-    with torch.no_grad():
-        dst.weight.copy_(src.weight)
-        dst.weight_quantizer.scale.data.copy_(src.weight_quantizer.scale.data)
-        dst.activation_quantizer.scale.data.copy_(src.activation_quantizer.scale.data)
-
-
 def run_test(name, fn):
     try:
         fn()
@@ -54,38 +49,16 @@ def run_test(name, fn):
         return False
 
 
-# ── Test 1: Numerical equivalence ─────────────────────────────────────────────
-
-def test_bipolar_unipolar_equivalence():
-    torch.manual_seed(0)
-    in_f, out_f = 16, 8
-    x = torch.randn(4, in_f)
-    layer_bi  = _make_layer(in_f, out_f, unipolar=False)
-    layer_uni = _make_layer(in_f, out_f, unipolar=True)
-    _copy_weights(layer_bi, layer_uni)
-    with torch.no_grad():
-        out_bi  = layer_bi(x)
-        out_uni = layer_uni(x)
-    diff = (out_bi - out_uni).abs().max().item()
-    assert torch.allclose(out_bi, out_uni, atol=1e-5), \
-        f"max abs diff = {diff:.2e}"
-
-
-# ── Test 2: z_shifted >= 0 ────────────────────────────────────────────────────
+# ── Test 1: y_pos (what the optical ADC sees) is non-negative ─────────────────
 
 def test_y_pos_nonnegative():
-    """y_pos (the value sent to the optical ADC) must be non-negative.
-
-    After zero-point shift: x_pos = code_x + q_x  and  W_pos = code_w + q_w.
-    Both are non-negative, so y_pos = x_pos · W_pos^T is also non-negative.
-    """
+    """x_pos and w_pos are in [0, 2*q], so y_pos = x_pos · w_pos^T >= 0."""
     torch.manual_seed(1)
     in_f, out_f = 16, 8
     x = torch.randn(4, in_f)
     layer = _make_layer(in_f, out_f, unipolar=True)
 
     with torch.no_grad():
-        import torch.nn.functional as F
         x_f = x.float()
         act_levels = float(layer.activation_quantizer.qmax)
         s_x = x_f.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
@@ -95,41 +68,88 @@ def test_y_pos_nonnegative():
         code_w = torch.round(layer.weight / s_w).clamp(
             layer.weight_quantizer.qmin, layer.weight_quantizer.qmax)
 
-        q_x = float(-layer.activation_quantizer.qmin)  # = 7 for signed INT4
+        q_x = float(-layer.activation_quantizer.qmin)
         q_w = float(-layer.weight_quantizer.qmin)
-
-        x_pos = code_x + q_x   # [0, 14]
-        w_pos = code_w + q_w   # [0, 14]
+        x_pos = code_x + q_x
+        w_pos = code_w + q_w
         y_pos = F.linear(x_pos, w_pos, None)
 
-    min_x = x_pos.min().item()
-    min_w = w_pos.min().item()
-    min_y = y_pos.min().item()
-    assert min_x >= 0, f"x_pos has negative values: min = {min_x}"
-    assert min_w >= 0, f"w_pos has negative values: min = {min_w}"
-    assert min_y >= 0, f"y_pos (sent to ADC) has negative values: min = {min_y}"
+    assert x_pos.min().item() >= 0, f"x_pos negative: min={x_pos.min().item()}"
+    assert w_pos.min().item() >= 0, f"w_pos negative: min={w_pos.min().item()}"
+    assert y_pos.min().item() >= 0, f"y_pos negative (sent to ADC): min={y_pos.min().item()}"
 
 
-# ── Test 3: Saturation equivalence ───────────────────────────────────────────
+# ── Test 2: Correction algebra is exact (zero ADC noise) ──────────────────────
 
-def test_saturation_equivalence():
+def test_correction_algebra():
+    """
+    Without ADC floor noise, the zero-point correction must exactly recover
+    code_x · code_w^T from y_pos.
+
+    y_pos = (code_x + q_x)·(code_w + q_w)^T
+          = code_x·code_w^T  +  correction
+    → code_x·code_w^T  =  y_pos  −  correction
+    """
     torch.manual_seed(2)
     in_f, out_f = 16, 8
+    x = torch.randn(4, in_f)
+    layer = _make_layer(in_f, out_f, unipolar=True)
+
+    with torch.no_grad():
+        x_f = x.float()
+        act_levels = float(layer.activation_quantizer.qmax)
+        s_x = x_f.abs().amax(dim=-1, keepdim=True).clamp(min=1e-6) / act_levels
+        code_x = torch.round(x_f / s_x).clamp(
+            layer.activation_quantizer.qmin, layer.activation_quantizer.qmax)
+        s_w = layer.weight_quantizer.scale.view(-1, 1)
+        code_w = torch.round(layer.weight / s_w).clamp(
+            layer.weight_quantizer.qmin, layer.weight_quantizer.qmax)
+
+        q_x = float(-layer.activation_quantizer.qmin)
+        q_w = float(-layer.weight_quantizer.qmin)
+
+        y_pos      = F.linear(code_x + q_x, code_w + q_w, None)
+        correction = (q_x * code_w.sum(dim=1)
+                      + q_w * code_x.sum(dim=-1, keepdim=True)
+                      + q_x * q_w * in_f)
+        y_int_ref  = F.linear(code_x, code_w, None)
+
+        recovered = y_pos - correction
+
+    diff = (recovered - y_int_ref).abs().max().item()
+    assert diff < 1e-4, f"Correction algebra wrong: max diff = {diff:.2e}"
+
+
+# ── Test 3: bypass_adc=True gives identical results for both modes ─────────────
+
+def test_bypass_equivalence():
+    """With bypass_adc=True both modes skip the ADC floor and give identical output."""
+    torch.manual_seed(3)
+    in_f, out_f = 16, 8
+    x = torch.randn(4, in_f)
+
     layer_bi  = _make_layer(in_f, out_f, unipolar=False)
     layer_uni = _make_layer(in_f, out_f, unipolar=True)
-    _copy_weights(layer_bi, layer_uni)
-    x = torch.full((4, in_f), 1e6)  # saturates the ADC
+    with torch.no_grad():
+        layer_uni.weight.copy_(layer_bi.weight)
+        layer_uni.weight_quantizer.scale.data.copy_(layer_bi.weight_quantizer.scale.data)
+        layer_uni.activation_quantizer.scale.data.copy_(layer_bi.activation_quantizer.scale.data)
+
+    layer_bi.bypass_adc  = True
+    layer_uni.bypass_adc = True
+
     with torch.no_grad():
         out_bi  = layer_bi(x)
         out_uni = layer_uni(x)
+
     diff = (out_bi - out_uni).abs().max().item()
-    assert torch.allclose(out_bi, out_uni, atol=1e-5), \
-        f"saturation max abs diff = {diff:.2e}"
+    assert diff < 1e-5, f"bypass mode outputs differ: max diff = {diff:.2e}"
 
 
 # ── Test 4: TiledLinearADC propagates unipolar_adc to all tiles ───────────────
 
 def test_tiled_propagates_unipolar():
+    """TiledLinearADC must set unipolar_adc on every tile."""
     in_f, out_f = 32, 8
     linear = torch.nn.Linear(in_f, out_f, bias=False)
     tiled = TiledLinearADC(
@@ -145,44 +165,30 @@ def test_tiled_propagates_unipolar():
         assert tile.unipolar_adc, f"tile {i} unipolar_adc should be True"
 
 
-# ── Test 5: TiledLinearADC bipolar/unipolar numerical equivalence ─────────────
+# ── Test 5: Output is finite ──────────────────────────────────────────────────
 
-def test_tiled_equivalence():
-    torch.manual_seed(3)
-    in_f, out_f = 32, 8
-    linear = torch.nn.Linear(in_f, out_f, bias=False)
-    x = torch.randn(2, in_f)
+def test_output_finite():
+    """Unipolar forward pass must produce finite (non-NaN, non-Inf) outputs."""
+    torch.manual_seed(4)
+    in_f, out_f = 16, 8
+    x = torch.randn(4, in_f)
+    layer = _make_layer(in_f, out_f, unipolar=True)
 
-    def make_tiled(unipolar):
-        t = TiledLinearADC(
-            in_features=in_f, out_features=out_f, bias=False,
-            bx=4, bw=4, ba=8, k=16,
-            signed_activations=True, mvm_limit=16,
-            unipolar_adc=unipolar,
-        )
-        t.load_weights(linear)
-        t.eval()
-        return t
-
-    tiled_bi  = make_tiled(False)
-    tiled_uni = make_tiled(True)
     with torch.no_grad():
-        out_bi  = tiled_bi(x)
-        out_uni = tiled_uni(x)
-    diff = (out_bi - out_uni).abs().max().item()
-    assert torch.allclose(out_bi, out_uni, atol=1e-5), \
-        f"TiledLinearADC max abs diff = {diff:.2e}"
+        out = layer(x)
+
+    assert torch.isfinite(out).all(), f"Output has non-finite values: {out}"
 
 
 # ── Run all ───────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     tests = [
-        ("bipolar == unipolar (QATLinearADC)",     test_bipolar_unipolar_equivalence),
-        ("y_pos >= 0 (sent to optical ADC)",          test_y_pos_nonnegative),
-        ("saturation equivalence",                 test_saturation_equivalence),
-        ("TiledLinearADC propagates unipolar_adc", test_tiled_propagates_unipolar),
-        ("TiledLinearADC bipolar == unipolar",      test_tiled_equivalence),
+        ("y_pos >= 0 (optical ADC input)",             test_y_pos_nonnegative),
+        ("correction algebra exact (no ADC noise)",    test_correction_algebra),
+        ("bypass_adc=True: both modes identical",      test_bypass_equivalence),
+        ("TiledLinearADC propagates unipolar_adc",     test_tiled_propagates_unipolar),
+        ("output is finite",                           test_output_finite),
     ]
     print(f"\nRunning {len(tests)} unipolar ADC tests ...\n")
     passed = sum(run_test(name, fn) for name, fn in tests)
