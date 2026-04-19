@@ -179,7 +179,7 @@ def test_tiled_equivalence():
 if __name__ == "__main__":
     tests = [
         ("bipolar == unipolar (QATLinearADC)",     test_bipolar_unipolar_equivalence),
-        ("z_shifted >= 0",                         test_z_shifted_nonnegative),
+        ("y_pos >= 0 (sent to optical ADC)",          test_y_pos_nonnegative),
         ("saturation equivalence",                 test_saturation_equivalence),
         ("TiledLinearADC propagates unipolar_adc", test_tiled_propagates_unipolar),
         ("TiledLinearADC bipolar == unipolar",      test_tiled_equivalence),
