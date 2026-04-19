@@ -6,7 +6,7 @@ Llama-3.2-1B on analog hardware with Analog-to-Digital Converters (ADCs).
 The four configurations below tell the full story: how much PPL each component
 of the pipeline costs, and how post-ADC LoRA correction recovers it.
 
----
+---но 
 
 ## Results (Llama-3.2-1B)
 
@@ -72,10 +72,26 @@ For each activation vector **x** ∈ ℝ^{in}:
    `z_int = x_int_tile · W_int_tile^T`  
    Result range: `|z_int| ≤ tile_in · q_x · q_w`
 
-4. **ADC floor quantization:**
+4. **ADC floor quantization (bipolar model):**
 ```
-z = floor(z_int / δ)
+z = clamp(floor(z_int / δ),  na, pa)     na = −2^(ba−1),  pa = 2^(ba−1) − 1
 ```
+e.g. for ba=8: na=−128, pa=127  →  z ∈ [−128, 127]
+
+5. **Unipolar ADC (optical hardware, this branch):**
+
+The physical device outputs only non-negative codes `[0, 2^ba − 1]`.
+We shift the integer dot product before the ADC and subtract after:
+```
+offset = 2^(ba−1)                             # = 128 for ba=8
+z_shifted_raw = floor(z_int / δ) + offset    # shift to positive region
+z_shifted     = clamp(z_shifted_raw, 0, 2^ba − 1)   # physical ADC range [0, 255]
+z             = z_shifted − offset            # recover signed → same as bipolar
+```
+
+Note: `z_shifted_raw` can still be negative when the dot product underflows
+below `−M` (extreme saturation case with k>1). The clamp to `[0, …]` models
+the hardware saturating at zero — identical to the bipolar clamp at `na`.
 
 ### Delta (ADC Resolution)
 
