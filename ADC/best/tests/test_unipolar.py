@@ -1,14 +1,9 @@
 """
-Tests for unipolar ADC mode in QATLinearADC / TiledLinearADC.
+Tests for unipolar ADC mode — 4-quadrant decomposition.
 Run from ADC/best/:  python tests/test_unipolar.py
 
-Unipolar != bipolar in output (delta is 2x coarser — 256 bins cover 4x wider range).
-We test:
-  1. y_pos (input to optical ADC) is non-negative
-  2. Correction algebra is exact (without ADC floor quantisation noise)
-  3. bypass_adc=True gives identical results for both modes
-  4. TiledLinearADC propagates the flag to all tiles
-  5. Output is finite and bounded
+x = x+ - x-,  w = w+ - w-  (all components >= 0)
+y = x+·w+ + x-·w- - x+·w- - x-·w+   (4 positive MVMs, no DC offset)
 """
 
 import sys, os
@@ -49,10 +44,10 @@ def run_test(name, fn):
         return False
 
 
-# ── Test 1: y_pos (what the optical ADC sees) is non-negative ─────────────────
+# ── Test 1: All 4 branch inputs and MVMs are non-negative ────────────────────
 
-def test_y_pos_nonnegative():
-    """x_pos and w_pos are in [0, 2*q], so y_pos = x_pos · w_pos^T >= 0."""
+def test_all_branches_nonnegative():
+    """x+, x-, w+, w- and all 4 y_branch values must be >= 0."""
     torch.manual_seed(1)
     in_f, out_f = 16, 8
     x = torch.randn(4, in_f)
@@ -68,28 +63,27 @@ def test_y_pos_nonnegative():
         code_w = torch.round(layer.weight / s_w).clamp(
             layer.weight_quantizer.qmin, layer.weight_quantizer.qmax)
 
-        q_x = float(-layer.activation_quantizer.qmin)
-        q_w = float(-layer.weight_quantizer.qmin)
-        x_pos = code_x + q_x
-        w_pos = code_w + q_w
-        y_pos = F.linear(x_pos, w_pos, None)
+        x_pos = code_x.clamp(min=0)
+        x_neg = (-code_x).clamp(min=0)
+        w_pos = code_w.clamp(min=0)
+        w_neg = (-code_w).clamp(min=0)
 
-    assert x_pos.min().item() >= 0, f"x_pos negative: min={x_pos.min().item()}"
-    assert w_pos.min().item() >= 0, f"w_pos negative: min={w_pos.min().item()}"
-    assert y_pos.min().item() >= 0, f"y_pos negative (sent to ADC): min={y_pos.min().item()}"
+        y_pp = F.linear(x_pos, w_pos, None)
+        y_pn = F.linear(x_pos, w_neg, None)
+        y_np = F.linear(x_neg, w_pos, None)
+        y_nn = F.linear(x_neg, w_neg, None)
+
+    for name, t in [("x_pos", x_pos), ("x_neg", x_neg),
+                    ("w_pos", w_pos), ("w_neg", w_neg),
+                    ("y_pp",  y_pp),  ("y_pn",  y_pn),
+                    ("y_np",  y_np),  ("y_nn",  y_nn)]:
+        assert t.min().item() >= 0, f"{name} has negative values: min={t.min().item()}"
 
 
-# ── Test 2: Correction algebra is exact (zero ADC noise) ──────────────────────
+# ── Test 2: 4-quadrant algebra is exact without ADC ──────────────────────────
 
-def test_correction_algebra():
-    """
-    Without ADC floor noise, the zero-point correction must exactly recover
-    code_x · code_w^T from y_pos.
-
-    y_pos = (code_x + q_x)·(code_w + q_w)^T
-          = code_x·code_w^T  +  correction
-    → code_x·code_w^T  =  y_pos  −  correction
-    """
+def test_4quadrant_algebra():
+    """x+·w+ + x-·w- - x+·w- - x-·w+ must equal code_x · code_w^T exactly."""
     torch.manual_seed(2)
     in_f, out_f = 16, 8
     x = torch.randn(4, in_f)
@@ -105,25 +99,21 @@ def test_correction_algebra():
         code_w = torch.round(layer.weight / s_w).clamp(
             layer.weight_quantizer.qmin, layer.weight_quantizer.qmax)
 
-        q_x = float(-layer.activation_quantizer.qmin)
-        q_w = float(-layer.weight_quantizer.qmin)
+        x_pos = code_x.clamp(min=0);  x_neg = (-code_x).clamp(min=0)
+        w_pos = code_w.clamp(min=0);  w_neg = (-code_w).clamp(min=0)
 
-        y_pos      = F.linear(code_x + q_x, code_w + q_w, None)
-        correction = (q_x * code_w.sum(dim=1)
-                      + q_w * code_x.sum(dim=-1, keepdim=True)
-                      + q_x * q_w * in_f)
-        y_int_ref  = F.linear(code_x, code_w, None)
+        y_4q  = (F.linear(x_pos, w_pos, None) + F.linear(x_neg, w_neg, None)
+                 - F.linear(x_pos, w_neg, None) - F.linear(x_neg, w_pos, None))
+        y_ref = F.linear(code_x, code_w, None)
 
-        recovered = y_pos - correction
-
-    diff = (recovered - y_int_ref).abs().max().item()
-    assert diff < 1e-4, f"Correction algebra wrong: max diff = {diff:.2e}"
+    diff = (y_4q - y_ref).abs().max().item()
+    assert diff < 1e-4, f"4-quadrant algebra wrong: max diff = {diff:.2e}"
 
 
-# ── Test 3: bypass_adc=True gives identical results for both modes ─────────────
+# ── Test 3: bypass_adc=True gives identical results for both modes ────────────
 
 def test_bypass_equivalence():
-    """With bypass_adc=True both modes skip the ADC floor and give identical output."""
+    """With bypass_adc=True both modes give identical output."""
     torch.manual_seed(3)
     in_f, out_f = 16, 8
     x = torch.randn(4, in_f)
@@ -177,18 +167,18 @@ def test_output_finite():
     with torch.no_grad():
         out = layer(x)
 
-    assert torch.isfinite(out).all(), f"Output has non-finite values: {out}"
+    assert torch.isfinite(out).all(), f"Output has non-finite values"
 
 
 # ── Run all ───────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     tests = [
-        ("y_pos >= 0 (optical ADC input)",             test_y_pos_nonnegative),
-        ("correction algebra exact (no ADC noise)",    test_correction_algebra),
-        ("bypass_adc=True: both modes identical",      test_bypass_equivalence),
-        ("TiledLinearADC propagates unipolar_adc",     test_tiled_propagates_unipolar),
-        ("output is finite",                           test_output_finite),
+        ("all branch inputs/MVMs >= 0",            test_all_branches_nonnegative),
+        ("4-quadrant algebra exact (no ADC noise)", test_4quadrant_algebra),
+        ("bypass_adc=True: both modes identical",   test_bypass_equivalence),
+        ("TiledLinearADC propagates unipolar_adc",  test_tiled_propagates_unipolar),
+        ("output is finite",                        test_output_finite),
     ]
     print(f"\nRunning {len(tests)} unipolar ADC tests ...\n")
     passed = sum(run_test(name, fn) for name, fn in tests)

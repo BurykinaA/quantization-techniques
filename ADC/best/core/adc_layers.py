@@ -360,50 +360,43 @@ class QATLinearADC(nn.Linear):
         if self.bypass_adc:
             adc_output = y_int
         elif getattr(self, 'unipolar_adc', False):
-            # Unipolar ADC: weights and activations must be non-negative.
-            # Zero-point shift: shift both code_x and code_w to [0, 2*q] before MVM,
-            # then subtract correction terms in digital domain after ADC.
+            # 4-quadrant decomposition for positive-only optical hardware.
             #
-            # x_pos = code_x + q_x,  w_pos = code_w + q_w   (both in [0, 2*q])
-            # y_pos = x_pos · w_pos^T
-            #       = code_x·code_w^T
-            #         + q_x · rowsum(code_w)         [out_features]
-            #         + q_w · colsum(code_x)          [batch, 1]
-            #         + q_x · q_w · tile_in           scalar
+            # Signed codes are split into positive/negative parts:
+            #   x = x⁺ − x⁻,   w = w⁺ − w⁻   (all parts ≥ 0)
+            # Then:
+            #   y = x⁺·w⁺ + x⁻·w⁻ − x⁺·w⁻ − x⁻·w⁺
             #
-            # ADC reads y_pos in [0, tile_in·15·15] with delta_uni covering the full range.
-            # After ADC, subtract the correction → recovers code_x·code_w^T.
-            q_x = float(-qmin_x)          # = |qmin_x|, e.g. 8 for signed INT4
-            q_w = float(-w_q.qmin)        # = |qmin_w|, e.g. 8 for signed INT4
+            # Each branch is a non-negative MVM → safe for optical ADC.
+            # No DC offset: ADC bins are not wasted on a zero-point baseline.
+            # Delta per branch uses the same k-scaled formula as bipolar:
+            #   δ_branch = tile_in · max_a · max_b / ((2^ba − 1) · k)
+            # giving δ ≈ 3–4 per branch, vs bipolar ≈ 6.1.
+            # Combined error ≈ 4 × 3.5 = 14 (vs shift-both ≈ 226).
 
-            x_pos = code_x + q_x          # [0, qmax_x + q_x] = [0, 15]
-            w_pos = code_w + q_w          # [0, qmax_w + q_w] = [0, 15]
+            x_pos = code_x.clamp(min=0)        # [0, qmax_x]  e.g. [0, 7]
+            x_neg = (-code_x).clamp(min=0)     # [0, |qmin_x|] e.g. [0, 8]
+            w_pos = code_w.clamp(min=0)        # [0, qmax_w]  e.g. [0, 7]
+            w_neg = (-code_w).clamp(min=0)     # [0, |qmin_w|] e.g. [0, 8]
 
-            y_pos = F.linear(x_pos, w_pos, bias=None)  # ∈ [0, tile_in·15·15]
+            qmax_x_f = float(qmax_x)           # e.g. 7
+            qmin_x_f = float(-qmin_x)          # e.g. 8
+            qmax_w_f = float(w_q.qmax)         # e.g. 7
+            qmin_w_f = float(-w_q.qmin)        # e.g. 8
+            pa_uni   = (1 << self.ba) - 1      # 255 for ba=8
+            in_f     = float(self.in_features)
 
-            # Delta for unsigned range: covers the full [0, y_pos_max] without saturation.
-            # y_pos_max = tile_in · (qmax_x + q_x) · (qmax_w + q_w)
-            # delta_uni  = y_pos_max / (2^ba − 1)
-            # (no k factor — k in the bipolar formula over-commits resolution, but for
-            #  unipolar the correction offset is so large that any saturation causes NaN)
-            unsigned_range_x = act_levels + q_x   # qmax_x - qmin_x, e.g. 15
-            unsigned_range_w = float(w_q.qmax) + q_w  # qmax_w - qmin_w, e.g. 15
-            pa_uni = (1 << self.ba) - 1            # = 255 for ba=8
-            delta_uni = (float(self.in_features) * unsigned_range_x * unsigned_range_w
-                         / float(pa_uni))
+            def _adc_branch(y_b, max_a, max_b):
+                """ADC one non-negative branch with k-scaled delta."""
+                d = in_f * max_a * max_b / (float(pa_uni) * float(self.k))
+                return torch.clamp(floor_ste(y_b / d), 0, pa_uni) * d
 
-            y_pos_codes = floor_ste(y_pos / delta_uni)
-            y_pos_codes = torch.clamp(y_pos_codes, 0, pa_uni)
-            y_pos_adc = y_pos_codes * delta_uni   # in integer dot-product units
+            y_pp = _adc_branch(F.linear(x_pos, w_pos, None), qmax_x_f, qmax_w_f)
+            y_pn = _adc_branch(F.linear(x_pos, w_neg, None), qmax_x_f, qmin_w_f)
+            y_np = _adc_branch(F.linear(x_neg, w_pos, None), qmin_x_f, qmax_w_f)
+            y_nn = _adc_branch(F.linear(x_neg, w_neg, None), qmin_x_f, qmin_w_f)
 
-            # Digital correction (exact, no ADC involved)
-            W_rowsum = code_w.sum(dim=1)                        # [out_features]
-            x_colsum = code_x.sum(dim=-1, keepdim=True)         # [batch, 1]
-            correction = (q_x * W_rowsum
-                          + q_w * x_colsum
-                          + q_x * q_w * self.in_features)
-
-            adc_output = y_pos_adc - correction
+            adc_output = y_pp - y_pn - y_np + y_nn
         else:
             y_adc_codes = floor_ste(y_int / self.delta)
             y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)
