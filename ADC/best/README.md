@@ -6,23 +6,69 @@ Llama-3.2-1B on analog hardware with Analog-to-Digital Converters (ADCs).
 The four configurations below tell the full story: how much PPL each component
 of the pipeline costs, and how post-ADC LoRA correction recovers it.
 
----но 
+---
 
 ## Results (Llama-3.2-1B)
+
+### Unipolar ADC — 4-quadrant decomposition (this branch)
 
 | Config | Description | Wiki PPL | C4 PPL | Latency (ms) | Tok/s |
 |---|---|---|---|---|---|
 | `fp` | Full precision (FP16) | **8.68** | **13.13** | 11.4 | 44888 |
 | `int4_no_adc` | INT4 FlatQuant, no ADC floor | 12.56 | 20.13 | 74.8 | 6847 |
-| `best_ptq` | INT4 FlatQuant + ADC hardware | 26.78 | 45.40 | 444.0 | 1153 |
-| `best_lora` | INT4 + ADC + LoRA correction | **14.01** | **23.14** | 447.8 | 1143 |
+| `best_ptq` | INT4 FlatQuant + unipolar ADC | **18.08** | **28.41** | 444.0 | 1153 |
+| `best_lora` | INT4 + unipolar ADC + LoRA | TBD | TBD | — | — |
 
 Key observations:
 - **INT4 cost alone** (no ADC): FP 8.68 → INT4 12.56 (+3.9 PPL)
-- **ADC hardware overhead**: INT4 12.56 → INT4+ADC 26.78 (+14.2 PPL)
-- **LoRA correction**: INT4+ADC 26.78 → INT4+ADC+LoRA **14.01** (−12.8 PPL)
-- **Final result beats INT8 PTQ** (best INT8 PTQ ≈ 14.4 PPL)
-- **Latency cost of ADC**: 74.8 ms → 444.0 ms (×5.9) — LoRA adds negligible overhead (+3.8 ms)
+- **Unipolar ADC overhead**: INT4 12.56 → INT4+ADC **18.08** (+5.5 PPL)
+- **LoRA correction**: pending
+
+### Bipolar ADC — previous baseline
+
+| Config | Wiki PPL | C4 PPL |
+|---|---|---|
+| `best_ptq` | 26.78 | 45.40 |
+| `best_lora` | **14.01** | **23.14** |
+
+### Why unipolar PTQ is better: +8.7 PPL on WikiText2
+
+The improvement from 26.78 → 18.08 comes from better ADC resolution per branch.
+
+**Bipolar model (old):**
+```
+y_int ∈ [−M, +M],   M = tile_in · q_x · q_w = 256 · 7 · 7 = 12544
+δ = 2M / (2^ba · k) = 25088 / (256 · 16) ≈ 6.12
+```
+The ADC must cover the full signed range [−12544, +12544] with 256 bins.
+Typical dot products in a well-calibrated layer have σ ≈ 30–50, so most outputs
+fall within a few dozen ADC levels — only ~0.5% of the range is actually used.
+
+**Unipolar 4-quadrant (new):**
+
+Signed inputs are split into positive and negative parts:
+```
+x = x⁺ − x⁻,   x⁺ = max(code_x, 0),   x⁻ = max(−code_x, 0)
+w = w⁺ − w⁻,   w⁺ = max(code_w, 0),   w⁻ = max(−code_w, 0)
+```
+
+Four non-negative MVMs replace the single signed one:
+```
+y = x⁺·w⁺ + x⁻·w⁻ − x⁺·w⁻ − x⁻·w⁺
+```
+
+Each branch is guaranteed ≥ 0, so the ADC fits its range exactly:
+```
+δ_branch = tile_in · qmax_a · qmax_b / ((2^ba − 1) · k)
+         = 256 · 7 · 7 / (255 · 16) ≈ 3.06     (2× finer than bipolar)
+```
+
+There is no DC offset: the four branch outputs cancel the zero-point bias
+exactly in the digital domain, so no ADC bins are wasted on a constant baseline.
+Each branch's full 256-level range is used for signal, not offset.
+
+Combined effect: effective ADC resolution doubles across all four branches,
+which directly reduces the dead-zone fraction and reconstruction error.
 
 ---
 
