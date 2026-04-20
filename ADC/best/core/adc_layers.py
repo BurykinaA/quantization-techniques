@@ -387,19 +387,30 @@ class QATLinearADC(nn.Linear):
             in_f     = float(self.in_features)
 
             def _adc_branch(y_b, max_a, max_b):
-                """ADC one non-negative branch with k-scaled delta."""
                 d = in_f * max_a * max_b / (float(pa_uni) * float(self.k))
                 return torch.clamp(floor_ste(y_b / d), 0, pa_uni) * d
 
-            # Accumulate branches one at a time to reduce peak GPU memory.
-            # Holding all 4 simultaneously (4× output size) causes OOM in LoRA training.
-            adc_output = _adc_branch(F.linear(x_pos, w_pos, None), qmax_x_f, qmax_w_f)
-            _b = _adc_branch(F.linear(x_neg, w_neg, None), qmin_x_f, qmin_w_f)
-            adc_output = adc_output + _b;  del _b
-            _b = _adc_branch(F.linear(x_pos, w_neg, None), qmax_x_f, qmin_w_f)
-            adc_output = adc_output - _b;  del _b
-            _b = _adc_branch(F.linear(x_neg, w_pos, None), qmin_x_f, qmax_w_f)
-            adc_output = adc_output - _b;  del _b
+            def _run_4q(x_pos, x_neg, w_pos, w_neg):
+                """4-quadrant MVMs, accumulated to keep peak at 2 output tensors."""
+                acc = _adc_branch(F.linear(x_pos, w_pos, None), qmax_x_f, qmax_w_f)
+                _b  = _adc_branch(F.linear(x_neg, w_neg, None), qmin_x_f, qmin_w_f)
+                acc = acc + _b;  del _b
+                _b  = _adc_branch(F.linear(x_pos, w_neg, None), qmax_x_f, qmin_w_f)
+                acc = acc - _b;  del _b
+                _b  = _adc_branch(F.linear(x_neg, w_pos, None), qmin_x_f, qmax_w_f)
+                acc = acc - _b;  del _b
+                return acc
+
+            if self.training:
+                # Gradient checkpointing: forward skips saving branch intermediates
+                # (ClampBackward saves 64 MiB per branch × 4 = 256 MiB otherwise).
+                # Backward re-runs the 4 MVMs — 2× compute, but no OOM.
+                import torch.utils.checkpoint as _ckpt
+                adc_output = _ckpt.checkpoint(
+                    _run_4q, x_pos, x_neg, w_pos, w_neg, use_reentrant=False
+                )
+            else:
+                adc_output = _run_4q(x_pos, x_neg, w_pos, w_neg)
         else:
             y_adc_codes = floor_ste(y_int / self.delta)
             y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)
