@@ -371,22 +371,26 @@ class QATLinearADC(nn.Linear):
             #         + q_w · colsum(code_x)          [batch, 1]
             #         + q_x · q_w · tile_in           scalar
             #
-            # ADC reads y_pos (non-negative).  delta is scaled ×2 because the
-            # unsigned range [0, 4M] is 2× wider than the signed range [−M, +M].
+            # ADC reads y_pos in [0, tile_in·15·15] with delta_uni covering the full range.
             # After ADC, subtract the correction → recovers code_x·code_w^T.
-            q_x = float(-qmin_x)          # = 7 for signed INT4  (= |qmin|)
-            q_w = float(-w_q.qmin)        # = 7 for signed INT4
+            q_x = float(-qmin_x)          # = |qmin_x|, e.g. 8 for signed INT4
+            q_w = float(-w_q.qmin)        # = |qmin_w|, e.g. 8 for signed INT4
 
-            x_pos = code_x + q_x          # [0, 2*q_x]
-            w_pos = code_w + q_w          # [0, 2*q_w]
+            x_pos = code_x + q_x          # [0, qmax_x + q_x] = [0, 15]
+            w_pos = code_w + q_w          # [0, qmax_w + q_w] = [0, 15]
 
-            y_pos = F.linear(x_pos, w_pos, bias=None)  # ∈ [0, tile_in*(2q_x)*(2q_w)]
+            y_pos = F.linear(x_pos, w_pos, bias=None)  # ∈ [0, tile_in·15·15]
 
-            # Delta for unsigned range: 2× larger than bipolar delta
-            delta_uni = 2.0 * self.delta
-            pa_uni = -self.na + self.pa   # = 255 for ba=8
-            if not hasattr(self, '_adc_offset_codes'):
-                self._adc_offset_codes = -self.na
+            # Delta for unsigned range: covers the full [0, y_pos_max] without saturation.
+            # y_pos_max = tile_in · (qmax_x + q_x) · (qmax_w + q_w)
+            # delta_uni  = y_pos_max / (2^ba − 1)
+            # (no k factor — k in the bipolar formula over-commits resolution, but for
+            #  unipolar the correction offset is so large that any saturation causes NaN)
+            unsigned_range_x = act_levels + q_x   # qmax_x - qmin_x, e.g. 15
+            unsigned_range_w = float(w_q.qmax) + q_w  # qmax_w - qmin_w, e.g. 15
+            pa_uni = (1 << self.ba) - 1            # = 255 for ba=8
+            delta_uni = (float(self.in_features) * unsigned_range_x * unsigned_range_w
+                         / float(pa_uni))
 
             y_pos_codes = floor_ste(y_pos / delta_uni)
             y_pos_codes = torch.clamp(y_pos_codes, 0, pa_uni)
