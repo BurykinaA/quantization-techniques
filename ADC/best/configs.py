@@ -1,18 +1,20 @@
 """
-Configuration presets for four ADC-aware quantization configurations.
+Configuration presets for ADC-aware quantization configurations.
 
 Each config represents one step in the quantization pipeline:
-  fp         → full precision, no quantization
-  int4_no_adc → INT4 FlatQuant transforms, evaluated WITHOUT ADC floor
-  best_ptq   → INT4 FlatQuant transforms + ADC hardware model
-  best_lora  → best_ptq + post-ADC LoRA correction
+  fp             → full precision, no quantization
+  int4_no_adc    → INT4 FlatQuant transforms, evaluated WITHOUT ADC floor
+  best_ptq       → INT4 FlatQuant transforms + ADC hardware model  (global k)
+  best_lora      → best_ptq + post-ADC LoRA correction
+  best_ptq_k     → best_ptq + automatic per-layer k search (no FlatQuant recal)
+  best_ptq_k_recal → best_ptq_k + FlatQuant recalibrated with per-layer k
 
 Configs 2–4 use IDENTICAL FlatQuant training (staged + diagonal + propagation α=0.5).
 The difference is evaluation mode and whether LoRA correction is applied.
 """
 
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import Dict, Tuple
 
 
 @dataclass
@@ -96,6 +98,15 @@ class _SharedFlatQuantConfig(BaseConfig):
     # WandB project for result logging (empty string = no logging)
     wandb_project: str = "adc-optical-ptq"
 
+    # Per-layer k: maps TiledLinearADC module path (or name substring) → k value.
+    # Empty dict means use the global k for all layers.
+    # Populated automatically by search_k_per_layer() in pipeline.py.
+    k_per_layer: Dict[str, int] = field(default_factory=dict)
+    # Candidate k values to sweep during the dead-rate search.
+    k_search_candidates: Tuple[int, ...] = (4, 8, 16, 32, 64)
+    # Accept the largest k whose dead_rate ≤ this threshold (5% → 95% of outputs useful).
+    k_search_target_dead_rate: float = 0.05
+
 
 @dataclass
 class INT4NoADCConfig(_SharedFlatQuantConfig):
@@ -157,10 +168,45 @@ class BestLoRAConfig(BestPTQConfig):
     lora_lr: float = 1e-4
 
 
-# All configs in order: tells the story FP → INT4 → INT4+ADC → INT4+ADC+LoRA
+@dataclass
+class BestPTQKConfig(BestPTQConfig):
+    """
+    BestPTQConfig + automatic per-layer k search (no FlatQuant recalibration).
+
+    After FlatQuant calibration, runs one bypass forward pass to capture y_int
+    statistics per layer, picks the largest k where dead_rate ≤ 5%, applies the
+    found k values in-place to the TiledLinearADC layers, then evaluates.
+
+    FlatQuant transforms were trained with global k=16 (slight delta mismatch),
+    but transforms are already near-optimal — this is a fast, strong baseline.
+    """
+    name: str = "best_ptq_k"
+
+
+@dataclass
+class BestPTQKRecalConfig(BestPTQKConfig):
+    """
+    BestPTQKConfig + FlatQuant recalibrated with the found per-layer k.
+
+    Pipeline:
+      1. Train FlatQuant with global k (same as best_ptq) — discovers k_per_layer
+      2. Reload FP model, re-run FlatQuant with per-layer k active in each
+         FlatQuantLinear's ADC simulation → transforms optimised for actual δ
+      3. Evaluate
+
+    Quality ceiling: transforms are trained on the correct per-layer delta.
+    Cost: ~2× total FlatQuant time vs best_ptq_k.
+    """
+    name: str = "best_ptq_k_recal"
+    fq_recal_with_k: bool = True
+
+
+# All configs in order: tells the story FP → INT4 → INT4+ADC → INT4+ADC+LoRA → per-layer k
 ALL_CONFIGS = [
     FPConfig(),
     INT4NoADCConfig(),
     BestPTQConfig(),
     BestLoRAConfig(),
+    BestPTQKConfig(),
+    BestPTQKRecalConfig(),
 ]

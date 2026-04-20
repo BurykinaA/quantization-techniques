@@ -268,6 +268,9 @@ class QATLinearADC(nn.Linear):
         self.bypass_adc = False
         # When True, skip ALL quantization (plain F.linear).
         self.bypass_all = False
+        # Stats capture for per-layer k search (search_k_per_layer in pipeline.py).
+        self._capturing = False
+        self._y_int_samples: list = []
         # PACT-style learned activation clip threshold (set from FlatQuantLinear
         # after ADC conversion).  When not None, replaces per-token amax with a
         # fixed scalar clip value so activation codes are not outlier-dominated.
@@ -286,23 +289,31 @@ class QATLinearADC(nn.Linear):
     def set_adc_bits(self, ba: int):
         """
         Dynamically set ADC bit precision (for BitAug).
-        
+
         This recalculates delta (Eq. 3) and clipping values based on new ba.
         Used by BitAug to pass different bit precisions during training.
-        
+
         Args:
             ba: New ADC bit precision
         """
         self.ba = ba
-        
+
         # Recalculate delta using precomputed constants (Paper Equation 3)
         denom = float((2 ** ba) * self.k)
         self.delta = (2.0 * float(self.in_features) * self._activation_level_magnitude * self._weight_level_max) / denom
-        
+
         # Recalculate clipping values
         self.na = -(2 ** (ba - 1))
         self.pa = 2 ** (ba - 1) - 1
         self._adc_offset_codes = -self.na
+
+    def set_k(self, new_k: int) -> None:
+        """Update ADC parallelism k and recompute delta in-place."""
+        self.k = new_k
+        denom = float((2 ** self.ba) * self.k)
+        self.delta = (2.0 * float(self.in_features)
+                      * self._activation_level_magnitude
+                      * self._weight_level_max) / denom
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.bypass_all:
@@ -356,6 +367,14 @@ class QATLinearADC(nn.Linear):
         # and giving the ADC finer resolution.
 
         y_int = F.linear(code_x, code_w, bias=None)
+
+        if self._capturing:
+            with torch.no_grad():
+                flat = y_int.detach().float().abs().flatten()
+                if flat.numel() > 10_000:
+                    idx = torch.randperm(flat.numel(), device=flat.device)[:10_000]
+                    flat = flat[idx]
+                self._y_int_samples.append(flat.cpu())
 
         if self.bypass_adc:
             adc_output = y_int
@@ -527,14 +546,14 @@ class TiledLinearADC(nn.Module):
             tile.set_quantizer_mode(mode)
     
     def set_adc_bits(self, ba: int):
-        """
-        Dynamically set ADC bit precision for all tiles (for BitAug).
-        
-        Args:
-            ba: New ADC bit precision
-        """
+        """Dynamically set ADC bit precision for all tiles (for BitAug)."""
         for tile in self.tiles:
             tile.set_adc_bits(ba)
+
+    def set_k(self, new_k: int) -> None:
+        """Update ADC parallelism k for all tiles in-place."""
+        for tile in self.tiles:
+            tile.set_k(new_k)
     
     def get_adc_bits(self) -> int:
         """Get current ADC bit precision from first tile"""

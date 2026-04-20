@@ -24,8 +24,10 @@ Expected results (Llama-3.2-1B):
 import json
 import logging
 import os
+import re
 import sys
 import time
+from collections import Counter
 
 try:
     import wandb
@@ -45,12 +47,14 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from configs import (
     BaseConfig, FPConfig, INT4NoADCConfig, BestPTQConfig, BestLoRAConfig,
+    BestPTQKConfig, BestPTQKRecalConfig,
     ALL_CONFIGS, _SharedFlatQuantConfig,
 )
 from eval import compute_perplexity, load_eval_encodings, measure_latency
 from core.adc_layers import TiledLinearADC, QATLinearADC
 from core.adc_lora import apply_adc_lora, calibrate_adc_lora
 from core.flat_quant import (
+    FlatQuantLinear,
     apply_flatquant_to_model,
     calibrate_flat_quant,
     reparameterize_model as fq_reparameterize_model,
@@ -159,6 +163,19 @@ def build_calibration_loader(tokenizer, cfg: _SharedFlatQuantConfig) -> DataLoad
 # Step 2: FlatQuant calibration + ADC conversion + ADC calibration
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _get_k_for_layer(cfg: _SharedFlatQuantConfig, full_name: str) -> int:
+    """Return the k value for this layer: check k_per_layer first, fall back to cfg.k."""
+    kpl = getattr(cfg, 'k_per_layer', {})
+    if not kpl:
+        return cfg.k
+    if full_name in kpl:
+        return kpl[full_name]
+    for pattern, k in kpl.items():
+        if pattern in full_name:
+            return k
+    return cfg.k
+
+
 def _replace_linear_with_adc(model: nn.Module, cfg: _SharedFlatQuantConfig) -> nn.Module:
     """
     Replace all nn.Linear layers (except embed_tokens and lm_head) with
@@ -180,7 +197,7 @@ def _replace_linear_with_adc(model: nn.Module, cfg: _SharedFlatQuantConfig) -> n
                     in_features=child.in_features,
                     out_features=child.out_features,
                     bias=(child.bias is not None),
-                    bx=cfg.bx, bw=cfg.bw, ba=cfg.ba, k=cfg.k,
+                    bx=cfg.bx, bw=cfg.bw, ba=cfg.ba, k=_get_k_for_layer(cfg, full),
                     ashift=False,
                     signed_activations=True,
                     mvm_limit=cfg.mvm_limit,
@@ -298,12 +315,15 @@ class _ADCCalibrator:
 def _fq_cache_key(cfg: _SharedFlatQuantConfig) -> str:
     """Short hash of all FlatQuant+ADC config params that affect the trained model."""
     import hashlib
+    kpl = getattr(cfg, 'k_per_layer', {})
+    kpl_str = "_".join(f"{k}:{v}" for k, v in sorted(kpl.items())) if kpl else "global"
     key_str = (f"{cfg.fq_epochs}_{cfg.fq_stage_b_epochs}_{cfg.fq_nsamples}"
                f"_{cfg.fq_lr}_{cfg.fq_w_bits}_{cfg.fq_a_bits}"
                f"_{cfg.bx}_{cfg.bw}_{cfg.ba}_{cfg.k}_{cfg.mvm_limit}"
                f"_{cfg.fq_add_diag}_{cfg.fq_lwc}_{cfg.fq_lac}"
                f"_{cfg.fq_stage_b_prop_alpha}_{cfg.fq_stage_b_diag_attn}"
-               f"_unipolar{getattr(cfg, 'unipolar_adc', False)}")
+               f"_unipolar{getattr(cfg, 'unipolar_adc', False)}"
+               f"_kpl{kpl_str}")
     return hashlib.md5(key_str.encode()).hexdigest()[:10]
 
 
@@ -399,6 +419,177 @@ def apply_flatquant(model: nn.Module, loader: DataLoader, cfg: _SharedFlatQuantC
     # ── Save cache ───────────────────────────────────────────────────────────
     if cache_path:
         logger.info(f"Saving FlatQuant+ADC model to cache: {cache_path}")
+        torch.save(model, cache_path)
+
+    return model
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-layer k search
+# ─────────────────────────────────────────────────────────────────────────────
+
+def search_k_per_layer(
+    model: nn.Module,
+    cfg: _SharedFlatQuantConfig,
+    loader: DataLoader,
+    device: torch.device,
+) -> dict:
+    """Find the optimal k per TiledLinearADC layer using dead-rate statistics.
+
+    Algorithm:
+      1. Enable stats capture on every QATLinearADC tile.
+      2. Run one forward pass with bypass_adc=True to collect raw y_int samples.
+      3. For each layer, aggregate all tile samples and sweep k candidates.
+         Choose the largest k where dead_rate = mean(|y_int| < δ) ≤ target.
+      4. Return {module_path: k} dict (paths match model.named_modules() output).
+    """
+    candidates = sorted(getattr(cfg, 'k_search_candidates', (4, 8, 16, 32, 64)))
+    target     = getattr(cfg, 'k_search_target_dead_rate', 0.05)
+
+    # Enable capture on all QATLinearADC tiles
+    all_tiles = {name: m for name, m in model.named_modules()
+                 if isinstance(m, QATLinearADC)}
+    for t in all_tiles.values():
+        t._capturing = True
+        t._y_int_samples = []
+
+    # One forward pass in bypass mode (get y_int before ADC quantisation)
+    saved_bypass = {}
+    for name, m in model.named_modules():
+        if isinstance(m, TiledLinearADC):
+            saved_bypass[name] = getattr(m, 'bypass_adc', False)
+            m.set_bypass_adc(True)
+
+    model.eval()
+    with torch.no_grad():
+        for batch in loader:
+            batch = {k: v.to(device) for k, v in batch.items()
+                     if isinstance(v, torch.Tensor)}
+            model(**batch)
+
+    # Restore bypass state
+    for name, m in model.named_modules():
+        if isinstance(m, TiledLinearADC) and name in saved_bypass:
+            m.set_bypass_adc(saved_bypass[name])
+
+    # Aggregate per TiledLinearADC layer (strip ".tiles.N" suffix)
+    from collections import defaultdict
+    layer_samples: dict = defaultdict(list)
+    layer_tile_ref: dict = {}
+    for tile_name, tile in all_tiles.items():
+        if not tile._y_int_samples:
+            continue
+        layer_name = re.sub(r'\.tiles\.\d+$', '', tile_name)
+        layer_samples[layer_name].append(torch.cat(tile._y_int_samples))
+        layer_tile_ref[layer_name] = tile
+        tile._capturing = False
+        tile._y_int_samples = []
+
+    # For each layer pick largest k with dead_rate ≤ target
+    k_per_layer: dict = {}
+    for layer_name, sample_list in layer_samples.items():
+        abs_y = torch.cat(sample_list)
+        tile  = layer_tile_ref[layer_name]
+        M = 2.0 * tile.in_features * tile._activation_level_magnitude * tile._weight_level_max
+
+        best_k = candidates[0]
+        for k in candidates:
+            delta = M / float((2 ** tile.ba) * k)
+            dead_rate = (abs_y < delta).float().mean().item()
+            if dead_rate <= target:
+                best_k = k   # take largest valid k (lowest hardware cost)
+
+        k_per_layer[layer_name] = best_k
+
+    dist = Counter(k_per_layer.values())
+    logger.info(f"  k_per_layer search done — distribution: {dict(sorted(dist.items()))}")
+    return k_per_layer
+
+
+def _apply_flatquant_with_k(
+    model: nn.Module,
+    loader: DataLoader,
+    cfg: _SharedFlatQuantConfig,
+    device: torch.device,
+    cache_dir: str | None,
+) -> nn.Module:
+    """Re-run apply_flatquant with cfg.k_per_layer injected into each FlatQuantLinear.
+
+    After apply_flatquant_to_model creates the wrappers, each FlatQuantLinear's
+    _adc_config['k'] is updated to the per-layer value before calibration starts,
+    so FlatQuant trains with the correct delta for each projection.
+    """
+    cache_path = None
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(cache_dir, f"fq_adc_{_fq_cache_key(cfg)}.pt")
+        if os.path.exists(cache_path):
+            logger.info(f"Loading cached FlatQuant+ADC model (recal): {cache_path}")
+            m = torch.load(cache_path, weights_only=False, map_location=device)
+            return m.to(device)
+        logger.info(f"FlatQuant recal cache not found — will save to: {cache_path}")
+
+    fq_adc_config = dict(bx=cfg.bx, bw=cfg.bw, ba=cfg.ba, k=cfg.k,
+                         mvm_limit=cfg.mvm_limit, signed_activations=True)
+
+    model = apply_flatquant_to_model(
+        model,
+        w_bits=cfg.fq_w_bits, a_bits=cfg.fq_a_bits,
+        add_diag=cfg.fq_add_diag, lwc=cfg.fq_lwc, lac=cfg.fq_lac,
+        adc_config=fq_adc_config,
+    )
+
+    # Inject per-layer k into each FlatQuantLinear's adc_config copy.
+    # Path mapping: FlatQuantLinear at "a.b.q_proj" → TiledLinearADC will be at
+    # "a.b.q_proj.linear", which is the key in k_per_layer.
+    n_updated = 0
+    for name, m in model.named_modules():
+        if isinstance(m, FlatQuantLinear) and m._adc_config is not None:
+            adc_path = name + ".linear"
+            k_val = _get_k_for_layer(cfg, adc_path)
+            if k_val != m._adc_config.get('k'):
+                m._adc_config['k'] = k_val
+                n_updated += 1
+    logger.info(f"  Injected per-layer k into {n_updated} FlatQuantLinear layers")
+
+    logger.info("─── FlatQuant Stage A (recal with per-layer k) ──────────────")
+    model = calibrate_flat_quant(
+        model, dataloader=loader, device=device,
+        nsamples=cfg.fq_nsamples, cali_bsz=cfg.fq_cali_bsz,
+        epochs=cfg.fq_epochs, flat_lr=cfg.fq_lr,
+        add_diag=cfg.fq_add_diag, lwc=cfg.fq_lwc, lac=cfg.fq_lac,
+        propagate_quant_inputs=False, diag_attn=False,
+        diag_mlp=True, diag_mlp_up=True, diag_mlp_down=True,
+    )
+    logger.info("─── FlatQuant Stage B (recal with per-layer k) ──────────────")
+    model = calibrate_flat_quant(
+        model, dataloader=loader, device=device,
+        nsamples=cfg.fq_nsamples, cali_bsz=cfg.fq_cali_bsz,
+        epochs=cfg.fq_stage_b_epochs, flat_lr=cfg.fq_lr * 0.1,
+        add_diag=cfg.fq_add_diag, lwc=cfg.fq_lwc, lac=cfg.fq_lac,
+        propagate_quant_inputs=True,
+        propagate_quant_alpha=cfg.fq_stage_b_prop_alpha,
+        diag_attn=cfg.fq_stage_b_diag_attn,
+        diag_mlp=True, diag_mlp_up=True, diag_mlp_down=True,
+    )
+
+    model = model.to(device)
+    model = fq_reparameterize_model(model)
+    model = _replace_linear_with_adc(model, cfg)   # uses k_per_layer via _get_k_for_layer
+    model = model.to(device)
+
+    _set_bypass_adc(model, bypass=True)
+    calibrator = _ADCCalibrator(model, cfg)
+    calibrator.run(loader)
+    _set_bypass_adc(model, bypass=False)
+    calibrator.apply()
+
+    for _, m in model.named_modules():
+        if hasattr(m, "set_quantizer_mode"):
+            m.set_quantizer_mode("fixed")
+
+    if cache_path:
+        logger.info(f"Saving recal FlatQuant+ADC model to cache: {cache_path}")
         torch.save(model, cache_path)
 
     return model
@@ -545,6 +736,26 @@ def run_config(cfg: BaseConfig, cache_dir: str | None = None) -> dict:
             model = apply_lora(model, loader, cfg, device)
             results = run_evaluation(model, tokenizer, cfg, device)
 
+        elif isinstance(cfg, BestPTQKConfig):
+            # Stage 1: FlatQuant already done (global k).  Discover per-layer k.
+            cfg.k_per_layer = search_k_per_layer(model, cfg, loader, device)
+
+            if getattr(cfg, 'fq_recal_with_k', False):
+                # Variant B: reload FP model, retrain FlatQuant with per-layer k active
+                logger.info("─── Reloading FP model for FlatQuant recalibration ──────────")
+                model_fp2, _, _ = load_model(cfg)
+                model = _apply_flatquant_with_k(model_fp2, loader, cfg, device, cache_dir)
+            else:
+                # Variant A: apply found k in-place (fast, no retrain)
+                n_updated = 0
+                for name, m in model.named_modules():
+                    if isinstance(m, TiledLinearADC) and name in cfg.k_per_layer:
+                        m.set_k(cfg.k_per_layer[name])
+                        n_updated += 1
+                logger.info(f"  Applied per-layer k to {n_updated} TiledLinearADC layers in-place")
+
+            results = run_evaluation(model, tokenizer, cfg, device)
+
         else:
             # BestPTQConfig: full ADC hardware model, no LoRA
             results = run_evaluation(model, tokenizer, cfg, device)
@@ -604,9 +815,10 @@ def main():
     )
     parser.add_argument(
         "--configs", nargs="+",
-        choices=["fp", "int4_no_adc", "best_ptq", "best_lora", "all"],
+        choices=["fp", "int4_no_adc", "best_ptq", "best_lora",
+                 "best_ptq_k", "best_ptq_k_recal", "all"],
         default=["all"],
-        help="Which configs to run (default: all four)",
+        help="Which configs to run (default: all)",
     )
     parser.add_argument("--output_dir", default="./outputs",
                         help="Where to save results.json")
