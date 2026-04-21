@@ -434,25 +434,25 @@ def search_k_per_layer(
     loader: DataLoader,
     device: torch.device,
 ) -> dict:
-    """Find the optimal k per TiledLinearADC layer.
+    """Find the optimal k per TiledLinearADC layer by minimising reconstruction MSE.
 
-    Two criteria, selected by cfg.unipolar_adc:
-
-    Bipolar:
-      Captures raw y_int (bypass mode), uses dead_rate = mean(|y_int| < δ) ≤ target.
-      Picks largest k (coarsest, cheapest) where dead_rate still meets the target.
+    For each layer we capture the raw pre-ADC branch values, then sweep all k
+    candidates and pick the one that gives the lowest mean squared quantisation
+    error.  No threshold tuning required — the criterion directly measures what
+    we care about.
 
     Unipolar (4-quadrant):
-      Captures raw y_pp = x_pos·w_pos (dominant positive branch, NO bypass).
-      Uses saturation_rate = mean(y_pp > sat_thr) ≤ target, where
-        sat_thr(k) = in_features · qmax_x · qmax_w / k
-      k=64 would give sat_thr=196 << y_pp mean (~400–900) → 100% saturation → NaN.
-      Picks largest k (lowest hardware cost) where saturation still meets the target.
+      Captures y_pp = x_pos·w_pos (always ≥ 0).  ADC clips at sat_thr = M_pp/k.
+      MSE(k) = mean( (clamp(floor(y_pp/δ), 0, pa)·δ − y_pp)² )
+      where δ = M_pp / (pa_uni · k),  pa_uni = 2^ba − 1.
+
+    Bipolar:
+      Captures |y_int|.  Symmetric clamp at ±(2^(ba-1)−1)·δ.
+      MSE(k) = mean( (clamp(floor(y/δ), na, pa)·δ − y)² )  (y = signed samples)
     """
     from collections import defaultdict
 
     candidates  = sorted(getattr(cfg, 'k_search_candidates', (4, 8, 16, 32, 64)))
-    target      = getattr(cfg, 'k_search_target_dead_rate', 0.05)
     is_unipolar = getattr(cfg, 'unipolar_adc', False)
 
     all_tiles = {name: m for name, m in model.named_modules()
@@ -460,12 +460,10 @@ def search_k_per_layer(
 
     # ── Forward pass to collect statistics ──────────────────────────────────
     if is_unipolar:
-        # Enable branch capture; run with ADC active so _run_4q executes.
         for t in all_tiles.values():
             t._capturing_branches = True
             t._branch_samples = []
     else:
-        # Bipolar: capture bipolar y_int in bypass mode.
         for t in all_tiles.values():
             t._capturing = True
             t._y_int_samples = []
@@ -510,48 +508,48 @@ def search_k_per_layer(
             tile._capturing = False
             tile._y_int_samples = []
 
-    # ── Pick k per layer ─────────────────────────────────────────────────────
+    # ── Pick k per layer via minimum MSE ────────────────────────────────────
     k_per_layer: dict = {}
     for layer_name, sample_list in layer_samples.items():
-        samples = torch.cat(sample_list)
+        samples = torch.cat(sample_list).float()
         tile    = layer_tile_ref[layer_name]
 
-        # Never go below the global baseline k — only search for improvement.
-        # Going below cfg.k would give coarser δ and worse quality than best_ptq.
-        baseline_k = cfg.k
-        best_k = baseline_k
+        best_k   = candidates[0]
+        best_mse = float('inf')
 
         if is_unipolar:
-            # sat_thr(k) = in_f * qmax_x * qmax_w / k
-            # (full positive branch range compressed into k ADC bins)
-            M_pp = (float(tile.in_features)
-                    * tile._activation_level_magnitude
-                    * tile._weight_level_max)
-            # Diagnostic: log sat_rate at baseline k for first few layers
+            pa_uni = float((1 << tile.ba) - 1)   # 255 for ba=8
+            M_pp   = (float(tile.in_features)
+                      * tile._activation_level_magnitude
+                      * tile._weight_level_max)
+            for k in candidates:
+                d       = M_pp / (pa_uni * float(k))
+                y_quant = torch.clamp(torch.floor(samples / d), 0.0, pa_uni) * d
+                mse     = ((y_quant - samples) ** 2).mean().item()
+                if mse < best_mse:
+                    best_mse = mse
+                    best_k   = k
             if len(k_per_layer) < 3:
-                ref_sat = (samples > M_pp / float(baseline_k)).float().mean().item()
-                logger.info(f"    {layer_name}: sat_rate@k={baseline_k} = {ref_sat:.3f}")
-            # Only try k >= baseline_k so we can only improve, not degrade
-            for k in [c for c in candidates if c >= baseline_k]:
-                sat_thr  = M_pp / float(k)
-                sat_rate = (samples > sat_thr).float().mean().item()
-                if sat_rate <= target:
-                    best_k = k   # largest k (cheapest) without saturation
+                logger.info(f"    {layer_name}: best_k={best_k}  mse={best_mse:.2f}  "
+                            f"y_pp mean={samples.mean():.1f} std={samples.std():.1f}")
         else:
-            M = (2.0 * float(tile.in_features)
-                 * tile._activation_level_magnitude
-                 * tile._weight_level_max)
-            for k in [c for c in candidates if c >= baseline_k]:
-                delta     = M / float((2 ** tile.ba) * k)
-                dead_rate = (samples < delta).float().mean().item()
-                if dead_rate <= target:
-                    best_k = k
+            pa = float(2 ** (tile.ba - 1) - 1)
+            na = -pa - 1.0
+            M  = (2.0 * float(tile.in_features)
+                  * tile._activation_level_magnitude
+                  * tile._weight_level_max)
+            for k in candidates:
+                d       = M / float((2 ** tile.ba) * k)
+                y_quant = torch.clamp(torch.floor(samples / d), na, pa) * d
+                mse     = ((y_quant - samples) ** 2).mean().item()
+                if mse < best_mse:
+                    best_mse = mse
+                    best_k   = k
 
         k_per_layer[layer_name] = best_k
 
-    dist     = Counter(k_per_layer.values())
-    crit_str = "sat_rate (unipolar)" if is_unipolar else "dead_rate (bipolar)"
-    logger.info(f"  k_per_layer search ({crit_str}) — distribution: {dict(sorted(dist.items()))}")
+    dist = Counter(k_per_layer.values())
+    logger.info(f"  k_per_layer MSE search — distribution: {dict(sorted(dist.items()))}")
     return k_per_layer
 
 
