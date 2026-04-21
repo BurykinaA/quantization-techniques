@@ -271,6 +271,10 @@ class QATLinearADC(nn.Linear):
         # Stats capture for per-layer k search (search_k_per_layer in pipeline.py).
         self._capturing = False
         self._y_int_samples: list = []
+        # Unipolar branch capture: captures raw y_pp = x_pos·w_pos before ADC floor.
+        # Used by search_k_per_layer for saturation-rate criterion (unipolar mode).
+        self._capturing_branches = False
+        self._branch_samples: list = []
         # PACT-style learned activation clip threshold (set from FlatQuantLinear
         # after ADC conversion).  When not None, replaces per-token amax with a
         # fixed scalar clip value so activation codes are not outlier-dominated.
@@ -411,7 +415,15 @@ class QATLinearADC(nn.Linear):
 
             def _run_4q(x_pos, x_neg, w_pos, w_neg):
                 """4-quadrant MVMs, accumulated to keep peak at 2 output tensors."""
-                acc = _adc_branch(F.linear(x_pos, w_pos, None), qmax_x_f, qmax_w_f)
+                pp_raw = F.linear(x_pos, w_pos, None)
+                if self._capturing_branches:
+                    with torch.no_grad():
+                        flat = pp_raw.detach().float().flatten()
+                        if flat.numel() > 5_000:
+                            idx = torch.randperm(flat.numel(), device=flat.device)[:5_000]
+                            flat = flat[idx]
+                        self._branch_samples.append(flat.cpu())
+                acc = _adc_branch(pp_raw, qmax_x_f, qmax_w_f)
                 _b  = _adc_branch(F.linear(x_neg, w_neg, None), qmin_x_f, qmin_w_f)
                 acc = acc + _b;  del _b
                 _b  = _adc_branch(F.linear(x_pos, w_neg, None), qmax_x_f, qmin_w_f)

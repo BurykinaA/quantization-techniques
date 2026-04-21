@@ -434,31 +434,46 @@ def search_k_per_layer(
     loader: DataLoader,
     device: torch.device,
 ) -> dict:
-    """Find the optimal k per TiledLinearADC layer using dead-rate statistics.
+    """Find the optimal k per TiledLinearADC layer.
 
-    Algorithm:
-      1. Enable stats capture on every QATLinearADC tile.
-      2. Run one forward pass with bypass_adc=True to collect raw y_int samples.
-      3. For each layer, aggregate all tile samples and sweep k candidates.
-         Choose the largest k where dead_rate = mean(|y_int| < δ) ≤ target.
-      4. Return {module_path: k} dict (paths match model.named_modules() output).
+    Two criteria, selected by cfg.unipolar_adc:
+
+    Bipolar:
+      Captures raw y_int (bypass mode), uses dead_rate = mean(|y_int| < δ) ≤ target.
+      Picks largest k (coarsest, cheapest) where dead_rate still meets the target.
+
+    Unipolar (4-quadrant):
+      Captures raw y_pp = x_pos·w_pos (dominant positive branch, NO bypass).
+      Uses saturation_rate = mean(y_pp > sat_thr) ≤ target, where
+        sat_thr(k) = in_features · qmax_x · qmax_w / k
+      k=64 would give sat_thr=196 << y_pp mean (~400–900) → 100% saturation → NaN.
+      Picks largest k (lowest hardware cost) where saturation still meets the target.
     """
-    candidates = sorted(getattr(cfg, 'k_search_candidates', (4, 8, 16, 32, 64)))
-    target     = getattr(cfg, 'k_search_target_dead_rate', 0.05)
+    from collections import defaultdict
 
-    # Enable capture on all QATLinearADC tiles
+    candidates  = sorted(getattr(cfg, 'k_search_candidates', (4, 8, 16, 32, 64)))
+    target      = getattr(cfg, 'k_search_target_dead_rate', 0.05)
+    is_unipolar = getattr(cfg, 'unipolar_adc', False)
+
     all_tiles = {name: m for name, m in model.named_modules()
                  if isinstance(m, QATLinearADC)}
-    for t in all_tiles.values():
-        t._capturing = True
-        t._y_int_samples = []
 
-    # One forward pass in bypass mode (get y_int before ADC quantisation)
-    saved_bypass = {}
-    for name, m in model.named_modules():
-        if isinstance(m, TiledLinearADC):
-            saved_bypass[name] = getattr(m, 'bypass_adc', False)
-            m.set_bypass_adc(True)
+    # ── Forward pass to collect statistics ──────────────────────────────────
+    if is_unipolar:
+        # Enable branch capture; run with ADC active so _run_4q executes.
+        for t in all_tiles.values():
+            t._capturing_branches = True
+            t._branch_samples = []
+    else:
+        # Bipolar: capture bipolar y_int in bypass mode.
+        for t in all_tiles.values():
+            t._capturing = True
+            t._y_int_samples = []
+        saved_bypass = {}
+        for name, m in model.named_modules():
+            if isinstance(m, TiledLinearADC):
+                saved_bypass[name] = getattr(m, 'bypass_adc', False)
+                m.set_bypass_adc(True)
 
     model.eval()
     with torch.no_grad():
@@ -467,42 +482,67 @@ def search_k_per_layer(
                      if isinstance(v, torch.Tensor)}
             model(**batch)
 
-    # Restore bypass state
-    for name, m in model.named_modules():
-        if isinstance(m, TiledLinearADC) and name in saved_bypass:
-            m.set_bypass_adc(saved_bypass[name])
+    if not is_unipolar:
+        for name, m in model.named_modules():
+            if isinstance(m, TiledLinearADC) and name in saved_bypass:
+                m.set_bypass_adc(saved_bypass[name])
 
-    # Aggregate per TiledLinearADC layer (strip ".tiles.N" suffix)
-    from collections import defaultdict
+    # ── Aggregate per TiledLinearADC layer (strip ".tiles.N" suffix) ────────
     layer_samples: dict = defaultdict(list)
     layer_tile_ref: dict = {}
-    for tile_name, tile in all_tiles.items():
-        if not tile._y_int_samples:
-            continue
-        layer_name = re.sub(r'\.tiles\.\d+$', '', tile_name)
-        layer_samples[layer_name].append(torch.cat(tile._y_int_samples))
-        layer_tile_ref[layer_name] = tile
-        tile._capturing = False
-        tile._y_int_samples = []
 
-    # For each layer pick largest k with dead_rate ≤ target
+    if is_unipolar:
+        for tile_name, tile in all_tiles.items():
+            if not tile._branch_samples:
+                continue
+            layer_name = re.sub(r'\.tiles\.\d+$', '', tile_name)
+            layer_samples[layer_name].append(torch.cat(tile._branch_samples))
+            layer_tile_ref[layer_name] = tile
+            tile._capturing_branches = False
+            tile._branch_samples = []
+    else:
+        for tile_name, tile in all_tiles.items():
+            if not tile._y_int_samples:
+                continue
+            layer_name = re.sub(r'\.tiles\.\d+$', '', tile_name)
+            layer_samples[layer_name].append(torch.cat(tile._y_int_samples))
+            layer_tile_ref[layer_name] = tile
+            tile._capturing = False
+            tile._y_int_samples = []
+
+    # ── Pick k per layer ─────────────────────────────────────────────────────
     k_per_layer: dict = {}
     for layer_name, sample_list in layer_samples.items():
-        abs_y = torch.cat(sample_list)
-        tile  = layer_tile_ref[layer_name]
-        M = 2.0 * tile.in_features * tile._activation_level_magnitude * tile._weight_level_max
+        samples = torch.cat(sample_list)
+        tile    = layer_tile_ref[layer_name]
 
         best_k = candidates[0]
-        for k in candidates:
-            delta = M / float((2 ** tile.ba) * k)
-            dead_rate = (abs_y < delta).float().mean().item()
-            if dead_rate <= target:
-                best_k = k   # take largest valid k (lowest hardware cost)
+        if is_unipolar:
+            # sat_thr(k) = in_f * qmax_x * qmax_w / k
+            # (full positive branch range compressed into k ADC bins)
+            M_pp = (float(tile.in_features)
+                    * tile._activation_level_magnitude
+                    * tile._weight_level_max)
+            for k in candidates:
+                sat_thr  = M_pp / float(k)
+                sat_rate = (samples > sat_thr).float().mean().item()
+                if sat_rate <= target:
+                    best_k = k   # largest k (cheapest) without saturation
+        else:
+            M = (2.0 * float(tile.in_features)
+                 * tile._activation_level_magnitude
+                 * tile._weight_level_max)
+            for k in candidates:
+                delta     = M / float((2 ** tile.ba) * k)
+                dead_rate = (samples < delta).float().mean().item()
+                if dead_rate <= target:
+                    best_k = k
 
         k_per_layer[layer_name] = best_k
 
-    dist = Counter(k_per_layer.values())
-    logger.info(f"  k_per_layer search done — distribution: {dict(sorted(dist.items()))}")
+    dist     = Counter(k_per_layer.values())
+    crit_str = "sat_rate (unipolar)" if is_unipolar else "dead_rate (bipolar)"
+    logger.info(f"  k_per_layer search ({crit_str}) — distribution: {dict(sorted(dist.items()))}")
     return k_per_layer
 
 
