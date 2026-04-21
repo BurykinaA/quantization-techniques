@@ -271,10 +271,6 @@ class QATLinearADC(nn.Linear):
         # Stats capture for per-layer k search (search_k_per_layer in pipeline.py).
         self._capturing = False
         self._y_int_samples: list = []
-        # Unipolar branch capture: captures raw y_pp = x_pos·w_pos before ADC floor.
-        # Used by search_k_per_layer for saturation-rate criterion (unipolar mode).
-        self._capturing_branches = False
-        self._branch_samples: list = []
         # PACT-style learned activation clip threshold (set from FlatQuantLinear
         # after ADC conversion).  When not None, replaces per-token amax with a
         # fixed scalar clip value so activation codes are not outlier-dominated.
@@ -372,7 +368,9 @@ class QATLinearADC(nn.Linear):
 
         y_int = F.linear(code_x, code_w, bias=None)
 
-        if self._capturing:
+        if self._capturing and not self.unipolar_adc:
+            # Bipolar capture: |y_int| samples for dead-rate / MSE search.
+            # Unipolar capture happens inside the unipolar block (captures y_uint).
             with torch.no_grad():
                 flat = y_int.detach().float().abs().flatten()
                 if flat.numel() > 10_000:
@@ -383,65 +381,44 @@ class QATLinearADC(nn.Linear):
         if self.bypass_adc:
             adc_output = y_int
         elif getattr(self, 'unipolar_adc', False):
-            # 4-quadrant decomposition for positive-only optical hardware.
+            # Unsigned shift-and-subtract for positive-only optical hardware.
             #
-            # Signed codes are split into positive/negative parts:
-            #   x = x⁺ − x⁻,   w = w⁺ − w⁻   (all parts ≥ 0)
-            # Then:
-            #   y = x⁺·w⁺ + x⁻·w⁻ − x⁺·w⁻ − x⁻·w⁺
+            # Shift signed codes to unsigned range, do one non-negative MVM,
+            # then subtract correction terms digitally:
+            #   code_x_u = code_x + 2^(bx-1)   →  [0, 2^bx - 1]
+            #   code_w_u = code_w + 2^(bw-1)   →  [0, 2^bw - 1]
+            #   y_uint   = code_x_u · code_w_u^T  ≥ 0   (one ADC read)
+            #   y_int    = y_uint - zp_x·Σw_u - zp_w·Σx_u + tile_in·zp_x·zp_w
             #
-            # Each branch is a non-negative MVM → safe for optical ADC.
-            # No DC offset: ADC bins are not wasted on a zero-point baseline.
-            # Delta per branch uses the same k-scaled formula as bipolar:
-            #   δ_branch = tile_in · max_a · max_b / ((2^ba − 1) · k)
-            # giving δ ≈ 3–4 per branch, vs bipolar ≈ 6.1.
-            # Combined error ≈ 4 × 3.5 = 14 (vs shift-both ≈ 226).
+            # δ = tile_in·(2^bx-1)·(2^bw-1) / ((2^ba-1)·k)
+            # For INT4, k=16: δ ≈ 14.1  (single MVM, 4× faster than 4-quadrant)
+            zp_x = float(1 << (self.bx - 1))         # = 8 for bx=4
+            zp_w = float(1 << (self.bw - 1))         # = 8 for bw=4
 
-            x_pos = code_x.clamp(min=0)        # [0, qmax_x]  e.g. [0, 7]
-            x_neg = (-code_x).clamp(min=0)     # [0, |qmin_x|] e.g. [0, 8]
-            w_pos = code_w.clamp(min=0)        # [0, qmax_w]  e.g. [0, 7]
-            w_neg = (-code_w).clamp(min=0)     # [0, |qmin_w|] e.g. [0, 8]
+            code_x_u = code_x + zp_x                 # [0, 2^bx - 1]
+            code_w_u = code_w + zp_w                 # [0, 2^bw - 1]
 
-            qmax_x_f = float(qmax_x)           # e.g. 7
-            qmin_x_f = float(-qmin_x)          # e.g. 8
-            qmax_w_f = float(w_q.qmax)         # e.g. 7
-            qmin_w_f = float(-w_q.qmin)        # e.g. 8
-            pa_uni   = (1 << self.ba) - 1      # 255 for ba=8
-            in_f     = float(self.in_features)
+            y_uint = F.linear(code_x_u, code_w_u, None)  # always ≥ 0
 
-            def _adc_branch(y_b, max_a, max_b):
-                d = in_f * max_a * max_b / (float(pa_uni) * float(self.k))
-                return torch.clamp(floor_ste(y_b / d), 0, pa_uni) * d
+            if self._capturing:
+                with torch.no_grad():
+                    flat = y_uint.detach().float().flatten()
+                    if flat.numel() > 10_000:
+                        idx = torch.randperm(flat.numel(), device=flat.device)[:10_000]
+                        flat = flat[idx]
+                    self._y_int_samples.append(flat.cpu())
 
-            def _run_4q(x_pos, x_neg, w_pos, w_neg):
-                """4-quadrant MVMs, accumulated to keep peak at 2 output tensors."""
-                pp_raw = F.linear(x_pos, w_pos, None)
-                if self._capturing_branches:
-                    with torch.no_grad():
-                        flat = pp_raw.detach().float().flatten()
-                        if flat.numel() > 5_000:
-                            idx = torch.randperm(flat.numel(), device=flat.device)[:5_000]
-                            flat = flat[idx]
-                        self._branch_samples.append(flat.cpu())
-                acc = _adc_branch(pp_raw, qmax_x_f, qmax_w_f)
-                _b  = _adc_branch(F.linear(x_neg, w_neg, None), qmin_x_f, qmin_w_f)
-                acc = acc + _b;  del _b
-                _b  = _adc_branch(F.linear(x_pos, w_neg, None), qmax_x_f, qmin_w_f)
-                acc = acc - _b;  del _b
-                _b  = _adc_branch(F.linear(x_neg, w_pos, None), qmin_x_f, qmax_w_f)
-                acc = acc - _b;  del _b
-                return acc
+            qmax_u = float((1 << self.bx) - 1) * float((1 << self.bw) - 1)
+            pa_uni = float((1 << self.ba) - 1)
+            d_uni  = float(self.in_features) * qmax_u / (pa_uni * float(self.k))
+            adc_out_u = torch.clamp(floor_ste(y_uint / d_uni), 0.0, pa_uni) * d_uni
 
-            if self.training:
-                # Gradient checkpointing: forward skips saving branch intermediates
-                # (ClampBackward saves 64 MiB per branch × 4 = 256 MiB otherwise).
-                # Backward re-runs the 4 MVMs — 2× compute, but no OOM.
-                import torch.utils.checkpoint as _ckpt
-                adc_output = _ckpt.checkpoint(
-                    _run_4q, x_pos, x_neg, w_pos, w_neg, use_reentrant=False
-                )
-            else:
-                adc_output = _run_4q(x_pos, x_neg, w_pos, w_neg)
+            sum_w_u = code_w_u.sum(dim=1)                  # [out_features]
+            sum_x_u = code_x_u.sum(dim=-1, keepdim=True)   # [B, 1]
+            correction = (zp_x * sum_w_u
+                          + zp_w * sum_x_u
+                          - float(self.in_features) * zp_x * zp_w)
+            adc_output = adc_out_u - correction
         else:
             y_adc_codes = floor_ste(y_int / self.delta)
             y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)

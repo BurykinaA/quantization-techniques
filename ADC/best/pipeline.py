@@ -436,19 +436,17 @@ def search_k_per_layer(
 ) -> dict:
     """Find the optimal k per TiledLinearADC layer by minimising reconstruction MSE.
 
-    For each layer we capture the raw pre-ADC branch values, then sweep all k
-    candidates and pick the one that gives the lowest mean squared quantisation
-    error.  No threshold tuning required — the criterion directly measures what
-    we care about.
+    Captures raw pre-ADC values for every layer, sweeps k candidates, picks the
+    k with the lowest mean-squared quantisation error — no threshold tuning needed.
 
-    Unipolar (4-quadrant):
-      Captures y_pp = x_pos·w_pos (always ≥ 0).  ADC clips at sat_thr = M_pp/k.
-      MSE(k) = mean( (clamp(floor(y_pp/δ), 0, pa)·δ − y_pp)² )
-      where δ = M_pp / (pa_uni · k),  pa_uni = 2^ba − 1.
+    Unipolar (unsigned shift-subtract):
+      Captures y_uint = (code_x+zp_x)·(code_w+zp_w)^T  (always ≥ 0).
+      MSE(k) = mean( (clamp(floor(y_uint/δ), 0, pa)·δ − y_uint)² )
+      δ = tile_in·(2^bx−1)·(2^bw−1) / ((2^ba−1)·k)
 
     Bipolar:
-      Captures |y_int|.  Symmetric clamp at ±(2^(ba-1)−1)·δ.
-      MSE(k) = mean( (clamp(floor(y/δ), na, pa)·δ − y)² )  (y = signed samples)
+      Captures |y_int| with bypass_adc=True.
+      MSE(k) = mean( (clamp(floor(y/δ), na, pa)·δ − y)² )
     """
     from collections import defaultdict
 
@@ -458,16 +456,14 @@ def search_k_per_layer(
     all_tiles = {name: m for name, m in model.named_modules()
                  if isinstance(m, QATLinearADC)}
 
-    # ── Forward pass to collect statistics ──────────────────────────────────
-    if is_unipolar:
-        for t in all_tiles.values():
-            t._capturing_branches = True
-            t._branch_samples = []
-    else:
-        for t in all_tiles.values():
-            t._capturing = True
-            t._y_int_samples = []
-        saved_bypass = {}
+    # ── Forward pass: enable capture, set bypass for bipolar only ────────────
+    for t in all_tiles.values():
+        t._capturing = True
+        t._y_int_samples = []
+
+    saved_bypass = {}
+    if not is_unipolar:
+        # Bipolar: bypass ADC floor so we capture unquantised y_int
         for name, m in model.named_modules():
             if isinstance(m, TiledLinearADC):
                 saved_bypass[name] = getattr(m, 'bypass_adc', False)
@@ -488,25 +484,14 @@ def search_k_per_layer(
     # ── Aggregate per TiledLinearADC layer (strip ".tiles.N" suffix) ────────
     layer_samples: dict = defaultdict(list)
     layer_tile_ref: dict = {}
-
-    if is_unipolar:
-        for tile_name, tile in all_tiles.items():
-            if not tile._branch_samples:
-                continue
-            layer_name = re.sub(r'\.tiles\.\d+$', '', tile_name)
-            layer_samples[layer_name].append(torch.cat(tile._branch_samples))
-            layer_tile_ref[layer_name] = tile
-            tile._capturing_branches = False
-            tile._branch_samples = []
-    else:
-        for tile_name, tile in all_tiles.items():
-            if not tile._y_int_samples:
-                continue
-            layer_name = re.sub(r'\.tiles\.\d+$', '', tile_name)
-            layer_samples[layer_name].append(torch.cat(tile._y_int_samples))
-            layer_tile_ref[layer_name] = tile
-            tile._capturing = False
-            tile._y_int_samples = []
+    for tile_name, tile in all_tiles.items():
+        if not tile._y_int_samples:
+            continue
+        layer_name = re.sub(r'\.tiles\.\d+$', '', tile_name)
+        layer_samples[layer_name].append(torch.cat(tile._y_int_samples))
+        layer_tile_ref[layer_name] = tile
+        tile._capturing = False
+        tile._y_int_samples = []
 
     # ── Pick k per layer via minimum MSE ────────────────────────────────────
     k_per_layer: dict = {}
@@ -518,21 +503,21 @@ def search_k_per_layer(
         best_mse = float('inf')
 
         if is_unipolar:
-            pa_uni = float((1 << tile.ba) - 1)   # 255 for ba=8
-            M_pp   = (float(tile.in_features)
-                      * tile._activation_level_magnitude
-                      * tile._weight_level_max)
+            # samples = y_uint values (unsigned, ≥ 0)
+            pa_uni = float((1 << tile.ba) - 1)    # 255
+            qmax_u = float((1 << tile.bx) - 1) * float((1 << tile.bw) - 1)  # 225
+            M_uint = float(tile.in_features) * qmax_u
             for k in candidates:
-                d       = M_pp / (pa_uni * float(k))
+                d       = M_uint / (pa_uni * float(k))
                 y_quant = torch.clamp(torch.floor(samples / d), 0.0, pa_uni) * d
                 mse     = ((y_quant - samples) ** 2).mean().item()
                 if mse < best_mse:
-                    best_mse = mse
-                    best_k   = k
+                    best_mse, best_k = mse, k
             if len(k_per_layer) < 3:
-                logger.info(f"    {layer_name}: best_k={best_k}  mse={best_mse:.2f}  "
-                            f"y_pp mean={samples.mean():.1f} std={samples.std():.1f}")
+                logger.info(f"    {layer_name}: best_k={best_k}  mse={best_mse:.1f}  "
+                            f"y_uint mean={samples.mean():.1f} std={samples.std():.1f}")
         else:
+            # samples = |y_int| values (non-negative, symmetric quantisation)
             pa = float(2 ** (tile.ba - 1) - 1)
             na = -pa - 1.0
             M  = (2.0 * float(tile.in_features)
@@ -543,8 +528,7 @@ def search_k_per_layer(
                 y_quant = torch.clamp(torch.floor(samples / d), na, pa) * d
                 mse     = ((y_quant - samples) ** 2).mean().item()
                 if mse < best_mse:
-                    best_mse = mse
-                    best_k   = k
+                    best_mse, best_k = mse, k
 
         k_per_layer[layer_name] = best_k
 
