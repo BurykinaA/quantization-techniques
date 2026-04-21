@@ -516,14 +516,23 @@ def search_k_per_layer(
         samples = torch.cat(sample_list)
         tile    = layer_tile_ref[layer_name]
 
-        best_k = candidates[0]
+        # Never go below the global baseline k — only search for improvement.
+        # Going below cfg.k would give coarser δ and worse quality than best_ptq.
+        baseline_k = cfg.k
+        best_k = baseline_k
+
         if is_unipolar:
             # sat_thr(k) = in_f * qmax_x * qmax_w / k
             # (full positive branch range compressed into k ADC bins)
             M_pp = (float(tile.in_features)
                     * tile._activation_level_magnitude
                     * tile._weight_level_max)
-            for k in candidates:
+            # Diagnostic: log sat_rate at baseline k for first few layers
+            if len(k_per_layer) < 3:
+                ref_sat = (samples > M_pp / float(baseline_k)).float().mean().item()
+                logger.info(f"    {layer_name}: sat_rate@k={baseline_k} = {ref_sat:.3f}")
+            # Only try k >= baseline_k so we can only improve, not degrade
+            for k in [c for c in candidates if c >= baseline_k]:
                 sat_thr  = M_pp / float(k)
                 sat_rate = (samples > sat_thr).float().mean().item()
                 if sat_rate <= target:
@@ -532,7 +541,7 @@ def search_k_per_layer(
             M = (2.0 * float(tile.in_features)
                  * tile._activation_level_magnitude
                  * tile._weight_level_max)
-            for k in candidates:
+            for k in [c for c in candidates if c >= baseline_k]:
                 delta     = M / float((2 ** tile.ba) * k)
                 dead_rate = (samples < delta).float().mean().item()
                 if dead_rate <= target:
