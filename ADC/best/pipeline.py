@@ -508,8 +508,11 @@ def search_k_per_layer(
             #   d(k) = M_uint / (pa_uni * k)  ≤  2*R / pa_uni
             #   → k  ≥ M_uint / (2*R)
             # Large R → small k (coarse δ enough); small R → large k (need fine δ).
-            pct    = getattr(cfg, 'k_search_range_percentile', 0.999)
-            R      = torch.quantile(samples.float(), pct).item()
+            pct = getattr(cfg, 'k_search_range_percentile', 0.999)
+            s   = samples.float()
+            if s.numel() > 100_000:
+                s = s[torch.randperm(s.numel())[:100_000]]
+            R = torch.quantile(s, pct).item()
             qmax_u = float((1 << tile.bx) - 1) * float((1 << tile.bw) - 1)  # 225
             pa_uni = float((1 << tile.ba) - 1)                                # 255
             M_uint = float(tile.in_features) * qmax_u
