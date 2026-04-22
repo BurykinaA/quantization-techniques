@@ -566,7 +566,11 @@ class FlatQuantLinear(nn.Module):
         n_tiles = in_features // tile_in
 
         # ADC step size (Eq. 3 from paper)
-        delta = 2.0 * tile_in * act_levels * w_levels / (float(2 ** ba) * k)
+        if cfg.get('fq_unipolar_delta', False):
+            # Unipolar unsigned: δ = tile_in*(2^bx-1)*(2^bw-1) / ((2^ba-1)*k)
+            delta = tile_in * act_levels * w_levels / (float((1 << ba) - 1) * k)
+        else:
+            delta = 2.0 * tile_in * act_levels * w_levels / (float(2 ** ba) * k)
 
         # Get (optionally transformed) weight in float32
         weight = self.linear.weight.data

@@ -324,6 +324,7 @@ def _fq_cache_key(cfg: _SharedFlatQuantConfig) -> str:
                f"_{cfg.fq_add_diag}_{cfg.fq_lwc}_{cfg.fq_lac}"
                f"_{cfg.fq_stage_b_prop_alpha}_{cfg.fq_stage_b_diag_attn}"
                f"_unipolar{getattr(cfg, 'unipolar_adc', False)}"
+               f"_fqdelta{getattr(cfg, 'unipolar_adc', False)}"
                f"_kpl{kpl_str}")
     return hashlib.md5(key_str.encode()).hexdigest()[:10]
 
@@ -357,7 +358,8 @@ def apply_flatquant(model: nn.Module, loader: DataLoader, cfg: _SharedFlatQuantC
     logger.info("  Diagonal scaling: MLP blocks only")
 
     fq_adc_config = dict(bx=cfg.bx, bw=cfg.bw, ba=cfg.ba, k=cfg.k,
-                         mvm_limit=cfg.mvm_limit, signed_activations=True)
+                         mvm_limit=cfg.mvm_limit, signed_activations=True,
+                         fq_unipolar_delta=getattr(cfg, 'unipolar_adc', False))
 
     # Apply FlatQuant wrappers (FlatQuantLinear around each nn.Linear)
     model = apply_flatquant_to_model(
@@ -571,7 +573,8 @@ def _apply_flatquant_with_k(
         logger.info(f"FlatQuant recal cache not found — will save to: {cache_path}")
 
     fq_adc_config = dict(bx=cfg.bx, bw=cfg.bw, ba=cfg.ba, k=cfg.k,
-                         mvm_limit=cfg.mvm_limit, signed_activations=True)
+                         mvm_limit=cfg.mvm_limit, signed_activations=True,
+                         fq_unipolar_delta=getattr(cfg, 'unipolar_adc', False))
 
     model = apply_flatquant_to_model(
         model,
