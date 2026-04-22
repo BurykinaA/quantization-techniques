@@ -368,9 +368,9 @@ class QATLinearADC(nn.Linear):
 
         y_int = F.linear(code_x, code_w, bias=None)
 
-        if self._capturing and not self.unipolar_adc:
-            # Bipolar capture: |y_int| samples for dead-rate / MSE search.
-            # Unipolar capture happens inside the unipolar block (captures y_uint).
+        if self._capturing:
+            # Capture |y_int| for per-layer k search (both bipolar and unipolar).
+            # Bypassing ADC during capture is handled externally (pipeline.py).
             with torch.no_grad():
                 flat = y_int.detach().float().abs().flatten()
                 if flat.numel() > 10_000:
@@ -399,14 +399,6 @@ class QATLinearADC(nn.Linear):
             code_w_u = code_w + zp_w                 # [0, 2^bw - 1]
 
             y_uint = F.linear(code_x_u, code_w_u, None)  # always ≥ 0
-
-            if self._capturing:
-                with torch.no_grad():
-                    flat = y_uint.detach().float().flatten()
-                    if flat.numel() > 10_000:
-                        idx = torch.randperm(flat.numel(), device=flat.device)[:10_000]
-                        flat = flat[idx]
-                    self._y_int_samples.append(flat.cpu())
 
             qmax_u = float((1 << self.bx) - 1) * float((1 << self.bw) - 1)
             pa_uni = float((1 << self.ba) - 1)

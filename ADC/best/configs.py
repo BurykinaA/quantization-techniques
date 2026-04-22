@@ -102,10 +102,14 @@ class _SharedFlatQuantConfig(BaseConfig):
     # Empty dict means use the global k for all layers.
     # Populated automatically by search_k_per_layer() in pipeline.py.
     k_per_layer: Dict[str, int] = field(default_factory=dict)
-    # Candidate k values to sweep during the dead-rate search.
+    # Candidate k values to sweep during the k search.
     k_search_candidates: Tuple[int, ...] = (4, 8, 16, 32, 64)
     # Accept the largest k whose dead_rate ≤ this threshold (5% → 95% of outputs useful).
     k_search_target_dead_rate: float = 0.05
+    # Unipolar k search: pick smallest k where d(k)/sqrt(12)/sigma(y_int) < this target.
+    # sigma(y_int) is the RMS of the unquantised layer output — a per-layer signal scale.
+    # Smaller sigma → need finer δ → larger k.  0.05 = 5% relative quantisation noise.
+    k_search_target_rel_noise: float = 0.05
 
 
 @dataclass

@@ -23,6 +23,7 @@ Expected results (Llama-3.2-1B):
 
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -456,18 +457,17 @@ def search_k_per_layer(
     all_tiles = {name: m for name, m in model.named_modules()
                  if isinstance(m, QATLinearADC)}
 
-    # ── Forward pass: enable capture, set bypass for bipolar only ────────────
+    # ── Forward pass: enable capture + bypass ADC floor ──────────────────────
+    # Bypass always so we capture clean y_int (unquantised), same for both paths.
     for t in all_tiles.values():
         t._capturing = True
         t._y_int_samples = []
 
     saved_bypass = {}
-    if not is_unipolar:
-        # Bipolar: bypass ADC floor so we capture unquantised y_int
-        for name, m in model.named_modules():
-            if isinstance(m, TiledLinearADC):
-                saved_bypass[name] = getattr(m, 'bypass_adc', False)
-                m.set_bypass_adc(True)
+    for name, m in model.named_modules():
+        if isinstance(m, TiledLinearADC):
+            saved_bypass[name] = getattr(m, 'bypass_adc', False)
+            m.set_bypass_adc(True)
 
     model.eval()
     with torch.no_grad():
@@ -476,10 +476,9 @@ def search_k_per_layer(
                      if isinstance(v, torch.Tensor)}
             model(**batch)
 
-    if not is_unipolar:
-        for name, m in model.named_modules():
-            if isinstance(m, TiledLinearADC) and name in saved_bypass:
-                m.set_bypass_adc(saved_bypass[name])
+    for name, m in model.named_modules():
+        if isinstance(m, TiledLinearADC) and name in saved_bypass:
+            m.set_bypass_adc(saved_bypass[name])
 
     # ── Aggregate per TiledLinearADC layer (strip ".tiles.N" suffix) ────────
     layer_samples: dict = defaultdict(list)
@@ -503,20 +502,26 @@ def search_k_per_layer(
         best_mse = float('inf')
 
         if is_unipolar:
-            # samples = y_uint values (unsigned, ≥ 0); digital sum of tile_in/k ADC
-            # readings — no clamp because individual per-group readings never saturate.
-            pa_uni = float((1 << tile.ba) - 1)    # 255
+            # samples = |y_int| (bypass, unquantised signed output centred near 0).
+            # sigma = RMS of y_int ≈ signal scale for this layer.
+            # Pick the smallest k where d(k)/sqrt(12) / sigma < target_rel_noise.
+            # Smaller sigma → need finer δ → larger k.
+            sigma  = samples.float().pow(2).mean().sqrt().item()
             qmax_u = float((1 << tile.bx) - 1) * float((1 << tile.bw) - 1)  # 225
+            pa_uni = float((1 << tile.ba) - 1)                                # 255
             M_uint = float(tile.in_features) * qmax_u
-            for k in candidates:
-                d       = M_uint / (pa_uni * float(k))
-                y_quant = torch.floor(samples / d) * d
-                mse     = ((y_quant - samples) ** 2).mean().item()
-                if mse < best_mse:
-                    best_mse, best_k = mse, k
+            target = getattr(cfg, 'k_search_target_rel_noise', 0.05)
+            best_k = candidates[-1]   # default: finest resolution
+            for k in sorted(candidates):
+                d    = M_uint / (pa_uni * float(k))
+                rmse = d / math.sqrt(12.0)
+                if sigma > 0 and rmse / sigma < target:
+                    best_k = k
+                    break
             if len(k_per_layer) < 3:
-                logger.info(f"    {layer_name}: best_k={best_k}  mse={best_mse:.1f}  "
-                            f"y_uint mean={samples.mean():.1f} std={samples.std():.1f}")
+                d_best = M_uint / (pa_uni * float(best_k))
+                logger.info(f"    {layer_name}: best_k={best_k}  sigma={sigma:.1f}  "
+                            f"d={d_best:.2f}  rel={d_best/math.sqrt(12)/max(sigma,1e-9):.3f}")
         else:
             # samples = |y_int| values (non-negative, symmetric quantisation)
             pa = float(2 ** (tile.ba - 1) - 1)
