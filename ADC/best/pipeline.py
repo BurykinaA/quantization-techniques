@@ -502,26 +502,27 @@ def search_k_per_layer(
         best_mse = float('inf')
 
         if is_unipolar:
-            # samples = |y_int| (bypass, unquantised signed output centred near 0).
-            # sigma = RMS of y_int ≈ signal scale for this layer.
-            # Pick the smallest k where d(k)/sqrt(12) / sigma < target_rel_noise.
-            # Smaller sigma → need finer δ → larger k.
-            sigma  = samples.float().pow(2).mean().sqrt().item()
+            # samples = |y_int| (bypass, unquantised).
+            # R = actual output range (99.9th percentile of |y_int|).
+            # Pick smallest k where the ADC covers the actual range:
+            #   d(k) = M_uint / (pa_uni * k)  ≤  2*R / pa_uni
+            #   → k  ≥ M_uint / (2*R)
+            # Large R → small k (coarse δ enough); small R → large k (need fine δ).
+            pct    = getattr(cfg, 'k_search_range_percentile', 0.999)
+            R      = torch.quantile(samples.float(), pct).item()
             qmax_u = float((1 << tile.bx) - 1) * float((1 << tile.bw) - 1)  # 225
             pa_uni = float((1 << tile.ba) - 1)                                # 255
             M_uint = float(tile.in_features) * qmax_u
-            target = getattr(cfg, 'k_search_target_rel_noise', 0.05)
+            k_min  = M_uint / (2.0 * max(R, 1e-9))
             best_k = candidates[-1]   # default: finest resolution
             for k in sorted(candidates):
-                d    = M_uint / (pa_uni * float(k))
-                rmse = d / math.sqrt(12.0)
-                if sigma > 0 and rmse / sigma < target:
+                if k >= k_min:
                     best_k = k
                     break
             if len(k_per_layer) < 3:
                 d_best = M_uint / (pa_uni * float(best_k))
-                logger.info(f"    {layer_name}: best_k={best_k}  sigma={sigma:.1f}  "
-                            f"d={d_best:.2f}  rel={d_best/math.sqrt(12)/max(sigma,1e-9):.3f}")
+                logger.info(f"    {layer_name}: best_k={best_k}  R={R:.1f}  "
+                            f"k_min={k_min:.1f}  d={d_best:.2f}")
         else:
             # samples = |y_int| values (non-negative, symmetric quantisation)
             pa = float(2 ** (tile.ba - 1) - 1)

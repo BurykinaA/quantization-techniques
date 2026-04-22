@@ -106,10 +106,9 @@ class _SharedFlatQuantConfig(BaseConfig):
     k_search_candidates: Tuple[int, ...] = (4, 8, 16, 32, 64)
     # Accept the largest k whose dead_rate ≤ this threshold (5% → 95% of outputs useful).
     k_search_target_dead_rate: float = 0.05
-    # Unipolar k search: pick smallest k where d(k)/sqrt(12)/sigma(y_int) < this target.
-    # sigma(y_int) is the RMS of the unquantised layer output — a per-layer signal scale.
-    # Smaller sigma → need finer δ → larger k.  0.05 = 5% relative quantisation noise.
-    k_search_target_rel_noise: float = 0.05
+    # Unipolar k search: percentile of |y_int| used as the observed output range R.
+    # Picks smallest k where d(k) ≤ 2*R/pa_uni (ADC bins cover actual signal range).
+    k_search_range_percentile: float = 0.999
 
 
 @dataclass
