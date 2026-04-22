@@ -201,6 +201,23 @@ class BestPTQKRecalConfig(BestPTQKConfig):
     fq_recal_with_k: bool = True
 
 
+@dataclass
+class BestLoRAKConfig(BestLoRAConfig):
+    """
+    BestLoRAConfig + per-layer k search applied before LoRA training.
+
+    Pipeline:
+      1. FlatQuant calibration with global k (same as best_ptq)
+      2. Per-layer k search via MSE minimisation
+      3. Apply found k values in-place to TiledLinearADC layers
+      4. Post-ADC LoRA training on the per-layer-k model
+
+    Combines the ADC resolution improvement from best_ptq_k with the
+    LoRA residual correction from best_lora.
+    """
+    name: str = "best_lora_k"
+
+
 # All configs in order: tells the story FP → INT4 → INT4+ADC → INT4+ADC+LoRA → per-layer k
 ALL_CONFIGS = [
     FPConfig(),
@@ -209,4 +226,5 @@ ALL_CONFIGS = [
     BestLoRAConfig(),
     BestPTQKConfig(),
     BestPTQKRecalConfig(),
+    BestLoRAKConfig(),
 ]

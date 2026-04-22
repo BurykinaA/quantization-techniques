@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from configs import (
     BaseConfig, FPConfig, INT4NoADCConfig, BestPTQConfig, BestLoRAConfig,
-    BestPTQKConfig, BestPTQKRecalConfig,
+    BestPTQKConfig, BestPTQKRecalConfig, BestLoRAKConfig,
     ALL_CONFIGS, _SharedFlatQuantConfig,
 )
 from eval import compute_perplexity, load_eval_encodings, measure_latency
@@ -763,6 +763,19 @@ def run_config(cfg: BaseConfig, cache_dir: str | None = None) -> dict:
             results = run_evaluation(model, tokenizer, cfg, device)
             _set_bypass_adc(model, bypass=False)
 
+        elif isinstance(cfg, BestLoRAKConfig):
+            # Stage 1: search per-layer k (same as best_ptq_k)
+            cfg.k_per_layer = search_k_per_layer(model, cfg, loader, device)
+            n_updated = 0
+            for name, m in model.named_modules():
+                if isinstance(m, TiledLinearADC) and name in cfg.k_per_layer:
+                    m.set_k(cfg.k_per_layer[name])
+                    n_updated += 1
+            logger.info(f"  Applied per-layer k to {n_updated} TiledLinearADC layers in-place")
+            # Stage 2: post-ADC LoRA on the per-layer-k model
+            model = apply_lora(model, loader, cfg, device)
+            results = run_evaluation(model, tokenizer, cfg, device)
+
         elif isinstance(cfg, BestLoRAConfig):
             # Apply and train post-ADC LoRA, then evaluate with full ADC
             model = apply_lora(model, loader, cfg, device)
@@ -848,7 +861,7 @@ def main():
     parser.add_argument(
         "--configs", nargs="+",
         choices=["fp", "int4_no_adc", "best_ptq", "best_lora",
-                 "best_ptq_k", "best_ptq_k_recal", "all"],
+                 "best_ptq_k", "best_ptq_k_recal", "best_lora_k", "all"],
         default=["all"],
         help="Which configs to run (default: all)",
     )
