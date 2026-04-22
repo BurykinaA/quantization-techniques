@@ -567,8 +567,11 @@ class FlatQuantLinear(nn.Module):
 
         # ADC step size (Eq. 3 from paper)
         if cfg.get('fq_unipolar_delta', False):
-            # Unipolar unsigned: δ = tile_in*(2^bx-1)*(2^bw-1) / ((2^ba-1)*k)
-            delta = tile_in * act_levels * w_levels / (float((1 << ba) - 1) * k)
+            # Unipolar unsigned: codes in [0, 2^b-1], so max product uses (2^bx-1)*(2^bw-1)
+            # δ = tile_in*(2^bx-1)*(2^bw-1) / ((2^ba-1)*k)  e.g. 256*15*15/(255*16) ≈ 14.12
+            qmax_u_x = float((1 << bx) - 1)   # 15 for INT4
+            qmax_u_w = float((1 << bw) - 1)   # 15 for INT4
+            delta = tile_in * qmax_u_x * qmax_u_w / (float((1 << ba) - 1) * k)
         else:
             delta = 2.0 * tile_in * act_levels * w_levels / (float(2 ** ba) * k)
 
