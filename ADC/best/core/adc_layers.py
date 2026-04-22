@@ -411,7 +411,10 @@ class QATLinearADC(nn.Linear):
             qmax_u = float((1 << self.bx) - 1) * float((1 << self.bw) - 1)
             pa_uni = float((1 << self.ba) - 1)
             d_uni  = float(self.in_features) * qmax_u / (pa_uni * float(self.k))
-            adc_out_u = torch.clamp(floor_ste(y_uint / d_uni), 0.0, pa_uni) * d_uni
+            # No clamp: y_uint is the digital sum of tile_in/k ADC readings.
+            # Each per-ADC-group partial sum ≤ (tile_in/k)*qmax_u = pa_uni*d_uni,
+            # so individual readings never saturate; the accumulated sum is unclamped.
+            adc_out_u = floor_ste(y_uint / d_uni) * d_uni
 
             sum_w_u = code_w_u.sum(dim=1)                  # [out_features]
             sum_x_u = code_x_u.sum(dim=-1, keepdim=True)   # [B, 1]

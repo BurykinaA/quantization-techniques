@@ -503,13 +503,14 @@ def search_k_per_layer(
         best_mse = float('inf')
 
         if is_unipolar:
-            # samples = y_uint values (unsigned, ≥ 0)
+            # samples = y_uint values (unsigned, ≥ 0); digital sum of tile_in/k ADC
+            # readings — no clamp because individual per-group readings never saturate.
             pa_uni = float((1 << tile.ba) - 1)    # 255
             qmax_u = float((1 << tile.bx) - 1) * float((1 << tile.bw) - 1)  # 225
             M_uint = float(tile.in_features) * qmax_u
             for k in candidates:
                 d       = M_uint / (pa_uni * float(k))
-                y_quant = torch.clamp(torch.floor(samples / d), 0.0, pa_uni) * d
+                y_quant = torch.floor(samples / d) * d
                 mse     = ((y_quant - samples) ** 2).mean().item()
                 if mse < best_mse:
                     best_mse, best_k = mse, k
