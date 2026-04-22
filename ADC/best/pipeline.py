@@ -324,7 +324,7 @@ def _fq_cache_key(cfg: _SharedFlatQuantConfig) -> str:
                f"_{cfg.fq_add_diag}_{cfg.fq_lwc}_{cfg.fq_lac}"
                f"_{cfg.fq_stage_b_prop_alpha}_{cfg.fq_stage_b_diag_attn}"
                f"_unipolar{getattr(cfg, 'unipolar_adc', False)}"
-               f"_fqdelta{getattr(cfg, 'unipolar_adc', False)}v2"
+               f"_fqdelta{getattr(cfg, 'unipolar_adc', False)}v3"
                f"_kpl{kpl_str}")
     return hashlib.md5(key_str.encode()).hexdigest()[:10]
 
@@ -516,7 +516,6 @@ def search_k_per_layer(
                 s = s[torch.randperm(s.numel())[:100_000]]
             R = torch.quantile(s, pct).item()
             qmax_u = float((1 << tile.bx) - 1) * float((1 << tile.bw) - 1)  # 225
-            pa_uni = float((1 << tile.ba) - 1)                                # 255
             M_uint = float(tile.in_features) * qmax_u
             k_min  = M_uint / (2.0 * max(R, 1e-9))
             best_k = candidates[-1]   # default: finest resolution
@@ -525,7 +524,7 @@ def search_k_per_layer(
                     best_k = k
                     break
             if len(k_per_layer) < 3:
-                d_best = M_uint / (pa_uni * float(best_k))
+                d_best = M_uint / (float(1 << tile.ba) * float(best_k))
                 logger.info(f"    {layer_name}: best_k={best_k}  R={R:.1f}  "
                             f"k_min={k_min:.1f}  d={d_best:.2f}")
         else:

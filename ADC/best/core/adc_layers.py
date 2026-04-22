@@ -401,11 +401,9 @@ class QATLinearADC(nn.Linear):
             y_uint = F.linear(code_x_u, code_w_u, None)  # always ≥ 0
 
             qmax_u = float((1 << self.bx) - 1) * float((1 << self.bw) - 1)
-            pa_uni = float((1 << self.ba) - 1)
-            d_uni  = float(self.in_features) * qmax_u / (pa_uni * float(self.k))
+            d_uni  = float(self.in_features) * qmax_u / (float(1 << self.ba) * float(self.k))
+            # δ = (2^bx-1)*(2^bw-1)*M / (k * 2^ba)  e.g. 15*15*256/(16*256) = 14.0625
             # No clamp: y_uint is the digital sum of tile_in/k ADC readings.
-            # Each per-ADC-group partial sum ≤ (tile_in/k)*qmax_u = pa_uni*d_uni,
-            # so individual readings never saturate; the accumulated sum is unclamped.
             adc_out_u = floor_ste(y_uint / d_uni) * d_uni
 
             sum_w_u = code_w_u.sum(dim=1)                  # [out_features]

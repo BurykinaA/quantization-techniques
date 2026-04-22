@@ -571,7 +571,7 @@ class FlatQuantLinear(nn.Module):
             # δ = tile_in*(2^bx-1)*(2^bw-1) / ((2^ba-1)*k)  e.g. 256*15*15/(255*16) ≈ 14.12
             qmax_u_x = float((1 << bx) - 1)   # 15 for INT4
             qmax_u_w = float((1 << bw) - 1)   # 15 for INT4
-            delta = tile_in * qmax_u_x * qmax_u_w / (float((1 << ba) - 1) * k)
+            delta = tile_in * qmax_u_x * qmax_u_w / (float(1 << ba) * k)
         else:
             delta = 2.0 * tile_in * act_levels * w_levels / (float(2 ** ba) * k)
 
