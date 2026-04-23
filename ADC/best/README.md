@@ -36,6 +36,7 @@ of the pipeline costs, and how post-ADC LoRA correction recovers it.
 | Unsigned unipolar, unipolar FQ (δ=14.06) | `best_ptq_k` | 21.64 | 33.79 |
 | Unsigned unipolar, unipolar FQ (δ=14.06) | `best_lora` | 17.29 | 29.26 |
 | Unsigned unipolar, unipolar FQ (δ=14.06) | `best_lora_k` | **14.56** | **23.78** |
+| Unsigned unipolar, recal FQ (per-layer k) | `best_ptq_k_recal` | 22.19 | 36.94 |
 
 ### Unsigned shift-subtract vs alternatives
 
