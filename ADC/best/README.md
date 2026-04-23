@@ -17,8 +17,9 @@ of the pipeline costs, and how post-ADC LoRA correction recovers it.
 | `fp` | Full precision (FP16) | **8.68** | **13.13** |
 | `int4_no_adc` | INT4 FlatQuant, no ADC floor | TBD | TBD |
 | `best_ptq` | INT4 FlatQuant + unsigned ADC, k=16 | TBD | TBD |
-| `best_ptq_k` | best_ptq + per-layer k search (MSE) | TBD | TBD |
+| `best_ptq_k` | best_ptq + per-layer k search | TBD | TBD |
 | `best_lora` | best_ptq + post-ADC LoRA correction | TBD | TBD |
+| `best_lora_k` | best_lora + per-layer k search | TBD | TBD |
 
 ### Previous results
 
@@ -27,6 +28,14 @@ of the pipeline costs, and how post-ADC LoRA correction recovers it.
 | Bipolar | `best_ptq` | 26.78 | 45.40 |
 | Bipolar | `best_lora` | **14.01** | **23.14** |
 | 4-quadrant unipolar | `best_ptq` | 18.08 | 28.41 |
+| Unsigned unipolar, bipolar FQ cache | `best_ptq` | 94274.75 | 89773.24 |
+| Unsigned unipolar, bipolar FQ cache | `best_ptq_k` | 16.78 | 27.59 |
+| Unsigned unipolar, bipolar FQ cache | `best_lora` | 19.27 | 34.40 |
+| Unsigned unipolar, bipolar FQ cache | `best_lora_k` | **13.42** | **21.94** |
+| Unsigned unipolar, unipolar FQ (δ=14.06) | `best_ptq` | 39.00 | 67.78 |
+| Unsigned unipolar, unipolar FQ (δ=14.06) | `best_ptq_k` | 21.64 | 33.79 |
+| Unsigned unipolar, unipolar FQ (δ=14.06) | `best_lora` | 17.29 | 29.26 |
+| Unsigned unipolar, unipolar FQ (δ=14.06) | `best_lora_k` | **14.56** | **23.78** |
 
 ### Unsigned shift-subtract vs alternatives
 
