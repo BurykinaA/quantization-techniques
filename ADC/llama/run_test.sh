@@ -150,7 +150,7 @@ json.dump(data, open(p, 'w'), indent=2)
 # ============================================================
 # 2. mvm_limit=256, r4_all_ce_kl (v8 best)
 # ============================================================
-run_experiment "mvm256_r4_all_ce_kl" "${BASE_MVM256[@]}" "${LORA_BEST[@]}"
+# run_experiment "mvm256_r4_all_ce_kl" "${BASE_MVM256[@]}" "${LORA_BEST[@]}"
 
 # ============================================================
 # 3. mvm_limit=1024, no LoRA
@@ -160,7 +160,7 @@ run_experiment "mvm256_r4_all_ce_kl" "${BASE_MVM256[@]}" "${LORA_BEST[@]}"
 # ============================================================
 # 4. mvm_limit=1024, r4_all_ce_kl
 # ============================================================
-# run_experiment "mvm1024_r4_all_ce_kl" "${BASE_MVM1024[@]}" "${LORA_BEST[@]}"
+run_experiment "mvm1024_r4_all_ce_kl" "${BASE_MVM1024[@]}" "${LORA_BEST[@]}"
 
 # ============================================================
 echo ""
