@@ -420,6 +420,33 @@ y += scaling * lora_B(lora_A(x.float()))  # FP32 residual, added AFTER ADC outpu
 
 ---
 
+#### Branch `llama-flatquant-adc-int4-v9` — Data efficiency & KL sweep
+
+**Motivation:** Two sweeps on the best config (r4_all_ce_kl, mvm_limit=256). PTQ fixed at fq_nsamples=1024.
+
+##### Data efficiency (lora_nsamples ∈ {64, 128, 256, 512, 1024})
+
+| Experiment | lora_nsamples | wiki bypass | wiki ADC | C4 bypass | C4 ADC |
+|---|---|---|---|---|---|
+| r4_all_ce_kl_n64   | 64   | — | — | — | — |
+| r4_all_ce_kl_n128  | 128  | — | — | — | — |
+| r4_all_ce_kl_n256  | 256  | — | — | — | — |
+| r4_all_ce_kl_n512  | 512  | — | — | — | — |
+| r4_all_ce_kl_n1024 | 1024 | — | — | — | — |
+
+##### KL sweep (kl_weight × temperature, 6 points on r4_all_ce_kl)
+
+| Experiment | kl_weight | temperature | wiki bypass | wiki ADC | C4 bypass | C4 ADC |
+|---|---|---|---|---|---|---|
+| r4_kl025_t1 | 0.25 | 1.0 | — | — | — | — |
+| r4_kl025_t2 | 0.25 | 2.0 | — | — | — | — |
+| r4_kl05_t1  | 0.5  | 1.0 | — | — | — | — |
+| r4_kl05_t2  | 0.5  | 2.0 | — | — | — | — |
+| r4_kl10_t2  | 1.0  | 2.0 | — | — | — | — |
+| r4_kl20_t4  | 2.0  | 4.0 | — | — | — | — |
+
+---
+
 #### New baseline (per-token inference, improved transforms)
 
 | Experiment | Description | PPL bypass | PPL ADC | dead_rate (mean) | reconstruction_rel | Notes |

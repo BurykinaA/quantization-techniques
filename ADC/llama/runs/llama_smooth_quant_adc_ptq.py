@@ -1899,6 +1899,8 @@ def main():
                         help="Projection names to apply LoRA to, e.g. down_proj o_proj")
     parser.add_argument("--lora_epochs", type=int, default=5,
                         help="Training epochs for LoRA calibration")
+    parser.add_argument("--lora_nsamples", type=int, default=None,
+                        help="LoRA training samples (default: same as fq_nsamples)")
     parser.add_argument("--lora_lr", type=float, default=1e-4,
                         help="Learning rate for LoRA AdamW optimizer")
     parser.add_argument("--lora_mode", type=str, default="residual",
@@ -2668,11 +2670,12 @@ def main():
             mode=args.lora_mode,
             layer_indices=_lora_layer_indices,
         )
+        _lora_nsamples = args.lora_nsamples if args.lora_nsamples is not None else args.fq_nsamples
         model = calibrate_adc_lora(
             model,
             dataloader=calibration_loader,
             device=device,
-            nsamples=args.fq_nsamples,
+            nsamples=_lora_nsamples,
             cali_bsz=args.fq_cali_bsz,
             epochs=args.lora_epochs,
             lora_lr=args.lora_lr,
