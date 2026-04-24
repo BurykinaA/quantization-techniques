@@ -396,7 +396,7 @@ y += scaling * lora_B(lora_A(x.float()))  # FP32 residual, added AFTER ADC outpu
 | mvm256_no_lora | 256 | ≈515 | none | 17.61 | 27.00 | 28.12 | 45.38 | PTQ control |
 | **mvm256_r4_all_ce_kl** | 256 | ≈515 | r4, all 7, CE+KL | 18.55 | **14.03** | 28.85 | **23.41** | LoRA recovers ADC gap |
 | mvm1024_no_lora | 1024 | ≈2060 | none | 23.66 | 37.03 | 37.76 | 56.94 | coarser ADC → much worse |
-| mvm1024_r4_all_ce_kl | 1024 | ≈2060 | r4, all 7, CE+KL | 22.98 | **16.69** | — | — | LoRA recovers coarse ADC |
+| mvm1024_r4_all_ce_kl | 1024 | ≈2060 | r4, all 7, CE+KL | 23.01 | **16.65** | 35.03 | **27.51** | LoRA recovers coarse ADC |
 
 **Analysis:**
 
