@@ -1,0 +1,168 @@
+% ─── Slide 10: Staged training — Llama-3.2 architecture view ─────────────────
+\begin{frame}[shrink=5]{Staged Training: What Is Learnt, When}
+
+  \vspace{-0.4em}
+  \begin{columns}[T, onlytextwidth]
+    % ══ Left column: full Llama-3.2-1B architecture + FFN callout ═══════════
+    \begin{column}{0.72\textwidth}
+      \centering
+      \resizebox{\linewidth}{!}{%
+      \begin{tikzpicture}[
+          every node/.style={font=\scriptsize},
+          blk/.style={draw, rounded corners=2pt, fill=white, line width=0.4pt,
+                      minimum width=2.8cm, minimum height=0.5cm, align=center,
+                      inner sep=2pt},
+          small/.style={draw, rounded corners=2pt, fill=white, line width=0.4pt,
+                        minimum width=2.2cm, minimum height=0.45cm, align=center,
+                        inner sep=2pt, font=\tiny},
+          attn/.style={draw, rounded corners=2pt, fill=mygray!80, text=white,
+                       minimum width=2.8cm, minimum height=0.55cm, align=center,
+                       inner sep=2pt, line width=0.4pt},
+          ffn/.style={draw, rounded corners=2pt, fill=white, line width=0.4pt,
+                      minimum width=2.8cm, minimum height=0.55cm, align=center,
+                      inner sep=2pt},
+          tbox/.style={draw=myred!65, thick, rounded corners=6pt,
+                       fill=myred!22},
+          outer/.style={draw=mygray!55, thick, rounded corners=10pt,
+                        fill=mygray!12},
+          arr/.style={-{Latex[length=1.5mm]}, line width=0.45pt},
+          sumnode/.style={draw, circle, inner sep=0pt, minimum size=0.38cm,
+                          font=\tiny, fill=white},
+          trainA/.style={draw=myorange, very thick, fill=myorange!30,
+                         rounded corners=3pt},
+          trainB/.style={draw=mygreen!70!black, very thick, fill=mygreen!30,
+                         rounded corners=3pt},
+          callout/.style={dashed, mygray!65, line width=0.4pt},
+          lbl/.style={font=\tiny, text=myred}
+        ]
+
+        % ── MAIN STACK, bottom to top ────────────────────────────────
+        \node[blk]  (tok)   at (0, -5.4) {Tokenized text};
+        \node[blk]  (emb)   at (0, -4.3) {Token embedding layer};
+
+        \node[small] (rn1)  at (0, -2.8) {RMSNorm 1};
+        \node[attn]  (gqa)  at (0, -2.1) {Masked grouped-query attn};
+        \node[sumnode] (s1) at (0, -1.4) {\tiny$+$};
+        \node[small] (rn2)  at (0, -0.7) {RMSNorm 2};
+        \node[ffn]   (ff)   at (0,  0.0) {Feed forward};
+        \node[sumnode] (s2) at (0,  0.7) {\tiny$+$};
+
+        % Arrows + residual (attn branch)
+        \draw[thick] (emb.north) -- (0, -3.15);
+        \draw[arr]   (0, -3.15) -- (rn1);
+        \draw[arr]   (rn1) -- (gqa);
+        \draw[arr]   (gqa) -- (s1);
+        \draw[thick] (-1.95, -3.15) -- (-1.95, -1.4);
+        \draw[arr]   (-1.95, -1.4) -- (s1);
+        % Arrows + residual (ffn branch)
+        \draw[arr]   (s1) -- (rn2);
+        \draw[arr]   (rn2) -- (ff);
+        \draw[arr]   (ff) -- (s2);
+        \draw[thick] (-1.95, -1.15) -- (-1.95, 0.7);
+        \draw[arr]   (-1.95, 0.7) -- (s2);
+
+        % Top
+        \node[small] (frn)  at (0, 1.6) {Final RMSNorm};
+        \node[blk]   (lout) at (0, 2.4) {Linear output layer};
+        \draw[arr] (s2) -- (frn);
+        \draw[arr] (frn) -- (lout);
+        \draw[arr] (lout.north) -- +(0, 0.45);
+
+        % Bottom input
+        \draw[arr] (0, -6.2) -- (tok);
+        \draw[arr] (tok) -- (emb);
+        \node[font=\tiny, text=mygray] at (0, -6.55) {\emph{Sample input text}};
+
+        % ── BACKGROUND LAYERS: outer gray FIRST, then pink on top ────
+        \begin{scope}[on background layer]
+          % pink transformer block — drawn AFTER gray so it's on top
+          \node[outer, fit={(emb)(rn1)(gqa)(s1)(rn2)(ff)(s2)(frn)(lout)},
+                inner xsep=12pt, inner ysep=10pt] (gbox) {};
+          \node[tbox, fit={(rn1)(gqa)(s1)(rn2)(ff)(s2)},
+                inner xsep=8pt, inner ysep=6pt] (tblk) {};
+        \end{scope}
+
+        % 16× brace (left of pink block, outside)
+        \draw[decorate, decoration={brace, amplitude=3.5pt}, myred, line width=0.5pt]
+          ([xshift=-3pt]tblk.south west) -- ([xshift=-3pt]tblk.north west);
+        \node[font=\scriptsize, text=myred] at ($(tblk.west)+(-0.7,0)$) {$16\!\times$};
+
+        % ── RoPE (outside gray container on the left) ────────────────
+        \node[small, fill=white] (rope) at (-4.0, -2.1) {RoPE};
+        \draw[callout] (rope.east) -- (gqa.west);
+
+        % ── Annotations with dashed leaders (Raschka style) ──────────
+        \node[lbl, anchor=west] (annV) at (2.4, 2.4) {Vocabulary 128k};
+        \draw[callout] (lout.east) -- (annV.west);
+
+        \node[lbl, anchor=west] (annH) at (2.4, -2.1) {32 heads};
+        \draw[callout] (gqa.east) -- (annH.west);
+
+        \node[lbl, anchor=west] (annE) at (2.4, -4.3) {Embedding 2048};
+        \draw[callout] (emb.east) -- (annE.west);
+
+        \node[lbl, anchor=east] (annC) at (-2.85, -4.3) {context 128k};
+        \draw[callout] (annC.north) |- (rope.west);
+
+        % ══ FFN CALLOUT (right side, inside same tikzpicture) ════════
+        \node[blk, fill=white, minimum width=1.7cm, minimum height=0.5cm]
+          (ffgate) at (6.3, -0.4) {gate\_proj};
+        \node[blk, fill=white, minimum width=1.7cm, minimum height=0.5cm]
+          (ffup)   at (8.2, -0.4) {up\_proj};
+        \node[small, fill=mygray!15, minimum width=1.5cm] (ffsilu) at (6.3, 0.55) {SiLU};
+        \node[sumnode] (ffmul) at (7.25, 1.2) {\tiny$\times$};
+        \node[blk, fill=white, minimum width=1.7cm, minimum height=0.5cm]
+          (ffdown) at (7.25, 2.0) {down\_proj};
+
+        \draw[arr] (7.25, -1.1) -- (ffgate);
+        \draw[arr] (7.25, -1.1) -- (ffup);
+        \draw[arr] (ffgate) -- (ffsilu);
+        \draw[arr] (ffsilu) -- (ffmul);
+        \draw[arr] (ffup) |- (ffmul);
+        \draw[arr] (ffmul) -- (ffdown);
+        \draw[arr] (ffdown.north) -- +(0, 0.45);
+
+        \begin{scope}[on background layer]
+          \node[outer, fill=mygray!10, draw=mygray!50,
+                fit={(ffgate)(ffup)(ffsilu)(ffmul)(ffdown)},
+                inner xsep=10pt, inner ysep=8pt] (ffbox) {};
+        \end{scope}
+
+        \node[lbl, anchor=west] (annHid) at (9.3, 1.2) {hidden 8192};
+        \draw[callout] (ffmul.east) -- (annHid.west);
+
+        \node[font=\tiny, text=mygray, align=center]
+          at (7.25, -2.3) {FFN (SwiGLU): expansion\\ of \emph{Feed forward}};
+
+        % ── DASHED CONNECTOR from Feed forward to FFN callout ────────
+        \draw[callout]
+          (ff.east) -- ($(ff.east)+(1.0,0)$) -- ($(ffbox.west)+(-0.05,0.6)$) -- (ffbox.west |- ffsilu);
+
+        % ── STAGE HIGHLIGHTS (drawn last so always visible) ──────────
+        \only<2->{%
+          \node[trainA, fit={(ff)}, inner sep=2pt, fill opacity=0.45] {};
+        }
+        \only<3->{%
+          \node[trainB, fit={(gqa)}, inner sep=2pt, fill opacity=0.45] {};
+        }
+      \end{tikzpicture}}
+    \end{column}
+
+    % ══ Right column: stage description only ════════════════════════════════
+    \begin{column}{0.26\textwidth}
+      \vspace{0.5em}
+      \footnotesize
+      \begin{block}{\only<1>{\textbf{Per-block params}}\only<2>{\textbf{\textcolor{myorange}{Stage A}} \textbar{} MLP-first}\only<3->{\textbf{\textcolor{mygreen!65!black}{Stage B}} \textbar{} full block}}
+        \scriptsize
+        \only<1>{7 Kron.\ rotations $T_{q,k,v,o,g,u,d}$; 3 MLP diagonals $D^{\mathrm m}_{g,u}$; 3 attn diagonals $D^{\mathrm a}_{q,k,v}$.}
+        \only<2>{Freeze attention. Train $T_{g,u,d}$ and $D^{\mathrm m}_{g,u}$ with $\alpha{=}0$ — clean forward warmup.}
+        \only<3->{Unfreeze attention. Add $T_{q,k,v,o}$ and $D^{\mathrm a}_{q,k,v}$. Turn on $\alpha{=}0.5$.}
+      \end{block}
+
+      \only<4->{%
+      \begin{alertblock}{Why staged?}
+        \scriptsize Joint $\alpha{=}0.5$ from scratch diverges — attention gradients dominate before rotations align. MLP warmup $\Rightarrow$ $\sim$2.3$\times$ better INT4 ADC PPL.
+      \end{alertblock}}
+    \end{column}
+  \end{columns}
+\end{frame}

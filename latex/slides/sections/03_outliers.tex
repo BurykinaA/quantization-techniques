@@ -1,0 +1,41 @@
+% ─── Slide 3: Outliers in LLMs — the ADC dilemma ──────────────────────────────
+\begin{frame}[shrink=28]{Why ADC is Hard for LLMs: the Outlier Dilemma}
+  \textbf{LLM activations are heavy-tailed.} A tiny fraction of channels carry magnitudes $10\text{–}100\times$ larger than the rest \textit{\small (Dettmers 2022; Xiao 2023)}.
+
+  \vspace{0.3em}
+
+  \begin{columns}[T]
+    % ── Left column: histograms (placeholder) ──────────────────────
+    \begin{column}{0.42\textwidth}
+      \figplaceholder[0.42\textheight]{%
+        \texttt{figs/outlier\_hist.pdf}\\[0.3em]
+        Activation histogram of a Llama proj.\\
+        log-y scale, one heavy tail at $\sim 50\sigma$}
+      \vspace{-0.2em}
+      \begin{center}\tiny Llama-3.2-1B, \texttt{q\_proj} input, calib set\end{center}
+    \end{column}
+
+    % ── Right column: dilemma table ────────────────────────────────
+    \begin{column}{0.57\textwidth}
+      \footnotesize
+      \textbf{Why we can\rq{}t just pick a good $k$:}\\[0.2em]
+      \begin{tabular}{@{}p{0.44\linewidth} p{0.48\linewidth}@{}}
+        \toprule
+        \textbf{\color{myred}Large $k$ (fine $\delta$)} & \textbf{\color{mybluedark}Small $k$ (coarse $\delta$)} \\
+        \midrule
+        outliers saturate the ADC range \newline $\Rightarrow$ heavy \emph{clipping} & outliers stay in range \\
+        model loses critical channels & dynamic range wasted on outliers \\
+        good ADC SNR on bulk & bulk collapses into \emph{dead zone} \\
+        \alert{bad downstream accuracy} & \alert{bad ADC SNR everywhere} \\
+        \bottomrule
+      \end{tabular}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.6em}
+  \pause
+  \begin{block}{Takeaway}
+    \small
+    Hardware-fixed $\delta$ $+$ heavy-tailed activations $\Rightarrow$ \textbf{no single $k$ works}. The algorithm must reshape activations $x$ and weights $w$ \emph{before} they hit the array, so that their product $y$ lands in the ADC\rq{}s usable range without losing outlier information.
+  \end{block}
+\end{frame}

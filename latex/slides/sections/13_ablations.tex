@@ -1,0 +1,65 @@
+% ─── Slide 13: LoRA ablations + overhead ─────────────────────────────────────
+\begin{frame}[shrink=15]{LoRA Ablations and Overhead}
+
+  \begin{columns}[T]
+    \begin{column}{0.55\textwidth}
+      \footnotesize
+      \textbf{Ablations (Llama-3.2-1B, INT4, \adcppl{}$\downarrow$)}\\[0.3em]
+
+      \renewcommand{\arraystretch}{1.15}
+      \begin{tabular}{@{}l l c@{}}
+        \toprule
+        \textbf{Axis} & \textbf{Setting} & $\adcppl{}$ \\
+        \midrule
+        \multirow{4}{*}{Rank $r$}
+          & $r{=}1$   & 15.8 \\
+          & $r{=}2$   & 14.5 \\
+          & $r{=}4$   & \best{13.96} \\
+          & $r{=}8$   & 14.02 \\
+        \midrule
+        \multirow{2}{*}{Loss}
+          & CE only     & 14.6 \\
+          & CE + KL     & \best{13.96} \\
+        \midrule
+        \multirow{2}{*}{Layers}
+          & last 8 only & 16.8 \\
+          & all 16      & \best{13.96} \\
+        \midrule
+        \multirow{2}{*}{Placement}
+          & Pre-ADC  & 28.4 \textcolor{myred}{(fails)} \\
+          & \alert{Post-ADC} & \best{13.96} \\
+        \bottomrule
+      \end{tabular}
+
+    \end{column}
+
+    \begin{column}{0.43\textwidth}
+      \footnotesize
+      \textbf{Overhead on Llama-3.2-1B ($d{=}2048$, 16 blocks)}\\[0.4em]
+
+      \renewcommand{\arraystretch}{1.2}
+      \begin{tabular}{@{}l r@{}}
+        \toprule
+        total LoRA params ($r{=}4$) & $\sim$\SI{1.8}{M} \\
+        as fraction of FP weights & \textbf{0.15\%} \\
+        FP-teacher forward & 1$\times$ cached \\
+        student forward + back & $\sim$5$\times$ FP MAC \\
+        training time (1 GPU, 5 ep.) & $\sim$\SI{45}{min} \\
+        inference MAC overhead & $<$\,2\% \\
+        \bottomrule
+      \end{tabular}
+
+      \vspace{0.7em}
+      \pause
+      \begin{alertblock}{Observations}
+        \scriptsize
+        \begin{itemize}
+          \item $r{=}4$ saturates — adding capacity doesn\rq{}t help.
+          \item KL adds 0.6 PPL improvement for free.
+          \item Early layers matter most (biggest ADC error reservoir).
+          \item Pre-ADC placement fails because the correction gets quantised.
+        \end{itemize}
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+\end{frame}

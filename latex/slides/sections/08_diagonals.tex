@@ -1,0 +1,53 @@
+% ─── Slide 8: Our extension — trainable diagonals ────────────────────────────
+\begin{frame}[shrink=10]{Our Extension I: Trainable Diagonals (\texttt{add\_diag})}
+
+  \begin{columns}[T]
+    \begin{column}{0.55\textwidth}
+      \footnotesize
+      \textbf{Motivation.} A rotation $T$ flattens the \emph{shape} of the activation cloud, but not its \emph{per-channel scale}. On INT4 ADC this leaves residual outliers that shove a few channels into the clipping region.
+
+      \vspace{0.4em}
+      \pause
+      \textbf{Fix.} Absorb a trainable diagonal $D=\mathrm{diag}(d_1,\ldots,d_c)$ into the rotation:
+      \[
+        \tilde T \;=\; T\cdot D,\qquad d_i \in [10^{-4},\, 10]
+      \]
+
+      Invariance preserved — equal and opposite scaling on the next layer:
+      \[
+        y \;=\; (xD^{-1}T^{-1})\,(T D W^\top).
+      \]
+
+      \pause
+      \vspace{0.3em}
+      \textbf{Where we place them.}
+      \begin{itemize}
+        \item \texttt{diag\_attn}: before \texttt{q/k/v/o} projections\\ {\scriptsize (absorbs attention-head variance)}
+        \item \texttt{diag\_mlp}: before \texttt{gate/up/down} projections\\ {\scriptsize (absorbs FFN outlier channels — SwiGLU)}
+      \end{itemize}
+    \end{column}
+
+    % ── right column: ablation table ───────────────────────────────
+    \begin{column}{0.43\textwidth}
+      \scriptsize
+      \textbf{Ablation (Llama-3.2-1B, w4a4, ADC PPL$\downarrow$):}\\[0.3em]
+      \begin{tabular}{@{}l c c c@{}}
+        \toprule
+        \textbf{FlatQuant +} & \bypass & \adcppl{} & dead-rate \\
+        \midrule
+        — (base)           & 13.17 & 2355 & 80.9\% \\
+        \texttt{diag\_mlp} only    & 12.58 & 1090 & 45.2\% \\
+        \texttt{diag\_attn} only   & 12.89 & 830  & 32.1\% \\
+        both diagonals     & \textbf{12.04} & \textbf{420} & \textbf{10.4\%} \\
+        \bottomrule
+      \end{tabular}
+      {\tiny\color{mygray}(numbers to be re-filled from v3 logs)}
+
+      \vspace{0.6em}
+      \pause
+      \begin{alertblock}{Why it matters for ADC}
+        \scriptsize Diagonals absorb the per-channel dynamic range — so a single $\delta$ can serve every channel. This is the only PTQ knob we have that directly targets the \emph{fixed-step} nature of ADC.
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+\end{frame}

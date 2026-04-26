@@ -1,0 +1,54 @@
+% ─── Slide 11: PTQ Results ────────────────────────────────────────────────────
+\begin{frame}[shrink=10]{PTQ Results: INT8 and INT4 ADC, WikiText-2}
+
+  \vspace{-0.2em}
+  \footnotesize
+  \begin{center}
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabular}{@{}l c c c c c@{}}
+    \toprule
+    \textbf{Method} & \textbf{bits (w\,/\,a)} & $\bypass$ & $\adcppl{}$ & \textbf{dead-rate} & \textbf{notes} \\
+    \midrule
+    FP baseline                        & 16\,/\,16 & 10.53 & 10.53 & — & reference \\
+    \midrule
+    \rowcolor{mybluedark!5}
+    FlatQuant per-proj MSE             & 8\,/\,8   & \textbf{10.01} & 28.86 & 10.3\% & base implementation \\
+    \rowcolor{mybluedark!5}
+    \;+ block calib., $\alpha{=}0.5$   & 8\,/\,8   & 11.00 & \best{14.41} & 10.3\% & INT8 PTQ best \\
+    \midrule
+    \rowcolor{myorange!7}
+    FlatQuant per-proj MSE             & 4\,/\,4   & 13.17 & 2355 & 80.9\% & dead zone explodes \\
+    \rowcolor{myorange!7}
+    \;+ diag\_mlp                      & 4\,/\,4   & 12.58 & 1090 & 45.2\% & MLP outliers tamed \\
+    \rowcolor{myorange!7}
+    \;+ diag\_attn                     & 4\,/\,4   & 12.04 & 420  & 12.1\% & attn outliers tamed \\
+    \rowcolor{myorange!7}
+    \;+ block calib., $\alpha{=}0.5$   & 4\,/\,4   & 20.23 & 38.5 & 10.4\% & single-stage \\
+    \rowcolor{myorange!7}
+    \;+ staged training                & 4\,/\,4   & \textbf{18.50} & \best{27.60} & 10.4\% & INT4 PTQ best \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.5em}
+  \pause
+  \begin{columns}[T]
+    \begin{column}{0.5\textwidth}
+      \begin{alertblock}{\small Take-aways on PTQ alone}
+        \scriptsize
+        \begin{itemize}
+          \item INT8: block+$\alpha$-mix is the single biggest lever — no extra params. \textbf{\color{mygreen!80!black}$2\times$ better}.
+          \item INT4: diagonals kill the dead zone; staged training gets us within $\sim 2.6\times$ of FP.
+        \end{itemize}
+      \end{alertblock}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \pause
+      \begin{block}{\small The plateau}
+        \scriptsize
+        Every PTQ lever combined still leaves a \emph{$17\,$PPL gap} on INT4 (27.6 vs 10.5 FP). PTQ by itself has plateaued. \\
+        $\to$ \emph{Method II: Post-ADC LoRA.}
+      \end{block}
+    \end{column}
+  \end{columns}
+\end{frame}

@@ -1,0 +1,47 @@
+% ─── Slide 4: ADC math ────────────────────────────────────────────────────────
+\begin{frame}[shrink=10]{ADC Quantisation: the Math}
+
+  \begin{columns}[T]
+    \begin{column}{0.58\textwidth}
+      \footnotesize
+      Tile output for $M$-wide inputs:
+      \begin{equation}
+        y \;=\; \langle \hat x,\, \hat w\rangle \;=\; \sum_{i=1}^M \hat w_i\,\hat x_i \;\in\;\mathbb{Z}
+      \end{equation}
+
+      \pause
+      ADC read (fixed $\delta$, floor + clip):
+      \begin{equation}
+        \hat y \;=\; \mathrm{clip}\!\left(\left\lfloor \tfrac{y}{\delta} \right\rfloor,\; -2^{b_a-1},\; 2^{b_a-1}-1\right)
+      \end{equation}
+
+      \pause
+      Hardware-fixed step:
+      \begin{equation}
+        \delta \;=\; \frac{2\,M\,q_x\,q_w}{2^{b_a}\, k}
+      \end{equation}
+      \vspace{-0.4em}
+      \scriptsize $q_x = 2^{b_x}{-}1$,\; $q_w = 2^{b_w-1}{-}1$,\; $k\in\mathbb{Z}_{>0}$ (parallelism).
+    \end{column}
+
+    % ── right column: annotations ────────────────────────────────
+    \begin{column}{0.4\textwidth}
+      \small
+      \begin{block}{What\rq{}s \alert{fixed by hardware}}
+        $\delta$, $b_a$, $k$, clip range.\\
+        \textbf{Nothing per-layer tunable.}
+      \end{block}
+
+      \pause
+      \begin{block}{What\rq{}s \alert{under our control}}
+        only $x,w$ statistics — via \emph{rotations}, \emph{diagonals}, \emph{propagated calibration}.
+      \end{block}
+
+      \pause
+      \begin{exampleblock}{Dead zone}
+        $|y|<\delta \;\Rightarrow\; \hat y{=}0$.\\[0.2em]
+        For INT4 with $M{=}256$, $k{=}16$, $b_a{=}8$: $\delta{=}\mathbf{6.12}$.
+      \end{exampleblock}
+    \end{column}
+  \end{columns}
+\end{frame}

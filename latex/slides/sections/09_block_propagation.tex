@@ -1,0 +1,56 @@
+% ─── Slide 9: Block-wise optimisation + α-mix ────────────────────────────────
+\begin{frame}[shrink=10]{Our Extension II: Block-wise Calibration \& $\alpha$-Mix}
+
+  \begin{columns}[T]
+    \begin{column}{0.5\textwidth}
+      \footnotesize
+      \textbf{From per-projection to per-block.}\\[0.2em]
+      FlatQuant calibrates each linear layer separately (MSE on its output). We reconstruct the \emph{whole transformer block}:
+      \[
+        \mathcal L \;=\; \bigl\| \hat B\!\left(\hat x\right) - B_{\mathrm{FP}}(x^\star) \bigr\|_2^2
+      \]
+      Gradients flow through q/k/v $\to$ attn $\to$ o $\to$ gate/up $\to$ down, so \alert{ADC error from earlier projections is seen by later ones during optimisation}.
+
+      \vspace{0.3em}
+      \pause
+      \textbf{Propagation across blocks.}\\[0.2em]
+      Input to block $\ell$ is the ADC-quantised output of block $\ell{-}1$, \emph{not} its FP teacher activation. The error accumulates \emph{the same way at train time and at inference}.
+    \end{column}
+
+    % ── right column: α-mix ────────────────────────────────────────
+    \begin{column}{0.48\textwidth}
+      \footnotesize
+      \textbf{$\alpha$-mixed objective.}\\[0.2em]
+      Feed both FP and ADC inputs through the student block in one step:
+      \[
+        \mathcal L(\alpha) \;=\; (1{-}\alpha)\,\mathcal L_{\mathrm{FP}} \;+\; \alpha\,\mathcal L_{\mathrm{ADC}}
+      \]
+      \scriptsize $\alpha{=}0$: clean — easy to fit, ignores ADC noise.\\
+      $\alpha{=}1$: realistic — matches inference but hard to optimise (noisy grads).\\
+      $\alpha{=}0.5$: \emph{both} signals at once.
+
+      \pause
+      \vspace{0.3em}
+      \begin{center}
+      \footnotesize
+      \renewcommand{\arraystretch}{1.15}
+      \begin{tabular}{@{}c c c@{}}
+        \toprule
+        $\alpha$ & INT8 \adcppl{} & INT4 \adcppl{} \\
+        \midrule
+        0.0 & 28.86 & 38.5 \\
+        \alert{0.5} & \best{14.41} & \best{27.56} \\
+        1.0 & 19.70 & 31.8 \\
+        \bottomrule
+      \end{tabular}
+      \end{center}
+
+    \end{column}
+  \end{columns}
+
+  \vspace{0.4em}
+  \pause
+  \begin{exampleblock}{What this buys us (INT8)}
+    \small $\adcppl{}\; 28.86 \to \mathbf{14.41}$ just from switching the loss from per-projection MSE to block $\alpha$-mix. No extra parameters.
+  \end{exampleblock}
+\end{frame}
