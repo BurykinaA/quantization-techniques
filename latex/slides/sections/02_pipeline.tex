@@ -1,152 +1,47 @@
-% ─── Slide 2a: Pipeline visual with distribution histograms ──────────────────
-\begin{frame}[shrink=28]{The Analog MVM Signal Path}
+% ─── Slide: Analog MVM Signal Path ───────────────────────────────────────────
+\begin{frame}[shrink=5]{Analog MVM Signal Path}
 
-  \vspace{-0.3em}
-  \footnotesize
-  \textbf{ADC} = \emph{Analog-to-Digital Converter}. Each tile ($M{\times}N$ weights) does one MVM in analog; the ADC reads every output column back. \alert{Red verticals} $=$ quantisation intervals.
-
-  \vspace{0.1em}
+  \vspace{0.7em}
   \begin{center}
   \begin{tikzpicture}[
-      every node/.style={font=\scriptsize},
-      dq/.style={draw, rounded corners=2pt, fill=myblue!15,
-                 minimum width=1.6cm, minimum height=0.7cm, align=center},
-      tile/.style={draw, rounded corners=2pt, fill=mybluedark!18, text=mybluedark,
-                   minimum width=2.0cm, minimum height=0.9cm, align=center},
-      adc/.style={draw, rounded corners=2pt, fill=myorange!40,
-                  minimum width=1.3cm, minimum height=0.7cm, align=center},
-      outbox/.style={draw, rounded corners=2pt, fill=mygreen!20,
-                     minimum width=0.9cm, minimum height=0.7cm, align=center},
-      arr/.style={-{Latex[length=1.3mm]}, thick},
-      sig/.style={font=\footnotesize, inner sep=1pt},
-      histbox/.style={draw=mygray!55, thin, rounded corners=2pt, fill=white,
-                      inner sep=1pt},
-      link/.style={dashed, mygray!70, line width=0.4pt}
+      every node/.style={font=\small},
+      q/.style={draw=mybluedark, rounded corners=3pt, fill=myblue!22,
+                minimum width=1.9cm, minimum height=0.72cm, align=center},
+      tile/.style={draw, rounded corners=3pt, fill=mybluedark!15, text=mybluedark,
+                   minimum width=2.2cm, minimum height=1.0cm, align=center},
+      adc/.style={draw=myorange, line width=1.5pt, rounded corners=3pt,
+                  fill=myorange!25, minimum width=1.7cm, minimum height=0.72cm,
+                  align=center},
+      arr/.style={-{Latex[length=2.5mm]}, thick, mybluedark}
     ]
+    \node (w)  at (0,   1.1) {$w$};
+    \node[q] (qw) at (2.1,  1.1) {Digital\\quantiser};
+    \node (wb) at (4.0,  1.1) {$\hat w$};
 
-    % ─── Pipeline (horizontal) ────────────────────────────────────
-    \node[sig] (x)   at (0,   -0.8) {$x$};
-    \node[dq]  (qx)  at (1.5, -0.8) {Digital\\quantiser};
-    \node[sig] (xb)  at (3.0, -0.8) {$\hat x$};
+    \node (x)  at (0,  -1.1) {$x$};
+    \node[q] (qx) at (2.1, -1.1) {Digital\\quantiser};
+    \node (xb) at (4.0, -1.1) {$\hat x$};
 
-    \node[sig] (w)   at (0,    0.8) {$w$};
-    \node[dq]  (qw)  at (1.5,  0.8) {Digital\\quantiser};
-    \node[sig] (wb)  at (3.0,  0.8) {$\hat w$};
+    \draw[arr] (w)--(qw);   \draw[arr] (qw)--(wb);
+    \draw[arr] (x)--(qx);   \draw[arr] (qx)--(xb);
 
-    \draw[arr] (x) -- (qx);   \draw[arr] (qx) -- (xb);
-    \draw[arr] (w) -- (qw);   \draw[arr] (qw) -- (wb);
-
-    \node[tile] (T)  at (4.9, 0)   {Analog IMC tile\\ $y{=}\sum_i \hat w_i\hat x_i$};
-    \draw[arr] (xb) -- (T.south west);
+    \node[tile] (T) at (6.2, 0) {Analog IMC tile\\$y{=}\langle\hat w,\hat x\rangle$};
     \draw[arr] (wb) -- (T.north west);
+    \draw[arr] (xb) -- (T.south west);
 
-    \node[sig] (y)   at (6.5, 0) {$y$};
-    \draw[arr] (T) -- node[above=-1pt, font=\tiny] {$y\!\in\!\mathbb{Z}$} (y);
+    \node (y)  at (8.05, 0) {$y$};
+    \draw[arr] (T)--(y);
 
-    \node[adc] (A)   at (7.7, 0) {ADC\\$\lfloor y/\delta\rfloor$};
-    \draw[arr] (y) -- (A);
+    \node[adc] (A) at (9.4, 0) {ADC\\$\lfloor y/\delta\rfloor$};
+    \draw[arr] (y)--(A);
 
-    \node[outbox] (yb) at (9.2, 0) {$\hat y$};
-    \draw[arr] (A) -- (yb);
-    \draw[arr] (yb) -- +(0.6, 0);
+    \node (yb) at (11.0, 0) {$\hat y$};
+    \draw[arr] (A)--(yb);
 
-    % ═════ HISTOGRAMS (matplotlib-generated PDFs) ════════════════
-    % top: w and \hat w
-    \node[histbox] (hw)  at (0,   2.4) {\includegraphics[width=2.9cm]{figs/dist_w.pdf}};
-    \node[histbox] (hwb) at (3.0, 2.4) {\includegraphics[width=2.9cm]{figs/dist_w_hat.pdf}};
-    \draw[link] (hw.south)  -- (w.north);
-    \draw[link] (hwb.south) -- (wb.north);
-
-    % bottom: x and \hat x
-    \node[histbox] (hx)  at (0,   -2.4) {\includegraphics[width=2.9cm]{figs/dist_x.pdf}};
-    \node[histbox] (hxb) at (3.0, -2.4) {\includegraphics[width=2.9cm]{figs/dist_x_hat.pdf}};
-    \draw[link] (hx.north)  -- (x.south);
-    \draw[link] (hxb.north) -- (xb.south);
-
-    % right: y (top) and \hat y (bottom)
-    \node[histbox] (hy)  at (7.2, 2.4)  {\includegraphics[width=2.9cm]{figs/dist_y.pdf}};
-    \node[histbox] (hyb) at (9.2, -2.4) {\includegraphics[width=2.9cm]{figs/dist_y_hat.pdf}};
-    \draw[link] (hy.south)  -- (y.north);
-    \draw[link] (hyb.north) -- (yb.south);
 
   \end{tikzpicture}
   \end{center}
 
-  \vspace{-0.2em}
-  \begin{center}\scriptsize\itshape
-    ADC sees $y$ with $\delta$ fixed by hardware — outliers pass, bulk collapses to one bin.
-  \end{center}
-\end{frame}
-
-% ─── Slide 2b: Pipeline schematic + δ formula + dead zone ────────────────────
-\begin{frame}[shrink=15]{Analog MVM Pipeline: Tiling and the Hardware-Fixed Step}
-
-  \vspace{-0.1em}
-  \footnotesize
-  \textbf{Tile} = $M{\times}N$ block of the weight matrix computed in one analog shot; $k$ analog columns are multiplexed into one ADC. A large weight matrix is split into tiles; every tile gets exactly one ADC read per output column.
-
-  \vspace{0.6em}
-  \begin{center}
-  \resizebox{0.90\linewidth}{!}{%
-  \begin{tikzpicture}[
-      every node/.style={font=\footnotesize},
-      db/.style={draw, rounded corners=2pt, fill=myblue!15,
-                 minimum width=1.9cm, minimum height=0.65cm, align=center},
-      mb/.style={draw, rounded corners=2pt, fill=mybluedark!18, text=mybluedark,
-                 minimum width=2.4cm, minimum height=0.85cm, align=center},
-      ab/.style={draw, rounded corners=2pt, fill=myorange!40,
-                 minimum width=1.8cm, minimum height=0.65cm, align=center},
-      outbox/.style={draw, rounded corners=2pt, fill=mygreen!20,
-                     minimum width=1.2cm, minimum height=0.65cm, align=center},
-      arr/.style={-{Latex[length=2mm]}, thick}
-    ]
-    \node (w)   at (0,  1.0) {$w$};
-    \node[db] (qw) at (2.2, 1.0) {Digital\\quantiser};
-    \node (wb)  at (4.2, 1.0) {$\hat w$};
-
-    \node (x)   at (0, -1.0) {$x$};
-    \node[db] (qx) at (2.2,-1.0) {Digital\\quantiser};
-    \node (xb)  at (4.2,-1.0) {$\hat x$};
-
-    \draw[arr] (w) -- (qw);   \draw[arr] (qw) -- (wb);
-    \draw[arr] (x) -- (qx);   \draw[arr] (qx) -- (xb);
-
-    \node[mb] (mvm) at (6.4, 0) {Analog IMC tile\\ $y{=}\sum_i \hat w_i\hat x_i$};
-    \draw[arr] (wb) -- (mvm.north west);
-    \draw[arr] (xb) -- (mvm.south west);
-
-    \node[ab] (adc) at (9.2, 0) {ADC\\$\lfloor y/\delta\rfloor$};
-    \draw[arr] (mvm) -- node[above, font=\tiny] {$y\!\in\!\mathbb{Z}$} (adc);
-
-    \node[outbox] (yb) at (11.2, 0) {$\hat y$};
-    \draw[arr] (adc) -- (yb);
-  \end{tikzpicture}}
-  \end{center}
-
-  \vspace{0.5em}
-  \begin{columns}[T]
-    \begin{column}{0.52\textwidth}
-      \footnotesize
-      \textbf{Hardware-fixed step size:}
-      \[
-        \boxed{\; \delta \;=\; \frac{2\,M\,q_x\,q_w}{2^{b_a}\,k} \;}
-      \]
-      \scriptsize
-      $q_x = 2^{b_x}{-}1,\; q_w = 2^{b_w-1}{-}1$; $M$ = tile size; $b_a$ = ADC bits; $k$ = ADC parallelism (integer, set at tape-out).
-    \end{column}
-    \begin{column}{0.46\textwidth}
-      \footnotesize\renewcommand{\arraystretch}{1.2}
-      \textbf{Example} ($M{=}256,\; b_a{=}8,\; k{=}4$):\\
-      \begin{tabular}{@{}l c@{}}
-        \toprule
-        INT8 ($q_x{=}q_w{=}127$)  & $\delta \approx \mathbf{8064.5}$ \\
-        INT4 ($q_x{=}q_w{=}7$)    & $\delta \,=\, \mathbf{24.5}$ \\
-        \bottomrule
-      \end{tabular}
-
-      \vspace{0.4em}
-      \alert{\textbf{Dead zone}:} $|y|{<}\delta \;\Rightarrow\; \hat y{=}0$.
-    \end{column}
-  \end{columns}
+  \note{Показываю общую схему. Линейный слой проходит через два ключевых этапа: сначала квантизация весов и активаций, потом аналоговое умножение матриц, результат которого читается через АЦП.}
 
 \end{frame}

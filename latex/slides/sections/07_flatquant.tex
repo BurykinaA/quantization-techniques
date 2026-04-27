@@ -9,7 +9,6 @@
       \[
         y \;=\; xW^\top \;=\; \underbrace{(xT^{-1})}_{\tilde x}\underbrace{(TW^\top)}_{\tilde W^\top}.
       \]
-      \pause
       Choose $T$ so $\tilde x$ is \emph{flat} $\Rightarrow$ integer quantisation \& ADC coverage improve.
 
       \vspace{0.5em}
@@ -25,6 +24,7 @@
 
     \begin{column}{0.5\textwidth}
       \footnotesize
+      \onslide<3->{%
       \textbf{3. Teacher-student per-layer calibration.}\\[0.3em]
       For each linear layer $L$:
       \begin{itemize}
@@ -47,14 +47,9 @@
         \draw[decorate, decoration={brace, amplitude=3pt}] (y1.east) -- (y2.east) node[midway, right=3pt, font=\scriptsize] {$\|\cdot\|^2$};
       \end{tikzpicture}
       \end{center}
+      }% end onslide<3->
 
-      \vspace{0.2em}
-      \pause
-      \begin{block}{Two metrics we track}
-        \scriptsize
-        $\bypass$: quantisation with ADC \emph{disabled} — measures how good the rotation is.\\
-        $\adcppl{}$: full ADC path — the real goal.
-      \end{block}
+
     \end{column}
   \end{columns}
 \end{frame}

@@ -1,49 +1,61 @@
-% ─── Slide 6: Quantisation primer ─────────────────────────────────────────────
-\begin{frame}[shrink=10]{Quantisation Primer: PTQ, QAT, Rotations}
+% ─── Slide 6: QAT vs PTQ diagram ──────────────────────────────────────────────
+\begin{frame}{QAT vs PTQ}
 
-  \begin{columns}[T]
-    \begin{column}{0.5\textwidth}
-      \footnotesize
-      \textbf{What is quantisation?} Replace FP tensors with low-bit integers:
-      \[
-        \hat x \;=\; s\cdot \mathrm{round}(x/s),\quad s = \tfrac{\max|x|}{2^{b-1}{-}1}
-      \]
-      The error $\hat x - x$ is what downstream layers see.
+  \begin{center}
+  \begin{tikzpicture}[
+      every node/.style={font=\small},
+      box/.style={draw, rounded corners=3pt, fill=mygray!25,
+                  minimum width=2.6cm, minimum height=0.68cm,
+                  align=center, inner sep=4pt},
+      wbox/.style={draw, rounded corners=3pt, fill=mygray!25,
+                   minimum width=5.2cm, minimum height=0.68cm,
+                   align=center, inner sep=4pt},
+      arr/.style={-{Latex[length=2mm]}, thick}
+    ]
 
-      \vspace{0.5em}
-      \begin{tabular}{@{}p{0.28\linewidth} p{0.65\linewidth}@{}}
-        \toprule
-        \textbf{PTQ} & Freeze weights, calibrate on a handful of samples. \emph{Fast} (minutes), \emph{limited} accuracy. \\
-        \midrule
-        \textbf{QAT} & Full SGD with fake-quant in the graph. \emph{Accurate} but costs multiple epochs of training. \\
-        \bottomrule
-      \end{tabular}
-    \end{column}
+    % ── Pre-trained Model ────────────────────────────────────────────
+    \node[box, minimum width=3.4cm] (PTM) at (0, 0) {Pre-trained Model};
+    \node[font=\small\bfseries, text=mybluedark] at (-6.5, 0) {QAT};
+    \node[font=\small\bfseries, text=myorange]   at ( 6.5, 0) {PTQ};
 
-    % ── right column: rotation lineage ─────────────────────────────
-    \begin{column}{0.48\textwidth}
-      \footnotesize
-      \textbf{The rotation line of work.}\\[0.2em]
-      Insert an orthogonal $T$ so that $W T^{-1}\cdot T x = Wx$ and $Tx$ is easier to quantise:
-      \begin{center}
-      \begin{tikzpicture}[every node/.style={font=\tiny},
-                         node distance=0.25cm, box/.style={draw, rounded corners=2pt, minimum width=1.3cm, minimum height=0.45cm, align=center}]
-        \node[box, fill=mygray!15] (q)    {QuaRot\\ {\tiny Hadamard, fixed}};
-        \node[box, fill=mygray!30, right=of q] (s)    {SpinQuant\\ {\tiny trained rotations}};
-        \node[box, fill=myorange!30, right=of s] (f)  {\textbf{FlatQuant}\\ {\tiny Kron.\ + per-layer}};
-        \draw[-{Latex}, thick] (q) -- (s);
-        \draw[-{Latex}, thick] (s) -- (f);
-      \end{tikzpicture}
-      \end{center}
+    % ── Row 2: four boxes, well spaced ───────────────────────────────
+    \node[box] (QM)  at (-4.2, -1.9) {Quantize\\Model};
+    \node[box] (TD)  at (-1.6, -1.9) {Training\\Data};
+    \node[box, minimum width=2.0cm] (CD)  at ( 1.6, -1.9) {Calibration\\Data};
+    \node[box, minimum width=2.0cm] (CAL) at ( 4.2, -1.9) {Calibration};
 
-      \vspace{0.3em}
-      \textbf{Why FlatQuant for our work:}
-      \begin{itemize}
-        \item \emph{trainable} — we can add objectives (ADC-aware);
-        \item \emph{Kronecker} ($T = T_1 \otimes T_2$) — memory \& compute $\mathcal{O}(\sqrt d)$;
-        \item per-projection rotations fold naturally into block-wise calibration.
-      \end{itemize}
-    \end{column}
-  \end{columns}
+    % ── Row 3 ─────────────────────────────────────────────────────────
+    \node[wbox] (RQM) at (-2.9, -3.7) {Retrain Quantized Model};
+    \node[box]  (QM2) at ( 4.2, -3.7) {Quantize Model};
+
+    % ── Row 4 ─────────────────────────────────────────────────────────
+    \node[wbox] (QATM) at (-2.9, -5.3) {QAT Quantized Model};
+    \node[box]  (PTQM) at ( 4.2, -5.3) {PTQ Quantized Model};
+
+    % ── Arrows from PTM ──────────────────────────────────────────────
+    \draw[arr] (PTM.south) -- ++(0,-0.5) -| (QM.north);
+    \draw[arr] (PTM.south) -- ++(0,-0.5) -| (CAL.north);
+
+    % ── QAT: T-junction QM + TD → RQM ────────────────────────────────
+    \coordinate (jL) at ($(QM.south)+(0,-0.45)$);
+    \coordinate (jR) at ($(TD.south)+(0,-0.45)$);
+    \draw (QM.south) -- (jL);
+    \draw (TD.south) -- (jR);
+    \draw (jL) -- (jR);
+    \draw[arr] ($(jL)!0.5!(jR)$) -- (RQM.north);
+
+    % ── PTQ: CD → CAL → QM2 ──────────────────────────────────────────
+    \draw[arr] (CD.east) -- (CAL.west);
+    \draw[arr] (CAL.south) -- (QM2.north);
+
+    % ── Outputs ──────────────────────────────────────────────────────
+    \draw[arr] (RQM.south) -- (QATM.north);
+    \draw[arr] (QM2.south) -- (PTQM.north);
+
+    % ── Dashed separator ─────────────────────────────────────────────
+    \draw[dashed, mygray!50, line width=0.5pt] (0, 0.5) -- (0, -5.9);
+
+  \end{tikzpicture}
+  \end{center}
 
 \end{frame}

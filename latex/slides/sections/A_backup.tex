@@ -1,5 +1,85 @@
 % ─── Appendix / Backup slides ─────────────────────────────────────────────────
 
+\begin{frame}[shrink=10]{Backup: Rotation Line of Work}
+  \footnotesize
+  \textbf{The rotation line of work.}\\[0.3em]
+  Insert an orthogonal $T$ so that $W T^{-1}\cdot T x = Wx$ and $Tx$ is easier to quantise:
+  \begin{center}
+  \begin{tikzpicture}[every node/.style={font=\small},
+                     node distance=0.4cm,
+                     box/.style={draw, rounded corners=2pt,
+                                 minimum width=2.0cm, minimum height=0.55cm,
+                                 align=center}]
+    \node[box, fill=mygray!15] (q) {QuaRot\\\small Hadamard, fixed};
+    \node[box, fill=mygray!30, right=of q] (s) {SpinQuant\\\small trained rotations};
+    \node[box, fill=myorange!30, right=of s] (f) {\textbf{FlatQuant}\\\small Kron.\ + per-layer};
+    \draw[-{Latex}, thick] (q) -- (s);
+    \draw[-{Latex}, thick] (s) -- (f);
+  \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.5em}
+  \textbf{Why FlatQuant for our work:}
+  \begin{itemize}
+    \setlength\itemsep{0.3em}
+    \item \emph{trainable} — we can add objectives (ADC-aware);
+    \item \emph{Kronecker} ($T = T_1 \otimes T_2$) — memory \& compute $\mathcal{O}(\sqrt{d})$;
+    \item per-projection rotations fold naturally into block-wise calibration.
+  \end{itemize}
+\end{frame}
+
+% ──────────────────────────────────────────────────────────────────────────────
+
+\begin{frame}[shrink=28]{Why ADC is Hard for LLMs: the Outlier Dilemma}
+  \textbf{LLM activations are heavy-tailed.}
+  A tiny fraction of channels carry magnitudes $10\text{--}100\times$ larger
+  than the rest \textit{\small (Dettmers 2022; Xiao 2023)}.
+
+  \vspace{0.3em}
+  \begin{columns}[T]
+    \begin{column}{0.42\textwidth}
+      \figplaceholder[0.22\textheight]{%
+        \texttt{figs/outlier\_hist.pdf}\\[0.3em]
+        Activation histogram of a Llama proj.\\
+        log-y scale, one heavy tail at ${\sim}50\sigma$}
+      \vspace{-0.2em}
+      \begin{center}\tiny Llama-3.2-1B, \texttt{q\_proj} input, calib set\end{center}
+      \vspace{0.3em}
+      \begin{center}
+        \includegraphics[width=\linewidth]{figs/dead_zone.png}
+      \end{center}
+    \end{column}
+
+    \begin{column}{0.57\textwidth}
+      \footnotesize
+      \textbf{Why we can't just pick a good $k$:}\\[0.2em]
+      \begin{tabular}{@{}p{0.44\linewidth} p{0.48\linewidth}@{}}
+        \toprule
+        \textbf{\color{myred}Large $k$ (fine $\delta$)} &
+        \textbf{\color{mybluedark}Small $k$ (coarse $\delta$)} \\
+        \midrule
+        outliers saturate the ADC range \newline
+          $\Rightarrow$ heavy \emph{clipping} & outliers stay in range \\
+        model loses critical channels & dynamic range wasted on outliers \\
+        good ADC SNR on bulk & bulk collapses into \emph{dead zone} \\
+        \alert{bad downstream accuracy} & \alert{bad ADC SNR everywhere} \\
+        \bottomrule
+      \end{tabular}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.5em}
+  \begin{block}{Takeaway}
+    \small
+    Hardware-fixed $\delta$ $+$ heavy-tailed activations
+    $\Rightarrow$ \textbf{no single $k$ works}.
+    The algorithm must reshape $x$ and $w$ \emph{before} they hit the array
+    so that $y$ lands in the ADC's usable range.
+  \end{block}
+\end{frame}
+
+% ──────────────────────────────────────────────────────────────────────────────
+
 \begin{frame}[shrink=20]{Backup: Complete INT8 Results (v2)}
   \begin{center}
   \small
