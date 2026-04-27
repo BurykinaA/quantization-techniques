@@ -162,7 +162,9 @@
       \only<4->{%
       \begin{alertblock}{Why staged?}
         \scriptsize Joint $\alpha{=}0.5$ from scratch diverges — attention gradients dominate before rotations align. MLP warmup $\Rightarrow$ $\sim$2.3$\times$ better INT4 ADC PPL.
-      \end{alertblock}}
+      \end{alertblock}
+      \vspace{0.3em}
+      {\tiny\color{myorange}\textbf{TODO:} проверить цифру ×2.3 и тезис про diverges — по README staged vs joint ≈ ×1.03 ADC PPL, а не ×2.3}}
     \end{column}
   \end{columns}
 \end{frame}

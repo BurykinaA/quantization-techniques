@@ -81,6 +81,9 @@
 % ──────────────────────────────────────────────────────────────────────────────
 
 \begin{frame}[shrink=20]{Backup: Complete INT8 Results (v2)}
+  \footnotesize
+  \textbf{Setup:} Llama-3.2-1B, w8a8, 128 calibration samples. Testing two ideas on top of baseline FlatQuant: (1) \emph{bin-centre loss} — pushes $y_{\rm int}$ toward ADC bin centres during PTQ; (2) \emph{propagated calibration} — each block sees ADC-quantised inputs from the previous block, matching inference conditions. Key finding: propagation gives a $2\times$ ADC PPL drop; bin-centre loss alone gives nothing.
+  \vspace{0.3em}
   \begin{center}
   \small
   \begin{tabular}{llcccc}
@@ -99,6 +102,9 @@
 % ──────────────────────────────────────────────────────────────────────────────
 
 \begin{frame}[shrink=20]{Backup: Complete INT4 v2 Alpha-Sweep}
+  \footnotesize
+  \textbf{Setup:} Llama-3.2-1B, w4a4, 1024 samples. Sweeping $\alpha$ in the mixed loss $\mathcal{L}(\alpha)=(1{-}\alpha)\mathcal{L}_{\rm FP}+\alpha\mathcal{L}_{\rm ADC}$. $\alpha{=}0$ = clean FP inputs only; $\alpha{=}1$ = ADC-noisy inputs only. Gap = ADC PPL / bypass PPL. Last two rows add diagonals and staged training on top of $\alpha{=}0.5$.
+  \vspace{0.3em}
   \begin{center}
   \small
   \begin{tabular}{llccc}
@@ -120,6 +126,9 @@
 % ──────────────────────────────────────────────────────────────────────────────
 
 \begin{frame}[shrink=20]{Backup: Complete v7 LoRA Ablation}
+  \footnotesize
+  \textbf{Setup:} Post-ADC LoRA correction on frozen PTQ model (Llama-3.2-1B, w4a4, staged PTQ base: bypass=17.89, ADC=27.55). LoRA adapters trained with CE loss on wikitext2, optionally + KL divergence term. Ablating: target projections (\texttt{down+o} vs all 7), rank (1–8), loss (CE vs CE+KL), layer selection (first/last 8), and pre- vs post-ADC placement (pre-ADC fails catastrophically).
+  \vspace{0.3em}
   \begin{center}
   \small
   \renewcommand{\arraystretch}{1.15}
@@ -150,6 +159,9 @@
 % ──────────────────────────────────────────────────────────────────────────────
 
 \begin{frame}[shrink=20]{Backup: v8 Generalisation to C4}
+  \footnotesize
+  \textbf{Setup:} Same PTQ base as v7, LoRA trained on wikitext2 only, evaluated on both wikitext2 and C4. Checks whether the best v7 config (\texttt{r4\_all\_ce\_kl}) generalises out-of-domain. Without LoRA, the base model has a large C4 ADC gap (46.40 vs bypass 29.41); LoRA closes it to 23.30 on C4 — confirming the correction is not overfitting to the training distribution.
+  \vspace{0.3em}
   \begin{center}
   \small
   \begin{tabular}{llcccc}
@@ -167,7 +179,61 @@
 
 % ──────────────────────────────────────────────────────────────────────────────
 
+\begin{frame}[shrink=20]{Backup: v9 Data Efficiency (lora\_nsamples sweep)}
+  \footnotesize
+  \textbf{Setup:} Best config (\texttt{r4\_all\_ce\_kl}, \texttt{mvm\_limit=256}), PTQ fixed at 1024 samples. Varying how many calibration sequences LoRA sees during fine-tuning (64 → 1024). Shows LoRA improves even with 64 samples, but ADC PPL keeps improving up to 1024 — more data helps consistently.
+  \vspace{0.3em}
+  \begin{center}
+  \small
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabular}{lc cccc}
+    \toprule
+    Experiment & \texttt{nsamples} & Wiki $\bypass$ & Wiki $\adcppl$ & C4 $\bypass$ & C4 $\adcppl$ \\
+    \midrule
+    r4\_all\_ce\_kl\_n64   &  64  & 18.42 & 21.07 & 29.50 & 35.62 \\
+    r4\_all\_ce\_kl\_n128  & 128  & 18.21 & 18.09 & 28.97 & 30.19 \\
+    r4\_all\_ce\_kl\_n256  & 256  & 18.66 & 15.88 & 28.84 & 26.13 \\
+    r4\_all\_ce\_kl\_n512  & 512  & 17.99 & \better{14.82} & 28.20 & \better{24.75} \\
+    r4\_all\_ce\_kl\_n1024 & 1024 & 18.92 & \best{14.06}   & 28.79 & \best{23.56}   \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace{0.2em}
+  {\small Config: \texttt{r4\_all\_ce\_kl}, \texttt{mvm\_limit=256}. PTQ fixed at 1024 samples.}
+\end{frame}
+
+% ──────────────────────────────────────────────────────────────────────────────
+
+\begin{frame}[shrink=20]{Backup: v9 KL Weight $\times$ Temperature Sweep}
+  \footnotesize
+  \textbf{Setup:} Base \texttt{r4\_all\_ce\_kl} (1024 samples). KL term $\lambda_{\rm KL}\cdot D_{\rm KL}(\hat p_{\rm ADC}\,\|\,\hat p_{\rm FP})$ with softmax temperature $T$. Higher $T$ softens logits before KL, making the teacher signal smoother. $\lambda_{\rm KL}{=}0.5,\,T{=}1$ gives the best C4 ADC PPL (23.10); very high $\lambda$ (2.0/T=4) destabilises training.
+  \vspace{0.3em}
+  \begin{center}
+  \small
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabular}{lcc cccc}
+    \toprule
+    Experiment & $\lambda_{\mathrm{KL}}$ & $T$ & Wiki $\bypass$ & Wiki $\adcppl$ & C4 $\bypass$ & C4 $\adcppl$ \\
+    \midrule
+    r4\_kl025\_t1 & 0.25 & 1.0 & 18.77 & \better{13.84} & 29.16 & \better{23.23} \\
+    r4\_kl025\_t2 & 0.25 & 2.0 & 19.15 & 14.07 & 29.03 & 23.33 \\
+    r4\_kl05\_t1  & 0.50 & 1.0 & 18.92 & \best{13.79}   & 29.69 & \best{23.10}   \\
+    r4\_kl05\_t2  & 0.50 & 2.0 & 18.43 & 14.05 & 28.54 & 23.37 \\
+    r4\_kl10\_t2  & 1.00 & 2.0 & 18.90 & 13.94 & 29.47 & 23.17 \\
+    r4\_kl20\_t4  & 2.00 & 4.0 & \multicolumn{4}{c}{\textit{failed}} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+  \vspace{0.2em}
+  {\small Base: \texttt{r4\_all\_ce\_kl} (1024 samples). Best: $\lambda=0.5,\,T=1$ — C4 ADC 23.10.}
+\end{frame}
+
+% ──────────────────────────────────────────────────────────────────────────────
+
 \begin{frame}[shrink=20]{Backup: Stochastic Propagation (v5)}
+  \footnotesize
+  \textbf{Setup:} Instead of a fixed $\alpha$, sample $\alpha_t$ each batch — either Bernoulli$(\{0,1\})$ or Beta$(2,2)$ (concentrated around 0.5). Bernoulli with staged training gives the best bypass PPL ever seen (16.94) but a bad ADC gap, because FP-only batches teach nothing about ADC noise. Beta$(2,2) \approx$ deterministic $\alpha{=}0.5$ in expectation and achieves the best ADC PPL (27.82).
+  \vspace{0.3em}
   \begin{center}
   \small
   \begin{tabular}{llccc}
