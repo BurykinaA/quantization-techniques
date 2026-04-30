@@ -1,0 +1,1207 @@
+\documentclass[a4paper,11pt,oneside]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[a4paper,top=3cm,bottom=3cm,left=3cm,right=3cm]{geometry}
+\renewcommand{\familydefault}{\sfdefault}
+\usepackage{helvet}
+\usepackage[english]{babel}
+\usepackage[style=numeric,language=english]{biblatex}
+\usepackage{parskip}
+\usepackage[margin=1cm]{caption}
+\usepackage{booktabs}
+\usepackage[cache=false]{minted}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\newtheorem{lemma}{Lemma}[section]
+\newtheorem{corollary}[lemma]{Corollary}
+\usepackage[pdftex]{graphicx}
+\usepackage[pdftex]{hyperref}
+\pdfadjustspacing=1
+
+\newcommand{\mylastname}{Burykina}
+\newcommand{\myfirstname}{Alina}
+\newcommand{\mynumber}{00000000}
+\newcommand{\myname}{\myfirstname{} \mylastname{}}
+\newcommand{\mytitle}{ADC-Aware Quantization of LLaMA-Family Models for In-Memory Computing}
+\newcommand{\mysupervisor}{Prof.~Dmitry Vetrov}
+
+\hypersetup{
+  pdfauthor = {\myname},
+  pdftitle = {\mytitle},
+  pdfkeywords = {LLaMA, quantization, in-memory computing, ADC, FlatQuant, post-training quantization},
+  colorlinks = {true},
+  linkcolor = {blue}
+}
+
+\addbibresource{msc-sample.bib}
+\setcounter{tocdepth}{2}
+
+\begin{document}
+  \pagenumbering{roman}
+
+  \thispagestyle{empty}
+
+  \begin{flushright}
+    \includegraphics[scale=0.8]{msc-logo}
+  \end{flushright}
+  \vspace*{40mm}
+  \begin{center}
+    \huge
+    \textbf{\mytitle}
+  \end{center}
+  \vspace*{4mm}
+  \begin{center}
+   \Large by
+  \end{center}
+  \vspace*{4mm}
+  \begin{center}
+    \LARGE
+    \textbf{\myname}
+  \end{center}
+  \vspace*{20mm}
+  \begin{center}
+    \Large
+    Master Thesis in Computer Science and Software Engineering
+  \end{center}
+  \vfill
+  \begin{flushleft}
+    \large
+    Submission: \today \hfill Supervisor: \mysupervisor \\
+    \rule{\textwidth}{1pt}
+  \end{flushleft}
+  \begin{center}
+    Constructor University $|$ Constructor Institute of Technology
+  \end{center}
+
+  \newpage
+  \thispagestyle{empty}
+
+  \begin{center}
+    \Large \textbf{Statutory Declaration}
+    \vspace*{8mm}
+  \end{center}
+
+  \begin{center}
+    \begin{tabular}{|l|p{85mm}|}
+      \hline
+      Family Name, Given/First Name & \mylastname, \myfirstname \\
+      Matriculation number & \mynumber \\
+      Kind of thesis submitted & Master Thesis \\
+      \hline
+    \end{tabular}
+    \vspace*{8mm}
+  \end{center}
+
+  \subsection*{English: Declaration of Authorship}
+ 
+  I hereby declare that the thesis submitted was created and written
+  solely by myself without any external support. Any sources, direct
+  or indirect, are marked as such. I am aware of the fact that the
+  contents of the thesis in digital form may be revised with regard to
+  usage of unauthorized aid as well as whether the whole or parts of
+  it may be identified as plagiarism. I do agree my work to be entered
+  into a database for it to be compared with existing sources, where
+  it will remain in order to enable further comparisons with future
+  theses. This does not grant any rights of reproduction and usage,
+  however.
+
+  This document was neither presented to any other examination board
+  nor has it been published.
+
+  \subsection*{German: Erklärung der Autorenschaft (Urheberschaft)}
+ 
+  Ich erkläre hiermit, dass die vorliegende Arbeit ohne fremde Hilfe
+  ausschließlich von mir erstellt und geschrieben worden ist. Jedwede
+  verwendeten Quellen, direkter oder indirekter Art, sind als solche
+  kenntlich gemacht worden. Mir ist die Tatsache bewusst, dass der
+  Inhalt der Thesis in digitaler Form geprüft werden kann im Hinblick
+  darauf, ob es sich ganz oder in Teilen um ein Plagiat handelt. Ich
+  bin damit einverstanden, dass meine Arbeit in einer Datenbank
+  eingegeben werden kann, um mit bereits bestehenden Quellen
+  verglichen zu werden und dort auch verbleibt, um mit zukünftigen
+  Arbeiten verglichen werden zu können. Dies berechtigt jedoch nicht
+  zur Verwendung oder Vervielfältigung.
+
+  Diese Arbeit wurde noch keiner anderen Prüfungsbehörde vorgelegt
+  noch wurde sie bisher veröffentlicht.
+
+  \vspace{20mm}
+
+  \dotfill\\
+  Date, Signature
+
+  \newpage
+
+  \section*{Abstract}
+  \addcontentsline{toc}{section}{Abstract}
+
+  This thesis investigates whether post-training quantization methods can
+  be adapted to deploy LLaMA-family models in in-memory computing systems
+  constrained by low-precision analog-to-digital converters (ADCs).
+  Although prior work such as SmoothQuant and FlatQuant reduces activation
+  and weight quantization error, ADC-constrained inference introduces an
+  additional output quantization bottleneck at the matrix-vector
+  multiplication stage. The work develops an ADC-aware evaluation
+  pipeline for transformer linear layers, studies the limitations of
+  standard post-training quantization in this setting, and explores
+  modifications of FlatQuant that explicitly account for ADC behavior.
+  The experimental part compares naive ADC quantization, baseline
+  FlatQuant, and ADC-aware variants across different tile sizes,
+  quantization precisions, and transform configurations. The main goal is
+  to identify which parts of the LLaMA architecture are most sensitive to
+  ADC constraints, whether post-training quantization alone is sufficient,
+  and under which conditions lightweight adaptation may be required. The
+  outcome of the thesis is intended to clarify the limits of
+  reconstruction-only quantization methods for analog inference and to
+  provide practical guidance for deploying large language models in IMC
+  environments.
+
+  \newpage
+  \tableofcontents
+
+  \clearpage
+  \pagenumbering{arabic}
+
+  \section{Introduction}
+
+  \paragraph{Purpose of this chapter.}
+  Introduce the broader problem of efficient inference for large language
+  models and motivate in-memory computing as a response to the growing
+  cost of both computation and data movement. Explain why ADC precision
+  becomes a bottleneck in IMC systems and why this makes deployment of
+  LLaMA-family models particularly challenging.
+
+  \paragraph{What to include.}
+  This chapter should explain the practical importance of the topic,
+  define the overall thesis objective, and state why the problem is
+  interesting from both a machine learning and hardware perspective. It
+  should also briefly summarize the gap between conventional digital
+  quantization methods and the specific requirements of ADC-constrained
+  inference.
+
+  \paragraph{Suggested structure.}
+  \begin{itemize}
+    \item Motivation: efficient deployment of LLMs.
+    \item Why IMC is attractive for large matrix-vector multiplications.
+    \item Why limited ADC precision creates a distinct quantization problem.
+    \item Why LLaMA-family models are a difficult case.
+    \item A short summary of the thesis contributions.
+    \item A roadmap of the remaining chapters.
+  \end{itemize}
+
+  \paragraph{Possible contributions paragraph.}
+  A concise contribution list at the end of the introduction could state
+  that the thesis: (i) formulates the ADC-constrained quantization
+  problem for LLaMA-family models, (ii) implements an ADC-aware FlatQuant
+  pipeline, (iii) evaluates post-training quantization baselines and
+  ablations, and (iv) analyzes when reconstruction-based PTQ is
+  sufficient and when additional adaptation is needed.
+
+  \section{Background and Related Work}
+
+  \subsection{In-Memory Computing and ADC-Constrained Inference}
+
+  \paragraph{Purpose.}
+  Provide the hardware context required to understand the rest of the
+  thesis.
+
+  \paragraph{What to include.}
+  Describe how in-memory computing performs computation directly within
+  memory arrays, why the analog nature of the computation requires an
+  analog-to-digital conversion step, and why ADC precision affects both
+  efficiency and accuracy. This is the right place to define the
+  intuition behind the matrix-vector multiplication pipeline in IMC and
+  to motivate why output quantization is different from standard digital
+  quantization.
+
+  \subsection{Quantization of Neural Networks}
+
+  \paragraph{Purpose.}
+  Establish the machine learning background.
+
+  \paragraph{What to include.}
+  Review the main concepts of quantization: post-training quantization
+  (PTQ), quantization-aware training (QAT), symmetric and asymmetric
+  quantization, per-tensor and per-channel quantization, and the
+  straight-through estimator. Keep this section focused on concepts that
+  are directly needed later.
+
+  \subsection{Challenges of Quantizing Transformer Models}
+
+  \paragraph{Purpose.}
+  Explain why LLMs, and especially LLaMA-family models, are harder to
+  quantize than smaller vision or language models.
+
+  \paragraph{What to include.}
+  Discuss activation outliers, sensitivity of the residual stream, the
+  role of attention and MLP projections, and why preserving hidden-state
+  geometry is important. You can also explain why some projections, such
+  as \texttt{o\_proj} and \texttt{down\_proj}, are often more sensitive
+  to quantization error.
+
+  \subsection{Existing Methods}
+
+  \paragraph{Purpose.}
+  Position the thesis relative to the state of the art.
+
+  \paragraph{What to include.}
+  Review methods such as SmoothQuant, FlatQuant, and ADC-oriented ideas
+  such as activation shifting, weight reshaping, bit augmentation, and
+  lightweight adaptation methods. For each method, answer three
+  questions: what problem it solves, why it may help under ADC
+  constraints, and what limitation remains for the current setting.
+
+  \subsection{Research Gap}
+
+  \paragraph{Purpose.}
+  End the chapter by identifying the precise gap that motivates your own
+  work.
+
+  \paragraph{What to include.}
+  The main message here can be that existing PTQ methods primarily reduce
+  activation and weight quantization error, whereas ADC-constrained
+  inference introduces a separate output quantization bottleneck that is
+  not explicitly optimized by standard reconstruction-based approaches.
+
+  \section{Problem Statement and Research Questions}
+
+  \subsection{Problem Definition}
+
+  \paragraph{Purpose.}
+  Formally define the problem studied in the thesis.
+
+  \paragraph{What to include.}
+  Introduce the linear operation in quantized code space, define the
+  ADC-constrained output quantization step, and explain the roles of the
+  main parameters such as activation precision, weight precision, ADC
+  precision, tile size, and the hardware parameter \(k\). Clearly state
+  that the goal is to preserve model quality under these constraints.
+
+  \subsection{Research Questions}
+
+  \paragraph{Suggested research questions.}
+  \begin{enumerate}
+    \item How strongly does limited ADC precision degrade the quality of
+    LLaMA-family models compared with conventional quantization?
+    \item To what extent can a FlatQuant-style post-training approach
+    mitigate this degradation?
+    \item Does reconstruction-only PTQ remain sufficient under ADC
+    constraints, or are ADC-aware objectives required?
+    \item Which layers and projections are most sensitive to ADC
+    quantization?
+    \item Under what conditions does the problem require lightweight
+    model adaptation beyond PTQ?
+  \end{enumerate}
+
+  \subsection{Scope and Assumptions}
+
+  \paragraph{Purpose.}
+  Clarify what the thesis covers and what it does not cover.
+
+  \paragraph{What to include.}
+  State which LLaMA-family models are evaluated, what hardware behavior
+  is modeled, which parts of the inference pipeline are abstracted, and
+  whether the study focuses on PTQ only or also includes limited
+  adaptation baselines. This subsection is also the right place to state
+  that the work relies on simulation rather than fabricated hardware.
+
+  \subsection{Evaluation Criteria}
+
+  \paragraph{Purpose.}
+  Define how success will be measured.
+
+  \paragraph{What to include.}
+  Include both model-level and ADC-level metrics. Model-level metrics may
+  include perplexity or task accuracy. Internal metrics may include
+  layerwise reconstruction error, clipping rate, dead-zone rate, bin
+  utilization, or sensitivity by projection type.
+
+  \section{Proposed Method}
+
+  \subsection{Post-Training Quantisation}
+
+  \subsubsection{Baseline: FlatQuant for LLaMA}
+
+  FlatQuant~\cite{flatquant} exploits the linear invariance of the
+  matrix-vector product to redistribute the dynamic range of activations
+  before quantisation.
+  For any invertible transform $T \in \mathbb{R}^{d \times d}$,
+  \[
+    y = xW^\top = \underbrace{(xT^{-1})}_{\tilde{x}}\,
+                  \underbrace{(TW^\top)}_{\tilde{W}^\top}.
+  \]
+  Choosing $T$ to flatten the distribution of $\tilde{x}$ improves both
+  integer quantisation accuracy and ADC bin coverage.
+  Computing a full $d \times d$ transform is prohibitive, so $T$ is
+  Kronecker-factorised as $T = T_1 \otimes T_2$ with
+  $T_1, T_2 \in \mathbb{R}^{\sqrt{d} \times \sqrt{d}}$, reducing the
+  parameter count from $\mathcal{O}(d^2)$ to $\mathcal{O}(d)$.
+
+  Calibration proceeds layer by layer in a teacher-student fashion.
+  For each linear projection, a frozen floating-point (FP) teacher
+  produces reference outputs $y^\star = L_{\mathrm{FP}}(x^\star)$, and the
+  quantised student $\hat{y} = \hat{L}_T(\hat{x})$ minimises the
+  mean-squared error $\|\hat{y} - y^\star\|^2$ over the Kronecker factors
+  only, with weights held at their quantised values.
+  After calibration, $T$ is folded into the weights via
+  reparameterisation; inference cost equals that of standard integer
+  quantisation.
+
+  We adapt FlatQuant to the LLaMA-3 architecture~\cite{llama3} by
+  wrapping all seven linear projections in each decoder block: $q$, $k$,
+  $v$, $o$ in the grouped-query attention sub-layer, and
+  \texttt{gate}, \texttt{up}, \texttt{down} in the SwiGLU feed-forward
+  network.
+
+  \subsubsection{ADC Hardware Model and Forward Simulation}
+
+  In an analog in-memory compute (AIMC) accelerator, quantised weights
+  $\hat{w} \in [-q_w, q_w]^M$ are stored on a crossbar tile of size $M$.
+  At inference, a quantised activation tile
+  $\hat{x} \in [-q_x, q_x]^M$ is presented, the crossbar accumulates
+  their integer dot product
+  $y_{\mathrm{int}} = \langle \hat{w}, \hat{x} \rangle$ in the analog
+  domain, and an ADC samples the result with a fixed step size $\delta$:
+  \[
+    \hat{y} = \mathrm{clip}\!\left(
+      \left\lfloor \frac{y_{\mathrm{int}}}{\delta} \right\rfloor,\;
+      -2^{b_a-1},\; 2^{b_a-1}{-}1\right).
+  \]
+  The step size is a hardware constant set at manufacturing time:
+  \[
+    \delta = \frac{2\,M\,q_x\,q_w}{2^{b_a}\,k},
+  \]
+  where $b_a$ is the ADC bit-width and $k$ is the number of ADC channels
+  operated in parallel.
+  Two failure modes follow directly.
+  The \emph{dead zone}: if $|y_{\mathrm{int}}| < \delta$, the floor
+  operation maps the output to zero, discarding the signal entirely.
+  \emph{Clipping}: if $|y_{\mathrm{int}}| > \delta \cdot (2^{b_a-1}{-}1)$,
+  the output saturates.
+  For our target configuration ($b_w = b_x = 4$, $M = 256$, $b_a = 8$,
+  $k = 16$) this gives $\delta \approx 6.12$, coarse enough that a
+  na\"{i}ve INT4 baseline shows a bypass-to-ADC perplexity gap of
+  $\times$153 (15.41 vs.\ 2354).
+
+  \subsubsection{Limitations of Per-Layer Reconstruction}
+
+  Standard FlatQuant minimises per-projection MSE feeding each layer
+  its \emph{clean} FP activations from the calibration set.
+  Two gaps make this insufficient under ADC inference.
+  First, the calibration objective is blind to the ADC step: a
+  projection optimised in isolation may produce pre-ADC signals that
+  fall inside the dead zone after re-quantisation of the next tile.
+  Second, error accumulates across layers at inference but not during
+  calibration — the input to layer $\ell$ at inference is the noisy,
+  ADC-distorted output of layer $\ell{-}1$, not the clean FP tensor the
+  optimiser saw.
+  These gaps motivate all three ADC-aware extensions described below.
+
+  \subsubsection{Block-wise Calibration with Propagation and $\alpha$-Mixing}
+
+  \paragraph{Block-level reconstruction.}
+  Rather than minimising per-projection MSE independently, we
+  reconstruct the output of each entire transformer block:
+  \[
+    \mathcal{L} = \bigl\| \hat{B}(\hat{x}) - B_{\mathrm{FP}}(x^\star) \bigr\|_2^2.
+  \]
+  Gradients propagate through the full block
+  ($q/k/v \to \mathrm{attn} \to o \to \mathrm{gate}/\mathrm{up} \to \mathrm{down}$),
+  so the transforms of earlier projections are aware of how their error
+  propagates to later ones within the same block.
+
+  \paragraph{Propagation across blocks.}
+  Blocks are calibrated sequentially from layer~0 to layer~$N{-}1$.
+  When training layer~$\ell$, its input is the ADC-quantised output
+  produced by the already-trained layer~$\ell{-}1$, not a clean FP
+  activation.
+  Error thus accumulates during calibration in the same way it does at
+  inference, closing the distribution mismatch between training and
+  deployment that per-layer calibration leaves open.
+
+  \paragraph{$\alpha$-mixed objective.}
+  A purely ADC-propagated loss produces noisy gradients because the
+  straight-through estimator must pass through multiple floor operations.
+  We interpolate between the FP and ADC losses with a scalar
+  $\alpha \in [0,1]$:
+  \[
+    \mathcal{L}(\alpha) = (1-\alpha)\,\mathcal{L}_{\mathrm{FP}}
+                        + \alpha\,\mathcal{L}_{\mathrm{ADC}},
+  \]
+  where $\mathcal{L}_{\mathrm{FP}}$ uses the clean FP input and
+  $\mathcal{L}_{\mathrm{ADC}}$ uses the quantised input from the previous
+  block.
+  $\alpha = 0$ recovers clean calibration; $\alpha = 1$ is full
+  propagation.
+  An $\alpha$-sweep (Section~\ref{sec:results}) shows that $\alpha = 0.5$
+  minimises ADC perplexity: below 0.5 the loss under-weights the ADC
+  regime; above 0.5 gradient noise degrades transform quality.
+  At $\alpha = 0.5$, INT8 ADC perplexity drops from 28.86 to 14.41
+  with no additional parameters.
+
+  \subsubsection{Trainable Per-Channel Diagonals}
+
+  We first establish a formal bound showing that orthogonal Kronecker
+  transforms cannot suppress per-channel outliers beyond a fixed
+  threshold, and that a diagonal factor is the precise missing degree
+  of freedom.
+
+  \begin{lemma}[Rotation-only outlier suppression bound]
+    \label{lem:rotation-bound}
+    Let $P = L \otimes R$ with $L^\top L = I$, $R^\top R = I$ be an
+    orthogonal Kronecker transform on $\mathbb{R}^d$ ($d = a \cdot b$,
+    $L \in \mathbb{R}^{a \times a}$, $R \in \mathbb{R}^{b \times b}$).
+    For any $x \in \mathbb{R}^d$ define the effective participation ratio
+    \[
+      m_{\mathrm{eff}}(x) \;=\; \frac{\|x\|_2^2}{\|x\|_\infty^2}
+      \;\in\; [1,\, d].
+    \]
+    Then for every orthogonal Kronecker transform $P$,
+    \[
+      \|xP\|_\infty \;\ge\; \frac{\|x\|_2}{\sqrt{d}},
+    \]
+    and consequently the maximum achievable suppression of the peak
+    activation over all such $P$ satisfies
+    \[
+      \frac{\|x\|_\infty}{\min_{P}\,\|xP\|_\infty}
+      \;\le\;
+      \sqrt{\frac{d}{m_{\mathrm{eff}}(x)}}.
+    \]
+  \end{lemma}
+
+  \begin{proof}
+    Since $P$ is orthogonal, $\|xP\|_2 = \|x\|_2$.
+    For any vector $y \in \mathbb{R}^d$ the standard $\ell^\infty$--$\ell^2$
+    inequality gives $\|y\|_\infty \ge \|y\|_2 / \sqrt{d}$.
+    Applying this to $y = xP$ yields the first inequality.
+    The suppression ratio bound then follows by dividing
+    $\|x\|_\infty = \|x\|_2 / \sqrt{m_{\mathrm{eff}}(x)}$
+    by the lower bound $\|xP\|_\infty \ge \|x\|_2 / \sqrt{d}$.
+  \end{proof}
+
+  \begin{corollary}[Kronecker capacity]
+    \label{cor:kronecker-capacity}
+    A full orthogonal matrix on $\mathbb{R}^d$ has
+    $d(d-1)/2$ free parameters.
+    The Kronecker family $L \otimes R$ has only
+    $a(a-1)/2 + b(b-1)/2$ free parameters — for $d = 2048 = 32 \times 64$
+    this is $2512$ vs.\ $\approx 2.1 \times 10^6$.
+    Consequently, the Kronecker family is a strict low-dimensional subset
+    of all orthogonal transforms and may not attain the bound in
+    Lemma~\ref{lem:rotation-bound}; the true achievable suppression ratio
+    can be strictly smaller.
+  \end{corollary}
+
+  \paragraph{Implications for INT4 ADC.}
+  In our setting, per-token activation scaling sets
+  $s_x = \|x\|_\infty / q_{\max}$.
+  If a small number of channels persistently dominate
+  (i.e.\ $m_{\mathrm{eff}} \ll d$), Lemma~\ref{lem:rotation-bound} gives
+  a ceiling on how much rotation alone can help.
+  For example, with $d = 2048$ and 8 dominant channels
+  ($m_{\mathrm{eff}} \approx 8$), the maximum suppression factor is
+  $\sqrt{2048/8} = 16$; if the required suppression exceeds this,
+  rotation-only calibration is provably insufficient.
+  The INT4 baseline confirms this empirically: the ADC
+  perplexity gap of $\times 153$ persists even after FlatQuant
+  rotation, whereas adding diagonal scaling reduces the dead-zone rate
+  from $80.9\%$ to $10.4\%$.
+
+  \paragraph{Motivation and formulation.}
+  A Kronecker rotation reshapes the \emph{covariance} of an activation
+  cloud but does not adjust per-channel scales.
+  Under INT4, residual outlier channels remain after rotation: a few
+  channels with magnitudes $5$--$10\times$ the median force the
+  per-token scale factor to waste range on those channels and
+  under-represent the rest, which directly worsens the ADC dead-zone
+  rate because $y_{\mathrm{int}}$ per output channel depends on how
+  uniformly codes are distributed.
+
+  We absorb a trainable diagonal
+  $D = \mathrm{diag}(d_1, \ldots, d_c)$, $d_i \in [10^{-4}, 10]$,
+  into the rotation:
+  \[
+    \tilde{T} = T \cdot D.
+  \]
+  The linear map is preserved by applying equal-and-opposite rescaling
+  to the weights:
+  \[
+    y = \underbrace{(x\,D^{-1}T^{-1})}_{\tilde{x}}\,
+        \underbrace{(T\,D\,W^\top)}_{\tilde{W}^\top}.
+  \]
+  The bounds on $d_i$ prevent degenerate scaling.
+  $D$ is trained jointly with $T$ during block-level calibration and
+  folded into $\tilde{W}$ at deployment, adding no inference overhead.
+  Crucially, because $D$ is not orthogonal, it breaks the
+  $\ell^2$-energy invariance assumed in Lemma~\ref{lem:rotation-bound}:
+  setting $d_j < 1$ directly reduces $\|xD\|_2$ in outlier channel $j$
+  \emph{before} the scale is computed, achieving suppression factors that
+  no rotation can match.
+
+  \paragraph{Placement in attention and MLP blocks.}
+  We place separate diagonal matrices before the attention sub-layer
+  (\texttt{diag\_attn}, shared by $q/k/v$, plus a second instance
+  before $o$) and before the FFN sub-layer (\texttt{diag\_mlp}, shared
+  by \texttt{gate}/\texttt{up}, plus a second before \texttt{down}).
+  An ablation (Section~\ref{sec:results}) shows that both placements
+  are necessary: \texttt{diag\_mlp} drives the bypass-perplexity
+  improvement while \texttt{diag\_attn} closes the ADC gap; either
+  alone leaves significant perplexity on the table.
+
+  \subsubsection{Staged Training}\label{sec:staged}
+
+  Training all Kronecker factors and diagonals jointly from scratch
+  with $\alpha = 0.5$ is unstable: attention gradients dominate early
+  optimisation before MLP transforms have converged, yielding a poor
+  initialisation for both sub-systems.
+
+  We split calibration into two stages.
+  \emph{Stage~A} (30 epochs, learning rate $\eta$) trains only the MLP
+  Kronecker factors $T_{\mathrm{gate}}, T_{\mathrm{up}}, T_{\mathrm{down}}$
+  and MLP diagonals $D^{(\mathrm{m})}$ with $\alpha = 0$ (clean FP
+  inputs), providing a stable, noise-free landscape in which FFN
+  transforms converge.
+  \emph{Stage~B} (10 epochs, learning rate $0.1\eta$) unfreezes the
+  attention Kronecker factors $T_q, T_k, T_v, T_o$ and attention
+  diagonals $D^{(\mathrm{a})}$, and switches to $\alpha = 0.5$.
+  The MLP warm start prevents gradient interference from attention.
+  This procedure achieves the best INT4 results among all pure-PTQ
+  configurations: bypass perplexity~18.50, ADC perplexity~27.60.
+
+  \subsection{Quantisation-Aware Adaptation via Post-ADC Residual LoRA}
+
+  PTQ methods reach a floor around 27.5--28.5 ADC perplexity for INT4
+  regardless of calibration strategy.
+  The limiting factor is ADC resolution: with $\delta \approx 6.12$
+  each output channel has at most $\sim$30 usable discrete levels,
+  introducing irreducible rounding error that no linear transform can
+  eliminate.
+  We complement PTQ with a lightweight adaptation step that learns to
+  correct ADC distortion \emph{after} it has occurred, in the digital
+  domain, without modifying the frozen quantised model.
+
+  \subsubsection{Architecture}
+
+  The PTQ checkpoint is frozen entirely.
+  For each of the seven linear projections in every decoder block, we
+  add a parallel low-rank branch that reads the full-precision input
+  $x_{\mathrm{fp}}$ and adds its output to the ADC result:
+  \[
+    y = \underbrace{\mathrm{ADC}_{\mathrm{frozen}}(\hat{x})}_{\text{quantised path}}
+      + \underbrace{\frac{\alpha_r}{r}\,B\!\left(A\!\left(x_{\mathrm{fp}}\right)\right)}_{\text{residual correction, rank }r},
+  \]
+  where $A \in \mathbb{R}^{r \times d}$ and $B \in \mathbb{R}^{d \times r}$
+  are LoRA~\cite{lora} factors stored and computed in \texttt{float32},
+  and $\alpha_r / r$ is the standard LoRA scaling.
+  All base model parameters — weights, Kronecker factors, diagonals, and
+  ADC step sizes — remain frozen throughout.
+  For Llama-3.2-1B ($d = 2048$, 16 decoder blocks, 7 projections each),
+  rank-4 adapters add $\sim$1.8M parameters (0.15\% of the total model).
+
+  \subsubsection{Training Objective}
+
+  The adapters are trained for 5 epochs with learning rate $10^{-4}$ on
+  the same 128-sample calibration set used for PTQ.
+  The loss combines cross-entropy on the model's predictions with a
+  knowledge-distillation term towards the FP teacher:
+  \[
+    \mathcal{L}_{\mathrm{LoRA}} = \mathrm{CE}(\hat{p},\, y)
+    + \lambda\,\mathrm{KL}\!\left(\hat{p} \;\big\|\; p_{\mathrm{FP}}\right),
+  \]
+  with $\lambda = 1$.
+  The FP teacher forward pass is computed once per batch with no
+  gradient.
+  Ablations (Section~\ref{sec:results}) show that the KL term improves
+  ADC perplexity by $\sim$0.6 points over CE alone, and that rank $r = 4$
+  saturates the gain — rank~8 yields only marginal further improvement.
+  Restricting adapters to the last eight layers is significantly worse
+  than covering all sixteen, confirming that ADC distortion accumulates
+  across the full depth of the network.
+
+  \subsubsection{Why Post-ADC Placement}
+
+  Placing the LoRA correction \emph{before} the ADC — modifying the
+  pre-ADC integer signal — fails catastrophically.
+  Any correction $\Delta = B A x$ is itself quantised by the fixed step
+  $\delta$ before reaching the output, so it cannot express
+  sub-$\delta$ adjustments.
+  Moreover, gradients through the floor operator are too noisy for
+  stable training from a cold start, and the coupled interaction with the
+  hard ADC clamp causes divergence.
+
+  Post-ADC placement avoids both problems: the correction is added in
+  the digital domain after the ADC read, at full floating-point
+  precision, with clean gradients from the CE+KL loss.
+  ADC perplexity drops from the PTQ plateau of 27.60 to 13.96 for INT4
+  on WikiText-2, surpassing the INT8 PTQ result (14.41), and generalises
+  to C4 (ADC perplexity 23.30 vs.\ PTQ baseline 46.40).
+
+  \section{Implementation}
+
+  \subsection{Software Architecture}
+
+  \paragraph{Purpose.}
+  Describe the codebase at a system level.
+
+  \paragraph{What to include.}
+  Explain the structure of the implementation, including transformation
+  modules, quantization modules, calibration logic, and model-level
+  utilities. A simple pipeline figure would work well here.
+
+  \subsection{Core Components}
+
+  \paragraph{Suggested components to describe.}
+  \begin{itemize}
+    \item \texttt{KroneckerTransform} and its role in reparameterization.
+    \item \texttt{FlatQuantLinear} as the main quantized linear wrapper.
+    \item The ADC-aware simulation path for tiled matrix-vector
+    multiplication.
+    \item The LLaMA attention and MLP wrappers.
+  \end{itemize}
+
+  \subsection{Calibration Pipeline}
+
+  \paragraph{Purpose.}
+  Explain how calibration is executed in practice.
+
+  \paragraph{What to include.}
+  Describe how input activations are captured, how decoder layers are
+  processed sequentially, how floating-point reference outputs are
+  computed, which parameters are trainable during calibration, and how
+  outputs are propagated from one layer to the next.
+
+  \subsection{Numerical Stability and Engineering Decisions}
+
+  \paragraph{Purpose.}
+  Document important implementation choices.
+
+  \paragraph{What to include.}
+  This subsection can cover mixed precision, float32 accumulation,
+  gradient clipping, clamping of transform parameters, NaN checks, and
+  memory-management decisions. These practical details are valuable in a
+  thesis because they justify why the implementation is reliable.
+
+  \subsection{Reproducibility}
+
+  \paragraph{Purpose.}
+  Make the work easy to reproduce.
+
+  \paragraph{What to include.}
+  State the software versions, hardware environment, random seed policy,
+  configuration management, and how experiment outputs are logged and
+  stored.
+
+  \section{Experimental Design}
+
+  \subsection{Model, Data, and Hardware Setup}
+
+  \paragraph{Model.}
+  All experiments use Llama-3.2-1B~\cite{llama3} in \texttt{bfloat16}.
+  The model has 16 decoder layers, hidden dimension $d = 2048$, 32
+  attention heads with grouped-query attention, and a SwiGLU FFN with
+  intermediate dimension 8192.
+  It is small enough to run a full sweep of dozens of configurations
+  overnight on a single GPU while being representative of the
+  transformer architecture used in larger LLaMA-family models.
+
+  \paragraph{Calibration data.}
+  FlatQuant transforms and LoRA adapters are calibrated on WikiText-2
+  training text~\cite{wikitext2}.
+  Unless stated otherwise, 128 randomly sampled sequences of 2048 tokens
+  each are used.
+  Selected experiments use 512 or 1024 samples to study the effect of
+  calibration set size; the INT4 series demonstrates that sample count
+  is a dominant lever for this bit-width.
+
+  \paragraph{Evaluation.}
+  Perplexity is measured on the WikiText-2 test set using a sliding
+  window of context length 2048 and stride 1024.
+  Selected configurations are additionally evaluated on C4~\cite{c4}
+  under the same protocol to verify out-of-domain generalisation.
+
+  \paragraph{ADC hardware parameters.}
+  Table~\ref{tab:hardware} lists the fixed hardware constants used
+  throughout.
+  All values are chosen to match a plausible near-term AIMC chip
+  target.
+  The ADC step size $\delta$ is fully determined by these constants via
+  $\delta = 2 M q_x q_w / (2^{b_a} k)$, giving $\delta \approx 2016$
+  for INT8 and $\delta \approx 6.12$ for INT4.
+
+  \begin{table}[h]
+    \centering
+    \caption{Fixed ADC hardware parameters.}
+    \label{tab:hardware}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}lll@{}}
+      \toprule
+      \textbf{Parameter} & \textbf{Symbol} & \textbf{Value} \\
+      \midrule
+      Tile size (crossbar columns) & $M$ & 256 \\
+      ADC bit-width                & $b_a$ & 8 \\
+      Parallel ADC channels        & $k$ & 16 \\
+      INT8 weight range            & $q_w$ & 127 \\
+      INT8 activation range        & $q_x$ & 127 \\
+      INT4 weight range            & $q_w$ & 7 \\
+      INT4 activation range        & $q_x$ & 7 \\
+      ADC step (INT8)              & $\delta$ & $\approx 2016$ \\
+      ADC step (INT4)              & $\delta$ & $\approx 6.12$ \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  \paragraph{FlatQuant calibration settings.}
+  Transforms are trained for 30 epochs with learning rate $5 \times
+  10^{-3}$ using the AdamW optimiser.
+  Stage~B of staged training uses 10 epochs at $5 \times 10^{-4}$.
+  Static activation scales for Step~2 of the FlatQuant pipeline use the
+  99.9th-percentile clipping strategy (\texttt{calibration\_method=percentile}).
+
+  \subsection{Evaluation Metrics}
+  \label{sec:metrics}
+
+  All experiments are characterised by the following metrics.
+
+  \begin{itemize}
+    \item \textbf{PPL (bypass).}
+      WikiText-2 perplexity with ADC disabled; only tiling and integer
+      quantisation are active.
+      Measures FlatQuant transform quality in isolation.
+      Lower is better; the FP baseline is $\approx 10.5$ (INT8 regime)
+      and $\approx 10.5$ / $\approx 14$ depending on bit-width.
+
+    \item \textbf{PPL (ADC).}
+      WikiText-2 perplexity with the full ADC pipeline enabled.
+      This is the primary metric; the bypass--ADC gap measures the
+      additional degradation introduced by finite-resolution ADC.
+
+    \item \textbf{dead\_rate.}
+      Fraction of output channels across all layers and calibration
+      tokens for which $|y_{\mathrm{int}}| < \delta$, i.e.\ the ADC
+      output is identically zero.
+      Measured on the calibration set; lower is better.
+
+    \item \textbf{clip\_rate.}
+      Fraction of ADC outputs that saturate at the maximum code
+      $\pm(2^{b_a-1}-1)$.
+      High clip rate indicates the integer accumulation systematically
+      overflows the ADC range.
+
+    \item \textbf{bin\_usage.}
+      Fraction of the $2^{b_a}$ ADC output bins that are actually
+      occupied, averaged over layers and tokens.
+      Higher is better; near-zero bin usage indicates the ADC is
+      effectively acting as a 1-bit comparator.
+
+    \item \textbf{reconstruction\_rel.}
+      Relative mean-squared error between the ADC output and the FP
+      reference, $\|\hat{y} - y^\star\|^2 / \|y^\star\|^2$, on the
+      calibration set.
+      Tracks layer-level signal fidelity independently of perplexity.
+  \end{itemize}
+
+  \subsection{Baseline Configurations}
+
+  \paragraph{FP baseline.}
+  The original \texttt{bfloat16} Llama-3.2-1B with no quantisation,
+  giving WikiText-2 perplexity $\approx 10.5$.
+  This is the upper bound on achievable quality.
+
+  \paragraph{FlatQuant w8a8 PTQ baseline (INT8).}
+  FlatQuant with $b_w = b_x = 8$, 128 calibration samples, per-token
+  activation scaling (\texttt{calibration\_method=percentile}), and
+  ADC enabled at inference.
+  This configuration gives bypass PPL~10.01 and ADC PPL~28.86 with
+  dead\_rate~10.3\%.
+  It is the reference point for all INT8 ablations.
+
+  \paragraph{FlatQuant w4a4 PTQ baseline (INT4).}
+  FlatQuant with $b_w = b_x = 4$, 128 calibration samples, same ADC
+  hardware parameters.
+  After correcting a bug in the LLaMA ADC converter that was creating
+  spurious uncalibrated copies of attention projections, this gives
+  bypass PPL~15.41 and ADC PPL~2354.86, a bypass-to-ADC gap of
+  $\times 153$.
+  This extreme gap motivates the INT4-specific extensions.
+
+  \subsection{PTQ Experiment Series}
+
+  Experiments are grouped into versioned overnight sweeps.
+  Each sweep trains from scratch and evaluates all configurations on the
+  same calibration and evaluation sets; results are logged to JSON files
+  and WandB (project \texttt{llama-flat-quant-adc-ptq-blocks}).
+
+  \paragraph{INT8 calibration study (v2).}
+  Three INT8 configurations are compared:
+  (i)~\emph{baseline} — per-projection MSE, $\alpha = 0$;
+  (ii)~\emph{bin-center} — adds a $\cos^2(\pi z)$ auxiliary loss
+       ($z = y_{\mathrm{int}}/\delta$) with $\lambda = 0.1$ to nudge
+       accumulations toward bin centres, reducing floor-rounding error;
+  (iii)~\emph{propagated} — block-wise calibration, $\alpha = 1$;
+  (iv)~\emph{prop+center} — combines propagation with the bin-center
+       auxiliary loss.
+  The goal is to isolate the contribution of each component to the
+  bypass--ADC gap.
+
+  \paragraph{INT4 propagation and $\alpha$-sweep (v1 and v2).}
+  Version~1 sweeps eight configurations at 128 and 512 calibration
+  samples to identify the effect of sample count and propagation for
+  INT4.
+  Version~2 introduces the $\alpha$-mixing objective and sweeps
+  $\alpha \in \{0.25, 0.5, 0.75, 1.0\}$ at 1024 samples.
+  It also evaluates the two-stage protocol (\S\ref{sec:staged}) and the
+  bounded-diagonal extension (\texttt{add\_diag}, $d_i \in [10^{-4},
+  10]$) combined with $\alpha = 0.5$.
+
+  \paragraph{Layer-wise $\alpha$ and selective diagonals (v3).}
+  Two additional degrees of freedom are introduced:
+  (i)~\emph{layer-wise $\alpha$} uses a smaller $\alpha_{\mathrm{early}}$
+      for the first $N/2$ layers and a larger $\alpha_{\mathrm{late}}$
+      for the rest, on the hypothesis that early layers accumulate more
+      ADC error;
+  (ii)~\emph{selective diagonals} trains \texttt{diag\_attn} only,
+       \texttt{diag\_mlp} only, or both, to isolate which sub-layer
+       benefits most from per-channel rescaling.
+  Configurations are crossed with flat and layer-wise $\alpha$.
+
+  \paragraph{MLP diagonal decomposition and staged selective training (v4).}
+  The MLP diagonal is split into \texttt{diag\_up\_gate} and
+  \texttt{diag\_down} components to determine which projection drives
+  the bypass improvement seen in v3.
+  A two-stage protocol is also evaluated: Stage~A trains MLP diagonals
+  without propagation ($\alpha = 0$); Stage~B adds attention diagonals
+  and switches to $\alpha = 0.5$.
+
+  \paragraph{Stochastic propagation (v5).}
+  Deterministic $\alpha = 0.5$ mixes FP and ADC losses in a fixed ratio
+  every batch.
+  Two stochastic alternatives are evaluated:
+  (i)~\emph{Bernoulli} — each batch randomly uses either a clean FP
+      input or an ADC-propagated input with probability~$0.5$;
+  (ii)~\emph{Beta(2,2)} — each batch samples $\alpha \sim
+      \mathrm{Beta}(2,2)$ and performs a dual forward pass with the
+      sampled mix.
+  Both modes are tested with the staged protocol from v4.
+
+  \subsection{QAT Experiment Series: Post-ADC Residual LoRA}
+
+  \paragraph{Initial LoRA sweep (v6).}
+  Starting from the best PTQ checkpoint (\texttt{staged\_mlpdiag\_then\_attn},
+  ADC PPL~27.60), LoRA adapters are added with
+  $r \in \{4, 8\}$ and trained on WikiText-2 calibration data for 5
+  epochs with cross-entropy loss.
+  Four target sets are compared: \texttt{down\_proj} only,
+  \texttt{down + o\_proj}, all 7 projections, and no LoRA (control).
+
+  \paragraph{Ablation study (v7).}
+  Six ablation axes are evaluated from scratch:
+  \begin{itemize}
+    \item \emph{Seed reproducibility} (group~A): three independent
+      seeds for the full PTQ+LoRA pipeline to quantify end-to-end
+      variance.
+    \item \emph{Rank sweep} (group~B): $r \in \{1, 2, 4, 8\}$ with
+      \texttt{down + o\_proj} targets to locate the saturation point.
+    \item \emph{Loss function} (group~C): cross-entropy (CE) vs.\
+      CE + KL divergence from the FP teacher ($\lambda = 1$).
+    \item \emph{Layer coverage} (group~D): all 16 layers vs.\ first 8
+      vs.\ last 8, with rank~4 and \texttt{down + o\_proj}.
+    \item \emph{Placement} (group~E): post-ADC residual (proposed) vs.\
+      pre-ADC injection (modifying the integer accumulation before the
+      ADC floor operation).
+    \item \emph{Full coverage with CE+KL} (group~F): all 7 projections
+      with both loss variants.
+  \end{itemize}
+
+  \paragraph{Generalisation evaluation (v8).}
+  The top-3 LoRA configurations from v7 are re-trained and evaluated on
+  both WikiText-2 and C4 to test whether the correction learned on
+  in-domain calibration data transfers to out-of-domain web text.
+
+  \paragraph{Tile size comparison.}
+  A dedicated sweep compares $M \in \{256, 1024\}$ without and with the
+  best LoRA configuration (\texttt{r4\_all\_ce\_kl}).
+  Changing $M$ scales $\delta$ by the same factor, coarsening ADC
+  resolution for larger tiles; this tests whether LoRA correction
+  remains effective under a different hardware regime.
+
+  \section{Results}\label{sec:results}
+
+  \subsection{Baseline Results}
+
+  \paragraph{Purpose.}
+  Present the main quantitative comparison.
+
+  \paragraph{What to include.}
+  Compare floating-point inference, naive ADC conversion, and baseline
+  FlatQuant. This is where the reader first sees whether the proposed
+  direction is promising at all.
+
+  \subsection{Effect of Hardware Parameters}
+
+  \paragraph{Purpose.}
+  Analyze how model quality changes with the ADC setup.
+
+  \paragraph{What to include.}
+  Show the effect of tile size, ADC bit precision, and any other hardware
+  parameters you vary. Graphs are especially useful here because trends
+  matter more than isolated numbers.
+
+  \subsection{Effect of Method Components}
+
+  \paragraph{Purpose.}
+  Show which parts of the method are responsible for improvements.
+
+  \paragraph{What to include.}
+  Present the ablation results for transform type, transform scope,
+  clipping options, and ADC-aware losses. This subsection is essential
+  for arguing that the method is not just a bundle of arbitrary design
+  choices.
+
+  \subsection{Layer and Projection Sensitivity}
+
+  \paragraph{Purpose.}
+  Provide a more detailed analysis of where ADC error hurts most.
+
+  \paragraph{What to include.}
+  This is the right place to compare attention and MLP sensitivity and
+  to discuss whether certain projections such as \texttt{o\_proj} and
+  \texttt{down\_proj} dominate the quality degradation.
+
+  \subsection{Best Configurations}
+
+  \paragraph{Purpose.}
+  Summarize the strongest final results.
+
+  \paragraph{What to include.}
+  Present the best-performing PTQ configuration, and if applicable, the
+  best lightweight adaptation result. A final summary table is helpful
+  here.
+
+  \section{Discussion}
+
+  \subsection{Interpretation of Results}
+
+  \paragraph{Purpose.}
+  Move from raw results to explanation.
+
+  \paragraph{What to include.}
+  Discuss why certain modifications work and others do not. Relate the
+  observed behavior back to the theory of ADC-constrained output
+  quantization and the internal statistics of LLaMA layers.
+
+  \subsection{Limits of PTQ Under ADC Constraints}
+
+  \paragraph{Purpose.}
+  State clearly where the chosen approach succeeds and where it fails.
+
+  \paragraph{What to include.}
+  This subsection should answer whether reconstruction-based PTQ remains
+  sufficient or whether the problem fundamentally requires some degree of
+  model adaptation in the low-bit regime.
+
+  \subsection{Practical Implications}
+
+  \paragraph{Purpose.}
+  Explain what the results mean beyond the specific experiments.
+
+  \paragraph{What to include.}
+  Discuss what your findings imply for IMC deployment, for the design of
+  ADC-aware quantization methods, and for future hardware-software
+  co-design of transformer inference systems.
+
+  \subsection{Threats to Validity}
+
+  \paragraph{Purpose.}
+  Strengthen the scientific quality of the thesis.
+
+  \paragraph{What to include.}
+  Mention limitations such as reliance on simulation, restricted model
+  sizes, calibration dataset choice, and the gap between simplified
+  hardware assumptions and a real chip implementation.
+
+  \section{Conclusion}
+
+  \paragraph{Purpose.}
+  Provide a concise answer to the research questions and summarize the
+  thesis contributions.
+
+  \paragraph{What to include.}
+  Restate the original problem, summarize the method and experimental
+  findings, state the main conclusion about ADC-aware PTQ for
+  LLaMA-family models, and list a few concrete directions for future
+  work such as better output-aware objectives, mixed precision, or
+  lightweight adaptation.
+
+  \newpage
+  \printbibliography
+
+  \clearpage
+  \appendix
+
+  \section{Detailed Experimental Configurations}
+
+  \paragraph{Suggested contents.}
+  Put complete hyperparameter tables here: number of calibration samples,
+  batch size, learning rates, transform settings, clipping settings,
+  hardware parameters, and final selected configurations for each run.
+
+  \section{Additional Figures and Tables}
+
+  \paragraph{Suggested contents.}
+  Add extended ablation tables, per-layer plots, extra sensitivity
+  analyses, and any visualizations that support the main text but are
+  too large to place in the core chapters.
+
+  \section{Code Organization and Reproducibility Notes}
+
+  \paragraph{Suggested contents.}
+  Briefly describe the repository structure, entry points for training
+  and evaluation, external dependencies, and the exact steps required to
+  reproduce the reported results.
+
+\end{document}
+
+Этот прогон — **очень сильный отрицательный результат**, и он полезнее, чем кажется.
+
+## Что он говорит
+
+Гипотеза
+
+> “если давать градиент только worst 20% tiles и закрыть loophole через LWC, то `P` наконец получит правильное направление”
+
+**не подтвердилась**.
+
+По факту:
+
+* `PPL`: **1600.65 -> 1683.63** — стало даже хуже
+* `max_dead_rate`: **0.8122 -> 0.8121** — без изменений
+* `max_kurtosis_z`: **36.31 -> 36.30** — без изменений
+* `max_reconstruction_rel`: **0.0341 -> 0.0335** — чуть лучше, но это шумовой уровень
+* `max_w_sat_rate`: **0.00448 -> 0.00429** — freeze_clip действительно убрал путь через saturation, это хорошо
+
+То есть:
+
+* loophole через clipping ты закрыла;
+* mean-aggregation на весь блок тоже уже не главное;
+* **а плохие тайлы всё равно не двигаются**.
+
+## Самый важный вывод
+
+Сейчас это выглядит так:
+
+> **при фиксированном `delta` и текущем классе transform’ов (`diag + Kronecker`) модель не умеет заметно менять worst-case `z`-геометрию там, где это действительно нужно.**
+
+Именно worst-case. Не mean. Не clip. А конкретные патологические тайлы.
+
+## Что этот результат уже опровергает
+
+Он довольно сильно опровергает сразу две гипотезы:
+
+### 1. “Проблема была в mean aggregation”
+
+Нет.
+Даже top-k worst tiles не помог.
+
+### 2. “Проблема была в том, что penalty утекал в LWC”
+
+Нет, по крайней мере это уже не основная причина.
+Freeze_clip сработал как защита от этого, но качества не прибавилось.
+
+## Что это теперь значит методологически
+
+Я бы сформулировала так:
+
+> **ADC-aware PTQ через один только output-aware loss на существующих FlatQuant transforms, похоже, упирается в потолок выразительности.**
+
+Не “PTQ вообще невозможно”, а именно:
+
+* этот класс transforms,
+* при этом `delta`,
+* с этим reconstruction constraint,
+* не может сдвинуть плохие тайлы достаточно сильно.
+
+## Что я бы делала дальше
+
+Я бы больше не тратила время на вариации:
+
+* mean vs top-k,
+* weak vs slightly stronger band,
+* dead vs band в том же классе transforms.
+
+Это уже выглядит как diminishing returns.
+
+### Следующие разумные направления — три:
+
+## A. Локальная адаптация самых плохих мест
+
+Самый логичный следующий шаг:
+
+* оставить PTQ/FlatQuant как инициализацию,
+* добавить **LoRA только на `o_proj` и `down_proj`**,
+* а лучше сначала вообще только на **те attention `o_proj` layers, где dead_rate ~ 0.81**.
+
+Почему:
+
+* твои worst-case тайлы в логах сидят именно в `self_attn.o_proj`
+* transforms не справились
+* значит нужен механизм, который меняет не только представление, но и саму функцию слоя
+
+Это сейчас для меня **наиболее вероятный рабочий путь**.
+
+## B. Изменить геометрию железа, а не только loss
+
+То есть:
+
+* поднять `k`,
+* уменьшить `mvm_limit`,
+* mixed precision для `o_proj/down_proj`,
+* higher `ba` только на worst layers
+
+Потому что логи всё больше говорят, что проблема **геометрическая**, а не purely optimization.
+
+## C. Floor-aware asymmetric objective
+
+Если ещё хочется дожать PTQ до конца, то я бы уже не шла в “band-loss 2.0”, а пробовала что-то, что бьёт **ровно по плохой зоне floor**:
+
+* штраф на массу в `(-1, 0)`,
+* maybe signed centering / shift перед quantization,
+* возможно learned centering only for `o_proj`
+
+Но я бы честно поставила это **ниже**, чем LoRA или hardware-side changes.
+
+## Что бы я проверила ещё один раз перед сменой стратегии
+
+Один очень практичный чек:
+
+### получает ли worst tile вообще meaningful gradient?
+
+Для top-3 проблемных тайлов посмотри по эпохам:
+
+* `band_penalty`
+* `dead_rate`
+* `mean_abs_z`
+* norm градиента на соответствующих transform params
+
+Если там penalty ненулевая, а `dead_rate` не двигается — это уже почти окончательный приговор текущему классу PTQ.
+
+## Мой рабочий вывод
+
+Этот run я бы интерпретировала так:
+
+> **FlatQuant-style transforms научились делать “среднюю картину” более-менее приличной, но не могут починить few catastrophic ADC tiles, а именно они убивают perplexity.**
+
+То есть основной bottleneck теперь выглядит не как:
+
+* aggregation,
+* clip loophole,
+* или слабый λ,
+
+а как:
+
+* **недостаточная выразительность transform-only PTQ** для worst-case ADC failures.
+
+Если выбирать один следующий шаг, я бы выбрала:
+
+**PTQ + LoRA только на attention `o_proj` в проблемных слоях**,
+а не ещё один вариант band/dead loss.
