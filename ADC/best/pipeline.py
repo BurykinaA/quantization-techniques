@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from configs import (
     BaseConfig, FPConfig, INT4NoADCConfig, BestPTQConfig, BestLoRAConfig,
     BestPTQKConfig, BestPTQKRecalConfig, BestLoRAKConfig,
+    IterKPreLoRAConfig, IterKI2LoRAConfig, IterKI1LoRAConfig,
     ALL_CONFIGS, _SharedFlatQuantConfig,
 )
 from eval import compute_perplexity, load_eval_encodings, measure_latency
@@ -661,7 +662,7 @@ def _set_bypass_adc(model: nn.Module, bypass: bool) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def apply_lora(model: nn.Module, loader: DataLoader, cfg: BestLoRAConfig,
-               device: torch.device) -> nn.Module:
+               device: torch.device, epoch_callback=None) -> nn.Module:
     """
     Wrap target layers with ResidualLoRATiledLinearADC and train.
 
@@ -698,6 +699,7 @@ def apply_lora(model: nn.Module, loader: DataLoader, cfg: BestLoRAConfig,
         teacher_name_or_path=cfg.model_name if cfg.lora_loss == "ce_kl" else None,
         kl_weight=cfg.lora_kl_weight,
         kl_temperature=cfg.lora_kl_temperature,
+        epoch_callback=epoch_callback,
     )
     return model
 
@@ -773,6 +775,37 @@ def run_config(cfg: BaseConfig, cache_dir: str | None = None) -> dict:
             _set_bypass_adc(model, bypass=True)
             results = run_evaluation(model, tokenizer, cfg, device)
             _set_bypass_adc(model, bypass=False)
+
+        elif isinstance(cfg, (IterKPreLoRAConfig, IterKI2LoRAConfig, IterKI1LoRAConfig)):
+            _k_init     = getattr(cfg, 'lora_k_init', 16)
+            _k_interval = getattr(cfg, 'lora_k_search_interval', 0)
+
+            if _k_init != 16:
+                logger.info(f"[iter-k] Setting k_init={_k_init} for all ADC layers")
+                for m in model.modules():
+                    if isinstance(m, TiledLinearADC):
+                        m.set_k(_k_init)
+
+            epoch_callback = None
+            if _k_interval == -1:
+                logger.info("[iter-k] Running k-search before LoRA training")
+                cfg.k_per_layer = search_k_per_layer(model, cfg, loader, device)
+                for name, m in model.named_modules():
+                    if isinstance(m, TiledLinearADC) and name in cfg.k_per_layer:
+                        m.set_k(cfg.k_per_layer[name])
+            elif _k_interval > 0:
+                logger.info(f"[iter-k] Will run k-search every {_k_interval} LoRA epoch(s)")
+                def epoch_callback(epoch, mdl):
+                    if epoch % _k_interval == 0:
+                        logger.info(f"[iter-k] k-search at epoch {epoch}")
+                        kpl = search_k_per_layer(mdl, cfg, loader, device)
+                        cfg.k_per_layer = kpl
+                        for name, m in mdl.named_modules():
+                            if isinstance(m, TiledLinearADC) and name in kpl:
+                                m.set_k(kpl[name])
+
+            model = apply_lora(model, loader, cfg, device, epoch_callback=epoch_callback)
+            results = run_evaluation(model, tokenizer, cfg, device)
 
         elif isinstance(cfg, BestLoRAKConfig):
             # Stage 1: search per-layer k (same as best_ptq_k)
@@ -872,7 +905,8 @@ def main():
     parser.add_argument(
         "--configs", nargs="+",
         choices=["fp", "int4_no_adc", "best_ptq", "best_lora",
-                 "best_ptq_k", "best_ptq_k_recal", "best_lora_k", "all"],
+                 "best_ptq_k", "best_ptq_k_recal", "best_lora_k",
+                 "iter_lora_k_pre", "iter_lora_k_i2", "iter_lora_k_i1", "all"],
         default=["all"],
         help="Which configs to run (default: all)",
     )

@@ -171,6 +171,21 @@ FQ transforms optimised for δ=14.06 throughout calibration.
 `best_ptq_k_recal` (FQ retrained with per-layer k) is worse than `best_ptq_k` (in-place k),
 suggesting that re-training FQ on the found k over-specializes transforms and hurts generalization.
 
+### Iterative k-Search During LoRA Training (branch `best-iterative-k-lora`)
+
+**Hypothesis:** Start with k=4 (coarse ADC, δ≈56), let LoRA adapt to that noise level,
+then re-search k per-layer to tighten resolution where distributions allow.
+
+k-search uses the **unipolar range criterion**: R = 99.9th percentile of y\_uint,
+picks largest k from {4, 8, 16, 32, 64} such that the ADC covers R without saturation.
+
+| Config | k\_init | k\_search | epochs | Wiki PPL | C4 PPL |
+|---|---|---|---|---|---|
+| `best_lora_k` *(baseline)* | 16 | before training | 5 | 14.56 | 23.78 |
+| `iter_lora_k_pre` | 4 | before training | 5 | — | — |
+| `iter_lora_k_i2`  | 4 | every 2 epochs | 6 | — | — |
+| `iter_lora_k_i1`  | 4 | every 1 epoch  | 5 | — | — |
+
 ---
 
 ## Per-Layer k Search

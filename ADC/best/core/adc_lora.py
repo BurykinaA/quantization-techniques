@@ -255,6 +255,7 @@ def calibrate_adc_lora(
     teacher_name_or_path: str | None = None,
     kl_weight: float = 0.5,
     kl_temperature: float = 2.0,
+    epoch_callback=None,
 ) -> nn.Module:
     """
     Fine-tune LoRA adapters.
@@ -348,6 +349,11 @@ def calibrate_adc_lora(
 
         print(f"[ADC-LoRA] Epoch {epoch + 1}/{epochs}  "
               f"avg loss={total_loss / len(samples):.4f}")
+
+        if epoch_callback is not None:
+            model.eval()
+            epoch_callback(epoch + 1, model)
+            model.train()
 
     if teacher is not None:
         del teacher

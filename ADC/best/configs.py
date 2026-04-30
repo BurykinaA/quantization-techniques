@@ -221,6 +221,48 @@ class BestLoRAKConfig(BestLoRAConfig):
     name: str = "best_lora_k"
 
 
+@dataclass
+class IterKPreLoRAConfig(BestLoRAConfig):
+    """
+    k=4 init → k-search once before LoRA training → 5 epochs with found per-layer k.
+
+    Hypothesis: starting from coarser ADC (k=4, δ≈56) then searching for per-layer k
+    may differ from starting at k=16 (best_lora_k) because the LoRA learns under
+    different ADC noise. k-search here runs on the PTQ model before any LoRA.
+    """
+    name: str = "iter_lora_k_pre"
+    lora_k_init: int = 4
+    lora_k_search_interval: int = -1   # -1 = search once before training
+
+
+@dataclass
+class IterKI2LoRAConfig(BestLoRAConfig):
+    """
+    k=4 init → k-search every 2 LoRA epochs (6 epochs total, 3 searches).
+
+    k is re-searched after epochs 2, 4, 6. LoRA progressively adapts to the
+    updated ADC resolution. Tests whether mid-training k adaptation helps vs
+    a single search at the start.
+    """
+    name: str = "iter_lora_k_i2"
+    lora_epochs: int = 6
+    lora_k_init: int = 4
+    lora_k_search_interval: int = 2    # search every 2 epochs
+
+
+@dataclass
+class IterKI1LoRAConfig(BestLoRAConfig):
+    """
+    k=4 init → k-search after every LoRA epoch (5 epochs, 5 searches).
+
+    Maximum adaptation: k updated after each epoch. Most expensive but gives the
+    upper bound on iterative k-search benefit.
+    """
+    name: str = "iter_lora_k_i1"
+    lora_k_init: int = 4
+    lora_k_search_interval: int = 1    # search every epoch
+
+
 # All configs in order: tells the story FP → INT4 → INT4+ADC → INT4+ADC+LoRA → per-layer k
 ALL_CONFIGS = [
     FPConfig(),
@@ -230,4 +272,7 @@ ALL_CONFIGS = [
     BestPTQKConfig(),
     BestPTQKRecalConfig(),
     BestLoRAKConfig(),
+    IterKPreLoRAConfig(),
+    IterKI2LoRAConfig(),
+    IterKI1LoRAConfig(),
 ]
