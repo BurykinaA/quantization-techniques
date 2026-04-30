@@ -51,79 +51,57 @@
 \contentsline {subsubsection}{\numberline {4.2.1}Architecture}{7}{subsubsection.4.2.1}%
 \contentsline {subsubsection}{\numberline {4.2.2}Training Objective}{7}{subsubsection.4.2.2}%
 \contentsline {subsubsection}{\numberline {4.2.3}Why Post-ADC Placement}{7}{subsubsection.4.2.3}%
-\contentsline {section}{\numberline {5}Implementation}{8}{section.5}%
-\contentsline {subsection}{\numberline {5.1}Software Architecture}{8}{subsection.5.1}%
-\contentsline {paragraph}{Purpose.}{8}{section*.32}%
-\contentsline {paragraph}{What to include.}{8}{section*.33}%
-\contentsline {subsection}{\numberline {5.2}Core Components}{8}{subsection.5.2}%
-\contentsline {paragraph}{Suggested components to describe.}{8}{section*.34}%
-\contentsline {subsection}{\numberline {5.3}Calibration Pipeline}{8}{subsection.5.3}%
-\contentsline {paragraph}{Purpose.}{8}{section*.35}%
-\contentsline {paragraph}{What to include.}{8}{section*.36}%
-\contentsline {subsection}{\numberline {5.4}Numerical Stability and Engineering Decisions}{8}{subsection.5.4}%
-\contentsline {paragraph}{Purpose.}{8}{section*.37}%
-\contentsline {paragraph}{What to include.}{8}{section*.38}%
-\contentsline {subsection}{\numberline {5.5}Reproducibility}{8}{subsection.5.5}%
-\contentsline {paragraph}{Purpose.}{8}{section*.39}%
-\contentsline {paragraph}{What to include.}{8}{section*.40}%
-\contentsline {section}{\numberline {6}Experimental Design}{9}{section.6}%
-\contentsline {subsection}{\numberline {6.1}Model, Data, and Hardware Setup}{9}{subsection.6.1}%
-\contentsline {paragraph}{Model.}{9}{section*.41}%
-\contentsline {paragraph}{Calibration data.}{9}{section*.42}%
-\contentsline {paragraph}{Evaluation.}{9}{section*.43}%
-\contentsline {paragraph}{ADC hardware parameters.}{9}{section*.44}%
-\contentsline {paragraph}{FlatQuant calibration settings.}{9}{section*.46}%
-\contentsline {subsection}{\numberline {6.2}Evaluation Metrics}{9}{subsection.6.2}%
-\contentsline {subsection}{\numberline {6.3}Baseline Configurations}{10}{subsection.6.3}%
-\contentsline {paragraph}{FP baseline.}{10}{section*.47}%
-\contentsline {paragraph}{FlatQuant w8a8 PTQ baseline (INT8).}{10}{section*.48}%
-\contentsline {paragraph}{FlatQuant w4a4 PTQ baseline (INT4).}{10}{section*.49}%
-\contentsline {subsection}{\numberline {6.4}PTQ Experiment Series}{10}{subsection.6.4}%
-\contentsline {paragraph}{INT8 calibration study (v2).}{10}{section*.50}%
-\contentsline {paragraph}{INT4 propagation and $\alpha $-sweep (v1 and v2).}{11}{section*.51}%
-\contentsline {paragraph}{Layer-wise $\alpha $ and selective diagonals (v3).}{11}{section*.52}%
-\contentsline {paragraph}{MLP diagonal decomposition and staged selective training (v4).}{11}{section*.53}%
-\contentsline {paragraph}{Stochastic propagation (v5).}{11}{section*.54}%
-\contentsline {subsection}{\numberline {6.5}QAT Experiment Series: Post-ADC Residual LoRA}{11}{subsection.6.5}%
-\contentsline {paragraph}{Initial LoRA sweep (v6).}{11}{section*.55}%
-\contentsline {paragraph}{Ablation study (v7).}{11}{section*.56}%
-\contentsline {paragraph}{Generalisation evaluation (v8).}{12}{section*.57}%
-\contentsline {paragraph}{Tile size comparison.}{12}{section*.58}%
-\contentsline {section}{\numberline {7}Results}{12}{section.7}%
-\contentsline {subsection}{\numberline {7.1}Baseline Results}{12}{subsection.7.1}%
-\contentsline {paragraph}{Purpose.}{12}{section*.59}%
-\contentsline {paragraph}{What to include.}{12}{section*.60}%
-\contentsline {subsection}{\numberline {7.2}Effect of Hardware Parameters}{12}{subsection.7.2}%
-\contentsline {paragraph}{Purpose.}{12}{section*.61}%
-\contentsline {paragraph}{What to include.}{12}{section*.62}%
-\contentsline {subsection}{\numberline {7.3}Effect of Method Components}{12}{subsection.7.3}%
-\contentsline {paragraph}{Purpose.}{12}{section*.63}%
-\contentsline {paragraph}{What to include.}{12}{section*.64}%
-\contentsline {subsection}{\numberline {7.4}Layer and Projection Sensitivity}{12}{subsection.7.4}%
-\contentsline {paragraph}{Purpose.}{12}{section*.65}%
-\contentsline {paragraph}{What to include.}{12}{section*.66}%
-\contentsline {subsection}{\numberline {7.5}Best Configurations}{13}{subsection.7.5}%
-\contentsline {paragraph}{Purpose.}{13}{section*.67}%
-\contentsline {paragraph}{What to include.}{13}{section*.68}%
-\contentsline {section}{\numberline {8}Discussion}{13}{section.8}%
-\contentsline {subsection}{\numberline {8.1}Interpretation of Results}{13}{subsection.8.1}%
-\contentsline {paragraph}{Purpose.}{13}{section*.69}%
-\contentsline {paragraph}{What to include.}{13}{section*.70}%
-\contentsline {subsection}{\numberline {8.2}Limits of PTQ Under ADC Constraints}{13}{subsection.8.2}%
-\contentsline {paragraph}{Purpose.}{13}{section*.71}%
-\contentsline {paragraph}{What to include.}{13}{section*.72}%
-\contentsline {subsection}{\numberline {8.3}Practical Implications}{13}{subsection.8.3}%
-\contentsline {paragraph}{Purpose.}{13}{section*.73}%
-\contentsline {paragraph}{What to include.}{13}{section*.74}%
-\contentsline {subsection}{\numberline {8.4}Threats to Validity}{13}{subsection.8.4}%
-\contentsline {paragraph}{Purpose.}{13}{section*.75}%
-\contentsline {paragraph}{What to include.}{13}{section*.76}%
-\contentsline {section}{\numberline {9}Conclusion}{13}{section.9}%
-\contentsline {paragraph}{Purpose.}{13}{section*.77}%
-\contentsline {paragraph}{What to include.}{14}{section*.78}%
-\contentsline {section}{\numberline {A}Detailed Experimental Configurations}{16}{appendix.A}%
-\contentsline {paragraph}{Suggested contents.}{16}{section*.80}%
-\contentsline {section}{\numberline {B}Additional Figures and Tables}{16}{appendix.B}%
-\contentsline {paragraph}{Suggested contents.}{16}{section*.81}%
-\contentsline {section}{\numberline {C}Code Organization and Reproducibility Notes}{16}{appendix.C}%
-\contentsline {paragraph}{Suggested contents.}{16}{section*.82}%
+\contentsline {section}{\numberline {5}Experiments and Results}{8}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Model, Data, and Hardware Setup}{8}{subsection.5.1}%
+\contentsline {paragraph}{Model.}{8}{section*.32}%
+\contentsline {paragraph}{Calibration data.}{8}{section*.33}%
+\contentsline {paragraph}{Evaluation.}{8}{section*.34}%
+\contentsline {paragraph}{ADC hardware parameters.}{8}{section*.35}%
+\contentsline {paragraph}{FlatQuant calibration settings.}{8}{section*.37}%
+\contentsline {subsection}{\numberline {5.2}Evaluation Metrics}{8}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Bipolar ADC: Ablation Results}{9}{subsection.5.3}%
+\contentsline {subsubsection}{\numberline {5.3.1}INT8: Effect of Calibration Objective}{9}{subsubsection.5.3.1}%
+\contentsline {subsubsection}{\numberline {5.3.2}INT4: Sample Count and Propagation}{10}{subsubsection.5.3.2}%
+\contentsline {subsubsection}{\numberline {5.3.3}INT4: $\alpha $-Mixing Sweep (1024 Samples)}{10}{subsubsection.5.3.3}%
+\contentsline {subsubsection}{\numberline {5.3.4}INT4: Diagonal Placement, MLP Decomposition, and Staged Training}{10}{subsubsection.5.3.4}%
+\contentsline {subsubsection}{\numberline {5.3.5}INT4: Stochastic Propagation}{11}{subsubsection.5.3.5}%
+\contentsline {subsubsection}{\numberline {5.3.6}Post-ADC Residual LoRA: Initial Sweep}{11}{subsubsection.5.3.6}%
+\contentsline {subsubsection}{\numberline {5.3.7}Post-ADC Residual LoRA: Ablation Study}{12}{subsubsection.5.3.7}%
+\contentsline {subsubsection}{\numberline {5.3.8}Post-ADC Residual LoRA: Generalisation to C4}{13}{subsubsection.5.3.8}%
+\contentsline {subsection}{\numberline {5.4}Unsigned (Unipolar) ADC: A Second Hardware Setting}{13}{subsection.5.4}%
+\contentsline {subsubsection}{\numberline {5.4.1}Unsigned Shift-Subtract ADC Algorithm}{13}{subsubsection.5.4.1}%
+\contentsline {paragraph}{Step 1 — Shift to unsigned.}{13}{section*.46}%
+\contentsline {paragraph}{Step 2 — Hardware MVM.}{13}{section*.47}%
+\contentsline {paragraph}{Step 3 — ADC floor.}{14}{section*.48}%
+\contentsline {paragraph}{Step 4 — Digital correction (exact).}{14}{section*.49}%
+\contentsline {paragraph}{Step 5 — Dequantisation.}{14}{section*.50}%
+\contentsline {subsubsection}{\numberline {5.4.2}Per-Layer $k$ Search}{14}{subsubsection.5.4.2}%
+\contentsline {subsubsection}{\numberline {5.4.3}Calibration Objective for Unipolar ADC}{14}{subsubsection.5.4.3}%
+\contentsline {subsubsection}{\numberline {5.4.4}Experiment Configurations}{15}{subsubsection.5.4.4}%
+\contentsline {subsubsection}{\numberline {5.4.5}Experiment History and Hardware Setting Evolution}{15}{subsubsection.5.4.5}%
+\contentsline {paragraph}{Bipolar ADC (signed accumulation).}{15}{section*.51}%
+\contentsline {paragraph}{Four-quadrant unipolar.}{15}{section*.52}%
+\contentsline {paragraph}{Mismatched unsigned evaluation (historical).}{15}{section*.53}%
+\contentsline {paragraph}{Unipolar FQ — current.}{15}{section*.54}%
+\contentsline {section}{\numberline {6}Discussion}{16}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Interpretation of Results}{16}{subsection.6.1}%
+\contentsline {paragraph}{Purpose.}{16}{section*.56}%
+\contentsline {paragraph}{What to include.}{16}{section*.57}%
+\contentsline {subsection}{\numberline {6.2}Limits of PTQ Under ADC Constraints}{16}{subsection.6.2}%
+\contentsline {paragraph}{Purpose.}{16}{section*.58}%
+\contentsline {paragraph}{What to include.}{16}{section*.59}%
+\contentsline {subsection}{\numberline {6.3}Practical Implications}{16}{subsection.6.3}%
+\contentsline {paragraph}{Purpose.}{16}{section*.60}%
+\contentsline {paragraph}{What to include.}{16}{section*.61}%
+\contentsline {subsection}{\numberline {6.4}Threats to Validity}{16}{subsection.6.4}%
+\contentsline {paragraph}{Purpose.}{16}{section*.62}%
+\contentsline {paragraph}{What to include.}{17}{section*.63}%
+\contentsline {section}{\numberline {7}Conclusion}{17}{section.7}%
+\contentsline {paragraph}{Purpose.}{17}{section*.64}%
+\contentsline {paragraph}{What to include.}{17}{section*.65}%
+\contentsline {section}{\numberline {A}Detailed Experimental Configurations}{19}{appendix.A}%
+\contentsline {paragraph}{Suggested contents.}{19}{section*.67}%
+\contentsline {section}{\numberline {B}Additional Figures and Tables}{19}{appendix.B}%
+\contentsline {paragraph}{Suggested contents.}{19}{section*.68}%
+\contentsline {section}{\numberline {C}Code Organization and Reproducibility Notes}{19}{appendix.C}%
+\contentsline {paragraph}{Suggested contents.}{19}{section*.69}%

@@ -9,6 +9,7 @@
 \usepackage{parskip}
 \usepackage[margin=1cm]{caption}
 \usepackage{booktabs}
+\usepackage{multirow}
 \usepackage[cache=false]{minted}
 \usepackage{amsmath}
 \usepackage{amssymb}
@@ -637,62 +638,7 @@
   on WikiText-2, surpassing the INT8 PTQ result (14.41), and generalises
   to C4 (ADC perplexity 23.30 vs.\ PTQ baseline 46.40).
 
-  \section{Implementation}
-
-  \subsection{Software Architecture}
-
-  \paragraph{Purpose.}
-  Describe the codebase at a system level.
-
-  \paragraph{What to include.}
-  Explain the structure of the implementation, including transformation
-  modules, quantization modules, calibration logic, and model-level
-  utilities. A simple pipeline figure would work well here.
-
-  \subsection{Core Components}
-
-  \paragraph{Suggested components to describe.}
-  \begin{itemize}
-    \item \texttt{KroneckerTransform} and its role in reparameterization.
-    \item \texttt{FlatQuantLinear} as the main quantized linear wrapper.
-    \item The ADC-aware simulation path for tiled matrix-vector
-    multiplication.
-    \item The LLaMA attention and MLP wrappers.
-  \end{itemize}
-
-  \subsection{Calibration Pipeline}
-
-  \paragraph{Purpose.}
-  Explain how calibration is executed in practice.
-
-  \paragraph{What to include.}
-  Describe how input activations are captured, how decoder layers are
-  processed sequentially, how floating-point reference outputs are
-  computed, which parameters are trainable during calibration, and how
-  outputs are propagated from one layer to the next.
-
-  \subsection{Numerical Stability and Engineering Decisions}
-
-  \paragraph{Purpose.}
-  Document important implementation choices.
-
-  \paragraph{What to include.}
-  This subsection can cover mixed precision, float32 accumulation,
-  gradient clipping, clamping of transform parameters, NaN checks, and
-  memory-management decisions. These practical details are valuable in a
-  thesis because they justify why the implementation is reliable.
-
-  \subsection{Reproducibility}
-
-  \paragraph{Purpose.}
-  Make the work easy to reproduce.
-
-  \paragraph{What to include.}
-  State the software versions, hardware environment, random seed policy,
-  configuration management, and how experiment outputs are logged and
-  stored.
-
-  \section{Experimental Design}
+  \section{Experiments and Results}\label{sec:results}
 
   \subsection{Model, Data, and Hardware Setup}
 
@@ -801,182 +747,493 @@
       Tracks layer-level signal fidelity independently of perplexity.
   \end{itemize}
 
-  \subsection{Baseline Configurations}
+  \subsection{Bipolar ADC: Ablation Results}
 
-  \paragraph{FP baseline.}
-  The original \texttt{bfloat16} Llama-3.2-1B with no quantisation,
-  giving WikiText-2 perplexity $\approx 10.5$.
-  This is the upper bound on achievable quality.
+  All results below use the bipolar ADC with signed accumulation
+  $y_{\mathrm{int}} \in [-M,+M]$ and the hardware constants from
+  Table~\ref{tab:hardware}.
+  FP reference: WikiText-2 PPL~10.5.
+  All tables report WikiText-2 perplexity unless stated otherwise.
 
-  \paragraph{FlatQuant w8a8 PTQ baseline (INT8).}
-  FlatQuant with $b_w = b_x = 8$, 128 calibration samples, per-token
-  activation scaling (\texttt{calibration\_method=percentile}), and
-  ADC enabled at inference.
-  This configuration gives bypass PPL~10.01 and ADC PPL~28.86 with
-  dead\_rate~10.3\%.
-  It is the reference point for all INT8 ablations.
+  \subsubsection{INT8: Effect of Calibration Objective}
 
-  \paragraph{FlatQuant w4a4 PTQ baseline (INT4).}
-  FlatQuant with $b_w = b_x = 4$, 128 calibration samples, same ADC
-  hardware parameters.
-  After correcting a bug in the LLaMA ADC converter that was creating
-  spurious uncalibrated copies of attention projections, this gives
-  bypass PPL~15.41 and ADC PPL~2354.86, a bypass-to-ADC gap of
-  $\times 153$.
-  This extreme gap motivates the INT4-specific extensions.
+  Table~\ref{tab:int8} compares four INT8 configurations at 128
+  calibration samples, isolating the contribution of block-wise
+  propagation and the bin-center auxiliary loss.
 
-  \subsection{PTQ Experiment Series}
+  \begin{table}[htbp]
+    \centering
+    \caption{INT8 calibration study. Llama-3.2-1B, 128 samples, $\delta\approx2016$.}
+    \label{tab:int8}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}lrrl@{}}
+      \toprule
+      \textbf{Configuration} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{dead\_rate} \\
+      \midrule
+      FP baseline            & —     & 10.5  & — \\
+      Baseline ($\alpha=0$)  & 10.01 & 28.86 & 10.3\% \\
+      Bin-center ($\lambda=0.1$) & 10.01 & 28.86 & 10.3\% \\
+      Propagated ($\alpha=1$)    & 11.01 & \textbf{14.55} & 10.3\% \\
+      Prop + bin-center          & 11.00 & \textbf{14.41} & 10.3\% \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
 
-  Experiments are grouped into versioned overnight sweeps.
-  Each sweep trains from scratch and evaluates all configurations on the
-  same calibration and evaluation sets; results are logged to JSON files
-  and WandB (project \texttt{llama-flat-quant-adc-ptq-blocks}).
+  Propagation alone reduces ADC PPL by 47\% (28.86 $\to$ 14.55) with no change
+  to dead\_rate, confirming that the remaining gap is ADC resolution, not the
+  dead zone.
+  The bin-center loss has zero effect on its own but gives a marginal
+  improvement (+0.14 PPL) on top of propagation.
 
-  \paragraph{INT8 calibration study (v2).}
-  Three INT8 configurations are compared:
-  (i)~\emph{baseline} — per-projection MSE, $\alpha = 0$;
-  (ii)~\emph{bin-center} — adds a $\cos^2(\pi z)$ auxiliary loss
-       ($z = y_{\mathrm{int}}/\delta$) with $\lambda = 0.1$ to nudge
-       accumulations toward bin centres, reducing floor-rounding error;
-  (iii)~\emph{propagated} — block-wise calibration, $\alpha = 1$;
-  (iv)~\emph{prop+center} — combines propagation with the bin-center
-       auxiliary loss.
-  The goal is to isolate the contribution of each component to the
-  bypass--ADC gap.
+  \subsubsection{INT4: Sample Count and Propagation}
 
-  \paragraph{INT4 propagation and $\alpha$-sweep (v1 and v2).}
-  Version~1 sweeps eight configurations at 128 and 512 calibration
-  samples to identify the effect of sample count and propagation for
-  INT4.
-  Version~2 introduces the $\alpha$-mixing objective and sweeps
-  $\alpha \in \{0.25, 0.5, 0.75, 1.0\}$ at 1024 samples.
-  It also evaluates the two-stage protocol (\S\ref{sec:staged}) and the
-  bounded-diagonal extension (\texttt{add\_diag}, $d_i \in [10^{-4},
-  10]$) combined with $\alpha = 0.5$.
+  The INT4 baseline exhibits a bypass--ADC gap of $\times$153 (15.41 vs.\
+  2354.86), far wider than INT8.
+  Table~\ref{tab:int4v1} shows that 128 calibration samples are
+  insufficient for propagation, while 512 samples combined with
+  propagation collapse the gap to $\times$1.2.
 
-  \paragraph{Layer-wise $\alpha$ and selective diagonals (v3).}
-  Two additional degrees of freedom are introduced:
-  (i)~\emph{layer-wise $\alpha$} uses a smaller $\alpha_{\mathrm{early}}$
-      for the first $N/2$ layers and a larger $\alpha_{\mathrm{late}}$
-      for the rest, on the hypothesis that early layers accumulate more
-      ADC error;
-  (ii)~\emph{selective diagonals} trains \texttt{diag\_attn} only,
-       \texttt{diag\_mlp} only, or both, to isolate which sub-layer
-       benefits most from per-channel rescaling.
-  Configurations are crossed with flat and layer-wise $\alpha$.
+  \begin{table}[htbp]
+    \centering
+    \caption{INT4 sample count and propagation sweep. $\delta\approx6.12$.}
+    \label{tab:int4v1}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}lrrrl@{}}
+      \toprule
+      \textbf{Config} & \textbf{Samples} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
+      \midrule
+      Baseline                  & 128  & 15.41 & 2354.86 & $\times$153 \\
+      Propagated ($\alpha=1$)   & 128  & 40.28 & 203.89  & $\times$5.1 \\
+      Hadamard init + prop      & 128  & 34.73 & 178.86  & $\times$5.1 \\
+      Decoupled (train w8, eval w4) & 128 & 11.64 & 276.25 & $\times$24 \\
+      Propagated ($\alpha=1$)   & 512  & 34.25 & \textbf{40.63} & $\times$1.2 \\
+      Baseline                  & 1024 & 19.80 & 56.83   & $\times$2.9 \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
 
-  \paragraph{MLP diagonal decomposition and staged selective training (v4).}
-  The MLP diagonal is split into \texttt{diag\_up\_gate} and
-  \texttt{diag\_down} components to determine which projection drives
-  the bypass improvement seen in v3.
-  A two-stage protocol is also evaluated: Stage~A trains MLP diagonals
-  without propagation ($\alpha = 0$); Stage~B adds attention diagonals
-  and switches to $\alpha = 0.5$.
+  Hadamard initialisation provides no benefit over random initialisation at
+  the same sample count.
+  Decoupled training (transforms optimised for INT8, evaluated at INT4 ADC)
+  achieves the best bypass PPL (11.64) but a poor ADC gap ($\times$24) because
+  the transforms are not calibrated to the INT4 $\delta$.
 
-  \paragraph{Stochastic propagation (v5).}
-  Deterministic $\alpha = 0.5$ mixes FP and ADC losses in a fixed ratio
-  every batch.
-  Two stochastic alternatives are evaluated:
-  (i)~\emph{Bernoulli} — each batch randomly uses either a clean FP
-      input or an ADC-propagated input with probability~$0.5$;
-  (ii)~\emph{Beta(2,2)} — each batch samples $\alpha \sim
-      \mathrm{Beta}(2,2)$ and performs a dual forward pass with the
-      sampled mix.
-  Both modes are tested with the staged protocol from v4.
+  \subsubsection{INT4: $\alpha$-Mixing Sweep (1024 Samples)}
 
-  \subsection{QAT Experiment Series: Post-ADC Residual LoRA}
+  Table~\ref{tab:int4v2} sweeps $\alpha$ from 0 to 1 at 1024 samples
+  and evaluates two additional configurations: two-stage training and
+  the diagonal extension.
 
-  \paragraph{Initial LoRA sweep (v6).}
-  Starting from the best PTQ checkpoint (\texttt{staged\_mlpdiag\_then\_attn},
-  ADC PPL~27.60), LoRA adapters are added with
-  $r \in \{4, 8\}$ and trained on WikiText-2 calibration data for 5
-  epochs with cross-entropy loss.
-  Four target sets are compared: \texttt{down\_proj} only,
-  \texttt{down + o\_proj}, all 7 projections, and no LoRA (control).
+  \begin{table}[htbp]
+    \centering
+    \caption{INT4 $\alpha$-mixing sweep. 1024 calibration samples.}
+    \label{tab:int4v2}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}lrrrr@{}}
+      \toprule
+      \textbf{Config} & \textbf{$\alpha$} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
+      \midrule
+      Baseline                  & 0.00 & 19.80 & 56.83 & $\times$2.87 \\
+      Prop $\alpha=0.25$        & 0.25 & 21.65 & 32.35 & $\times$1.49 \\
+      Prop $\alpha=0.5$         & 0.50 & 24.24 & 31.22 & $\times$1.29 \\
+      Prop $\alpha=0.75$        & 0.75 & 27.46 & 35.92 & $\times$1.31 \\
+      Prop $\alpha=1.0$ (full)  & 1.00 & 30.32 & 40.20 & $\times$1.32 \\
+      2-stage (A: no prop, B: $\alpha=0.5$) & — & 22.82 & 32.21 & $\times$1.41 \\
+      Diag + $\alpha=0.5$       & 0.50 & \textbf{20.23} & \textbf{27.56} & $\times$1.36 \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
 
-  \paragraph{Ablation study (v7).}
-  Six ablation axes are evaluated from scratch:
+  $\alpha=0.5$ gives the best gap ratio ($\times$1.29); below 0.5 the
+  ADC regime is under-weighted, above 0.5 gradient noise from the floor
+  operator degrades transform quality.
+  Adding the diagonal (bounded LET, $d_i\in[10^{-4},10]$) with $\alpha=0.5$
+  achieves the best absolute ADC PPL (27.56) across all pure-PTQ
+  configurations.
+
+  \subsubsection{INT4: Diagonal Placement, MLP Decomposition, and Staged Training}
+
+  Table~\ref{tab:int4v3v4} ablates diagonal placement (v3) and decomposes
+  the MLP diagonal into its two components (v4), identifying the
+  \texttt{down\_proj} as the key driver.
+
+  \begin{table}[htbp]
+    \centering
+    \caption{INT4 diagonal placement and staged training. 1024 samples, $\alpha=0.5$.}
+    \label{tab:int4v3v4}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}lrrl@{}}
+      \toprule
+      \textbf{Config} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{Note} \\
+      \midrule
+      Both diag (control)        & 19.69 & 28.46 & reproduced v2 \\
+      Attn diag only             & 24.98 & 29.41 & worse bypass \\
+      MLP diag only              & 19.37 & 31.65 & best bypass, wide gap \\
+      MLP diag + layer-wise $\alpha$ & \textbf{19.00} & 28.66 & best bypass overall \\
+      Both diag + layer-wise $\alpha$ & 19.39 & 28.55 & no gain over flat $\alpha$ \\
+      \midrule
+      \texttt{up\_gate} diag only & 23.22 & 39.59 & weak \\
+      \texttt{down} diag only     & 20.42 & 31.26 & key driver \\
+      Staged: MLP diag $\to$ attn diag & \textbf{18.50} & \textbf{27.60} & \textbf{best PTQ} \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  The \texttt{down\_proj} diagonal drives nearly all of the MLP bypass
+  improvement; \texttt{up/gate} contributes little.
+  Staged training (Stage~A: MLP diag, no prop; Stage~B: attn diag,
+  $\alpha=0.5$) achieves the best combined result — bypass 18.50 and
+  ADC 27.60 — by avoiding gradient interference between the two
+  sub-systems.
+
+  \subsubsection{INT4: Stochastic Propagation}
+
+  Table~\ref{tab:int4v5} compares deterministic $\alpha=0.5$ against
+  two stochastic mixing schedules, in flat and staged settings.
+
+  \begin{table}[htbp]
+    \centering
+    \caption{INT4 stochastic propagation. 1024 samples.}
+    \label{tab:int4v5}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}llrrl@{}}
+      \toprule
+      \textbf{Schedule} & \textbf{Mode} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
+      \midrule
+      Deterministic $\alpha=0.5$ & flat   & 24.24 & 31.22 & $\times$1.29 \\
+      Bernoulli (p=0.5)          & flat   & 19.25 & 35.38 & $\times$1.84 \\
+      Beta(2,2)                  & flat   & 22.90 & 31.40 & $\times$1.37 \\
+      Deterministic $\alpha=0.5$ & staged & 18.50 & 27.60 & $\times$1.49 \\
+      Bernoulli (p=0.5)          & staged & \textbf{16.94} & 32.44 & $\times$1.92 \\
+      Beta(2,2)                  & staged & 17.16 & \textbf{27.82} & $\times$1.62 \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  Bernoulli switching yields the best bypass (16.94) but the worst ADC
+  gap — batches that use only the clean FP path provide no ADC signal to
+  the attention transforms.
+  Beta(2,2) samples near 0.5 each batch and closely matches deterministic
+  $\alpha=0.5$; the marginal ADC gain (27.82 vs.\ 27.60) does not
+  justify the added complexity.
+
+  \subsubsection{Post-ADC Residual LoRA: Initial Sweep}
+
+  Table~\ref{tab:lorav6} evaluates LoRA adapters on top of the best PTQ
+  checkpoint (\texttt{staged}, ADC PPL~27.60), varying rank and target
+  projection sets.
+
+  \begin{table}[htbp]
+    \centering
+    \caption{LoRA initial sweep (v6). Base PTQ: bypass~18.50, ADC~27.60.}
+    \label{tab:lorav6}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}llrrl@{}}
+      \toprule
+      \textbf{Config} & \textbf{Targets} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
+      \midrule
+      No LoRA (base PTQ) & — & 18.50 & 27.60 & $\times$1.49 \\
+      LoRA $r=4$, \texttt{down}     & 1 proj & 19.33 & 16.32 & $\times$0.84 \\
+      LoRA $r=8$, \texttt{down}     & 1 proj & 19.17 & 15.79 & $\times$0.82 \\
+      LoRA $r=4$, \texttt{down+o}   & 2 proj & 18.68 & \textbf{15.63} & $\times$0.84 \\
+      LoRA $r=4$, all 7 proj        & 7 proj & \textbf{17.73} & 16.53 & $\times$0.93 \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  Across all LoRA configurations ADC PPL falls below bypass PPL (gap $<1$),
+  confirming that the adapter learns to specifically correct ADC noise.
+  Adding \texttt{o\_proj} to \texttt{down\_proj} gives the best ADC PPL
+  (15.63); covering all 7 projections gives the best bypass (17.73) at
+  the cost of a slightly wider gap.
+
+  \subsubsection{Post-ADC Residual LoRA: Ablation Study}
+
+  Table~\ref{tab:lorav7} reports the full ablation across rank, loss,
+  layer coverage, and adapter placement (v7, all runs use $r=4$,
+  \texttt{down+o} unless stated).
+
+  \begin{table}[htbp]
+    \centering
+    \caption{LoRA ablation study (v7). Llama-3.2-1B, INT4.}
+    \label{tab:lorav7}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}llll r@{}}
+      \toprule
+      \textbf{Axis} & \textbf{Setting} & \textbf{ADC PPL} \\
+      \midrule
+      \multirow{3}{*}{Seed}
+        & seed 1 & 15.79 \\
+        & seed 2 & 15.88 \\
+        & seed 3 & 15.93 \\
+      \midrule
+      \multirow{4}{*}{Rank}
+        & $r=1$ & 15.90 \\
+        & $r=2$ & 15.60 \\
+        & $r=4$ & \textbf{15.57} \\
+        & $r=8$ & 15.24 \\
+      \midrule
+      \multirow{2}{*}{Loss}
+        & CE only        & 14.60 \\
+        & CE + KL        & \textbf{13.96} \\
+      \midrule
+      \multirow{3}{*}{Layer coverage}
+        & first 8 layers & 16.64 \\
+        & all 16 layers  & \textbf{15.63} \\
+        & last 8 layers  & 20.08 \\
+      \midrule
+      \multirow{2}{*}{Placement}
+        & post-ADC (proposed) & \textbf{15.63} \\
+        & pre-ADC             & 105.63 \textit{(diverged)} \\
+      \midrule
+      \multirow{2}{*}{All 7 proj}
+        & CE only   & 16.68 \\
+        & CE + KL   & \textbf{14.03} \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  Rank saturates at $r=4$ (only 0.33 PPL gap to $r=8$).
+  CE+KL outperforms CE alone by 0.64 PPL with \texttt{down+o} targets
+  and by 2.65 PPL with all-7 targets — the FP teacher signal is most
+  valuable when the adapter covers more projections.
+  Earlier layers carry more accumulated ADC error: first-8 (16.64) beats
+  last-8 (20.08).
+  Pre-ADC placement diverges catastrophically (ADC PPL~105.6) because the
+  correction is itself quantised by the fixed $\delta$.
+  The best single configuration is \textbf{all-7, CE+KL, $r=4$}: ADC
+  PPL~14.03, beating the INT8 PTQ result (14.41).
+
+  \subsubsection{Post-ADC Residual LoRA: Generalisation to C4}
+
+  Table~\ref{tab:lorav8} evaluates the top-3 configurations on both
+  WikiText-2 and C4 to test out-of-domain transfer.
+
+  \begin{table}[htbp]
+    \centering
+    \caption{LoRA generalisation (v8). WikiText-2 and C4 perplexity.}
+    \label{tab:lorav8}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}lrrrr@{}}
+      \toprule
+      \textbf{Config} & \textbf{Wiki bypass} & \textbf{Wiki ADC} & \textbf{C4 bypass} & \textbf{C4 ADC} \\
+      \midrule
+      PTQ (no LoRA)              & 18.49 & 27.26 & 29.41 & 46.40 \\
+      $r=8$, \texttt{down+o}, CE & 18.51 & 15.47 & 30.48 & 29.39 \\
+      $r=4$, \texttt{down+o}, CE+KL & 19.05 & 14.27 & 29.37 & 23.88 \\
+      $r=4$, all 7, CE+KL        & \textbf{18.70} & \textbf{13.96} & \textbf{29.10} & \textbf{23.30} \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  CE+KL configurations reduce C4 ADC PPL by 50\% relative to the PTQ
+  baseline (46.40 $\to$ 23.30) despite being calibrated solely on
+  WikiText-2.
+  CE-only ($r=8$, \texttt{down+o}) shows much weaker C4 generalisation
+  (29.39 vs.\ 23.30), confirming that the KL teacher signal is the key
+  ingredient for cross-domain transfer.
+  All-7 CE+KL is the best overall checkpoint on both datasets.
+
+  \subsection{Unsigned (Unipolar) ADC: A Second Hardware Setting}
+  \label{sec:unipolar}
+
+  All experiments described so far assume a \emph{bipolar} ADC: the
+  analog crossbar accumulates a signed integer dot product
+  $y_{\mathrm{int}} \in [-M, +M]$ and the ADC reads both positive and
+  negative values.
+  A physically important alternative is a \emph{unipolar} (unsigned)
+  ADC, which accepts only non-negative inputs.
+  Real crossbar hardware is often constrained to non-negative currents,
+  making this the more realistic operating regime.
+  The two settings have the same bit-width $b_a = 8$ and tile size
+  $M = 256$, but they differ in the ADC range and in how the signed
+  dot product is recovered — which changes $\delta$ by more than a
+  factor of two and requires a different calibration objective.
+  We therefore treat the unipolar setting as a self-contained experiment
+  series with its own baselines, calibration, and ablation structure.
+
+  \subsubsection{Unsigned Shift-Subtract ADC Algorithm}
+
+  Because the crossbar accepts only $[0, 2^b-1]$ codes, the standard
+  signed INT4 codes $\hat{x} \in [-8, 7]$ and $\hat{w} \in [-8, 7]$
+  must be shifted to unsigned before the MVM.
+  The algorithm proceeds in five steps.
+
+  \paragraph{Step 1 — Shift to unsigned.}
+  Each signed code is offset by the zero-point $z = 2^{b_x - 1} = 8$:
+  \[
+    \hat{x}^u = \hat{x} + 8 \;\in [0, 15], \qquad
+    \hat{w}^u = \hat{w} + 8 \;\in [0, 15].
+  \]
+
+  \paragraph{Step 2 — Hardware MVM.}
+  The crossbar computes the non-negative dot product over one tile of
+  width $M = 256$:
+  \[
+    y^u = \langle \hat{x}^u,\, \hat{w}^u \rangle \;\in\; [0,\; M(2^{b_x}-1)(2^{b_w}-1)]
+        = [0,\; 57600].
+  \]
+  Because $y^u \ge 0$ always, a single unsigned MVM suffices with no
+  four-quadrant splitting.
+
+  \paragraph{Step 3 — ADC floor.}
+  The unipolar ADC step size is:
+  \[
+    \delta_u = \frac{M\,(2^{b_x}-1)\,(2^{b_w}-1)}{2^{b_a}\,k}
+             = \frac{256 \cdot 15 \cdot 15}{256 \cdot 16} = 14.0625
+    \quad (k = 16),
+  \]
+  and the quantised output is $\hat{y}^u = \lfloor y^u / \delta_u \rfloor \cdot \delta_u$.
+  Note that $\delta_u \approx 14.06$ is more than twice the bipolar
+  $\delta \approx 6.12$ at the same $k$, reflecting the fact that
+  the same $2^{b_a}$ bins now cover a range that is roughly $2\times$
+  wider in absolute terms.
+
+  \paragraph{Step 4 — Digital correction (exact).}
+  Expanding the unsigned product gives
+  $\hat{x}^u \hat{w}^u = \hat{x}\hat{w} + 8\hat{w} + 8\hat{x} + 64$,
+  so the signed inner product is recovered exactly by:
+  \[
+    y_{\mathrm{int}} = \hat{y}^u
+      \;-\; 8\!\sum_j \hat{w}^u_j
+      \;-\; 8\!\sum_i \hat{x}^u_i
+      \;+\; M \cdot 64,
+  \]
+  where $\sum_j \hat{w}^u_j$ is precomputed once at weight-load time
+  and $\sum_i \hat{x}^u_i$ is computed once per token.
+  The correction involves no approximation and adds negligible digital
+  overhead.
+
+  \paragraph{Step 5 — Dequantisation.}
+  $y_{\mathrm{real}} = y_{\mathrm{int}} \cdot s_x \cdot s_w$, where
+  $s_x$ is the per-token activation scale and $s_w$ the per-channel
+  weight scale, exactly as in the bipolar setting.
+
+  \subsubsection{Per-Layer $k$ Search}
+
+  Because the coarser $\delta_u$ (at global $k = 16$) imposes a heavier
+  resolution penalty than the bipolar setting, we introduce a
+  \emph{per-layer $k$ search} that selects the ADC parallelism
+  independently for each projection layer.
+
+  After FlatQuant calibration with a global $k$, the pre-ADC values
+  $y^u$ are captured on the calibration set for each layer.
+  The minimum $k$ that keeps the ADC range from saturating is found by:
+  \[
+    R_\ell = \mathrm{quantile}_{0.999}(|y^u_\ell|), \qquad
+    k^*_\ell = \min\!\left\{ k \in \mathcal{K} : k \ge
+      \frac{M\,(2^{b_x}-1)(2^{b_w}-1)}{2\,R_\ell} \right\},
+  \]
+  where $\mathcal{K} = \{4, 8, 16, 32, 64\}$.
+  Layers with a narrow output distribution receive a small $k$ (coarser
+  $\delta$, fewer ADC reads); layers with wide distributions receive a
+  large $k$ (finer $\delta$, more reads).
+  The search is run in-place on the fixed PTQ checkpoint without
+  retraining FlatQuant transforms.
+
+  \subsubsection{Calibration Objective for Unipolar ADC}
+
+  FlatQuant transforms calibrated for the bipolar $\delta \approx 6.12$
+  are mismatched to the unipolar $\delta_u \approx 14.06$: the
+  transforms shape the pre-ADC signal for a finer resolution that the
+  hardware does not provide.
+  In the unipolar series, FlatQuant is therefore \emph{retrained} with
+  the unipolar $\delta_u$ formula as the active ADC step during
+  calibration.
+  All other settings (staged training, $\alpha = 0.5$, diagonal
+  scaling) are carried over from the best bipolar configuration.
+
+  \subsubsection{Experiment Configurations}
+
+  The following six configurations are evaluated for
+  Llama-3.2-1B on WikiText-2 and C4:
+
   \begin{itemize}
-    \item \emph{Seed reproducibility} (group~A): three independent
-      seeds for the full PTQ+LoRA pipeline to quantify end-to-end
-      variance.
-    \item \emph{Rank sweep} (group~B): $r \in \{1, 2, 4, 8\}$ with
-      \texttt{down + o\_proj} targets to locate the saturation point.
-    \item \emph{Loss function} (group~C): cross-entropy (CE) vs.\
-      CE + KL divergence from the FP teacher ($\lambda = 1$).
-    \item \emph{Layer coverage} (group~D): all 16 layers vs.\ first 8
-      vs.\ last 8, with rank~4 and \texttt{down + o\_proj}.
-    \item \emph{Placement} (group~E): post-ADC residual (proposed) vs.\
-      pre-ADC injection (modifying the integer accumulation before the
-      ADC floor operation).
-    \item \emph{Full coverage with CE+KL} (group~F): all 7 projections
-      with both loss variants.
+    \item \textbf{\texttt{fp}} — full-precision FP16 baseline.
+    \item \textbf{\texttt{int4\_no\_adc}} — INT4 FlatQuant with the ADC
+      floor disabled; measures FlatQuant transform quality alone.
+      Trained with the bipolar formula (calibration does not see ADC
+      noise), giving WikiText-2 PPL~12.56.
+    \item \textbf{\texttt{best\_ptq}} — INT4 FlatQuant retrained with
+      $\delta_u$, global $k = 16$.
+    \item \textbf{\texttt{best\_ptq\_k}} — \texttt{best\_ptq} with
+      per-layer $k$ search applied in-place (no FlatQuant retraining).
+    \item \textbf{\texttt{best\_ptq\_k\_recal}} — \texttt{best\_ptq\_k}
+      followed by retraining FlatQuant with the found per-layer $k$
+      values baked in; tests whether retrained transforms improve over
+      in-place $k$ search.
+    \item \textbf{\texttt{best\_lora}} — \texttt{best\_ptq} plus
+      post-ADC residual LoRA ($r = 4$, all 7 projections, CE+KL loss,
+      $\lambda = 0.5$, temperature 2.0, 5 epochs at $10^{-4}$).
+    \item \textbf{\texttt{best\_lora\_k}} — \texttt{best\_lora} plus
+      per-layer $k$ search; the LoRA adapters are trained on top of
+      the $k$-searched PTQ checkpoint.
   \end{itemize}
 
-  \paragraph{Generalisation evaluation (v8).}
-  The top-3 LoRA configurations from v7 are re-trained and evaluated on
-  both WikiText-2 and C4 to test whether the correction learned on
-  in-domain calibration data transfers to out-of-domain web text.
+  \subsubsection{Experiment History and Hardware Setting Evolution}
 
-  \paragraph{Tile size comparison.}
-  A dedicated sweep compares $M \in \{256, 1024\}$ without and with the
-  best LoRA configuration (\texttt{r4\_all\_ce\_kl}).
-  Changing $M$ scales $\delta$ by the same factor, coarsening ADC
-  resolution for larger tiles; this tests whether LoRA correction
-  remains effective under a different hardware regime.
+  The unipolar series was reached through three prior hardware-setting
+  iterations, each of which exposed a design flaw in the preceding one.
+  We document them here because they clarify why the final configuration
+  is necessary, not arbitrary.
 
-  \section{Results}\label{sec:results}
+  \paragraph{Bipolar ADC (signed accumulation).}
+  The original setting uses a signed ADC that reads
+  $y_{\mathrm{int}} \in [-M, +M]$ directly.
+  FlatQuant calibration uses $\delta \approx 6.12$ (bipolar formula).
+  This gives \texttt{best\_ptq} WikiText-2 PPL~26.78 and
+  \texttt{best\_lora} PPL~14.01 — the reference for the signed regime.
 
-  \subsection{Baseline Results}
+  \paragraph{Four-quadrant unipolar.}
+  An earlier attempt at unipolar hardware splits signed codes into
+  positive and negative parts and runs four separate non-negative MVMs
+  ($x^+ w^+$, $x^- w^-$, $x^+ w^-$, $x^- w^+$).
+  This achieves $\delta_{\mathrm{branch}} \approx 3.06$ (twice as fine as
+  bipolar) at the cost of 4$\times$ the ADC reads.
+  FlatQuant was trained for the bipolar $\delta$, so the calibration
+  objective was still mismatched; \texttt{best\_ptq} PPL was 18.08.
 
-  \paragraph{Purpose.}
-  Present the main quantitative comparison.
+  \paragraph{Mismatched unsigned evaluation (historical).}
+  An intermediate step evaluated the unsigned shift-subtract hardware
+  model using FlatQuant checkpoints trained for the bipolar
+  $\delta \approx 6.12$.
+  The mismatch caused \texttt{best\_ptq} PPL to explode to 94274 because
+  transforms shaped the pre-ADC signal for a step size six times finer
+  than the actual hardware provides.
+  Per-layer $k$ search partially recovered (PPL~16.78) by selecting small
+  $k$ to bring $\delta$ back into range, but this was an incorrect setup
+  and the results were not used.
 
-  \paragraph{What to include.}
-  Compare floating-point inference, naive ADC conversion, and baseline
-  FlatQuant. This is where the reader first sees whether the proposed
-  direction is promising at all.
+  \paragraph{Unipolar FQ — current.}
+  The correct configuration retrains FlatQuant with the unipolar
+  $\delta_u$ formula from the start.
+  Table~\ref{tab:unipolar} summarises the results.
+  \texttt{best\_ptq\_k\_recal} is \emph{worse} than
+  \texttt{best\_ptq\_k}, indicating that retraining FlatQuant on fixed
+  per-layer $k$ values over-specialises the transforms and hurts
+  generalisation; in-place $k$ search after global-$k$ training is
+  preferable.
 
-  \subsection{Effect of Hardware Parameters}
-
-  \paragraph{Purpose.}
-  Analyze how model quality changes with the ADC setup.
-
-  \paragraph{What to include.}
-  Show the effect of tile size, ADC bit precision, and any other hardware
-  parameters you vary. Graphs are especially useful here because trends
-  matter more than isolated numbers.
-
-  \subsection{Effect of Method Components}
-
-  \paragraph{Purpose.}
-  Show which parts of the method are responsible for improvements.
-
-  \paragraph{What to include.}
-  Present the ablation results for transform type, transform scope,
-  clipping options, and ADC-aware losses. This subsection is essential
-  for arguing that the method is not just a bundle of arbitrary design
-  choices.
-
-  \subsection{Layer and Projection Sensitivity}
-
-  \paragraph{Purpose.}
-  Provide a more detailed analysis of where ADC error hurts most.
-
-  \paragraph{What to include.}
-  This is the right place to compare attention and MLP sensitivity and
-  to discuss whether certain projections such as \texttt{o\_proj} and
-  \texttt{down\_proj} dominate the quality degradation.
-
-  \subsection{Best Configurations}
-
-  \paragraph{Purpose.}
-  Summarize the strongest final results.
-
-  \paragraph{What to include.}
-  Present the best-performing PTQ configuration, and if applicable, the
-  best lightweight adaptation result. A final summary table is helpful
-  here.
+  \begin{table}[h]
+    \centering
+    \caption{Unipolar (unsigned) ADC results on Llama-3.2-1B.
+             $\delta_u = 14.0625$ at global $k = 16$.}
+    \label{tab:unipolar}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}llrr@{}}
+      \toprule
+      \textbf{Config} & \textbf{Description} & \textbf{Wiki PPL} & \textbf{C4 PPL} \\
+      \midrule
+      \texttt{fp}                 & FP16, no quantisation              & \textbf{8.68}  & \textbf{13.13} \\
+      \texttt{int4\_no\_adc}      & INT4 FQ, ADC disabled              & 12.56          & 20.13 \\
+      \texttt{best\_ptq}          & INT4 FQ + unipolar ADC, $k{=}16$   & 39.00          & 67.78 \\
+      \texttt{best\_ptq\_k}       & + per-layer $k$ search             & 21.64          & 33.79 \\
+      \texttt{best\_ptq\_k\_recal}& + FQ retrained with per-layer $k$  & 22.19          & 36.94 \\
+      \texttt{best\_lora}         & + post-ADC LoRA (global $k{=}16$)  & 17.29          & 29.26 \\
+      \texttt{best\_lora\_k}      & + LoRA \& per-layer $k$            & \textbf{14.56} & \textbf{23.78} \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
 
   \section{Discussion}
 
