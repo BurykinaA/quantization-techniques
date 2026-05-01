@@ -480,6 +480,9 @@ class TiledLinearADC(nn.Module):
         self.unipolar_adc = unipolar_adc
 
         self.tiles = nn.ModuleList()
+        # Outlier-aware tiling: optional input channel permutation.
+        # None means identity (consecutive tiling). Set via apply_channel_permutation().
+        self.register_buffer('channel_perm', None)
         for i in range(n_tiles):
             use_bias = bias if i == 0 else False
             tile = QATLinearADC(
@@ -560,6 +563,21 @@ class TiledLinearADC(nn.Module):
             t.eval()
         return self
 
+    def apply_channel_permutation(self, perm: torch.Tensor) -> None:
+        """Reorder input channels for outlier-aware tiling.
+
+        Permutes weight columns of all tiles so tile i processes channels
+        perm[i*tile_in : (i+1)*tile_in]. Stores perm as a buffer; forward()
+        applies it to x before slicing.
+        """
+        assert perm.shape[0] == self.in_features_total
+        W_full = torch.cat([t.weight.data for t in self.tiles], dim=1)  # [out, in_total]
+        W_perm = W_full[:, perm]
+        tile_in = self.in_features_tile
+        for i, t in enumerate(self.tiles):
+            t.weight.data.copy_(W_perm[:, i * tile_in:(i + 1) * tile_in])
+        self.channel_perm = perm
+
     def load_weights(self, linear: nn.Linear):
         """Split weights from an nn.Linear across tiles along dim=1 (in_features)."""
         w = linear.weight  # [out_features, in_features]
@@ -579,6 +597,9 @@ class TiledLinearADC(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[-1] != self.in_features_total:
             raise ValueError(f"Expected last dim={self.in_features_total}, got {x.shape[-1]}")
+
+        if self.channel_perm is not None:
+            x = x[..., self.channel_perm]
 
         orig_shape = x.shape                  # (..., F)
         x2d = x.reshape(-1, self.in_features_total)   # [B*, F]

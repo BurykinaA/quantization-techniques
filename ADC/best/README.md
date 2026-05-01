@@ -186,6 +186,33 @@ picks largest k from {4, 8, 16, 32, 64} such that the ADC covers R without satur
 | `iter_lora_k_i2`  | 4 | every 2 epochs | 6 | 14.90 | 24.22 |
 | `iter_lora_k_i1`  | 4 | every 1 epoch  | 5 | 14.96 | 24.18 |
 
+**Conclusion:** Mid-training k updates hurt (14.90–14.96 vs 14.56). LoRA adapts to the initial ADC noise level; changing k mid-training disrupts that adaptation. Pre-training k-search = per-layer baseline exactly.
+
+### Per-tile k Search (branch `best-iterative-k-lora`)
+
+**Hypothesis:** Individual tiles within the same layer (e.g. `q_proj.tiles.0` vs `.tiles.1`) have
+different y\_uint distributions — per-tile k may outperform per-layer k aggregated across all tiles.
+
+| Config | k granularity | LoRA | Wiki PPL | C4 PPL |
+|---|---|---|---|---|
+| `best_ptq_k` *(baseline)* | per-layer | no | 21.64 | 33.79 |
+| `best_ptq_k_tile` | per-tile | no | — | — |
+| `best_lora_k` *(baseline)* | per-layer | yes | 14.56 | 23.78 |
+| `best_lora_k_tile` | per-tile | yes | — | — |
+
+### Outlier-aware Tiling (branch `best-iterative-k-lora`)
+
+**Hypothesis:** Consecutive tiling puts outlier and normal channels in the same tile, inflating
+the per-token scale s\_x so normal channels lose INT4 resolution. Sorting by mean |activation|
+puts all outlier channels in tile 0, letting tile 1 use a tight scale.
+
+| Config | tiling | LoRA | Wiki PPL | C4 PPL |
+|---|---|---|---|---|
+| `best_ptq_k` *(baseline)* | consecutive | no | 21.64 | 33.79 |
+| `outlier_tile_ptq` | outlier-aware | no | — | — |
+| `best_lora_k` *(baseline)* | consecutive | yes | 14.56 | 23.78 |
+| `outlier_tile_lora` | outlier-aware | yes | — | — |
+
 ---
 
 ## Per-Layer k Search

@@ -50,6 +50,7 @@ from configs import (
     BaseConfig, FPConfig, INT4NoADCConfig, BestPTQConfig, BestLoRAConfig,
     BestPTQKConfig, BestPTQKRecalConfig, BestLoRAKConfig,
     IterKPreLoRAConfig, IterKI2LoRAConfig, IterKI1LoRAConfig,
+    BestPTQKTileConfig, BestLoRAKTileConfig, OutlierTilePTQConfig, OutlierTileLoRAConfig,
     ALL_CONFIGS, _SharedFlatQuantConfig,
 )
 from eval import compute_perplexity, load_eval_encodings, measure_latency
@@ -549,6 +550,150 @@ def search_k_per_layer(
     return k_per_layer
 
 
+def search_k_per_tile(
+    model: nn.Module,
+    cfg: _SharedFlatQuantConfig,
+    loader: DataLoader,
+    device: torch.device,
+) -> dict:
+    """Per-tile k search: each QATLinearADC tile gets its own k value.
+
+    Same criterion as search_k_per_layer but does NOT aggregate tiles — each
+    physical tile in e.g. q_proj gets an independent k based on its own y_uint
+    distribution.
+    """
+    candidates  = sorted(getattr(cfg, 'k_search_candidates', (4, 8, 16, 32, 64)))
+    is_unipolar = getattr(cfg, 'unipolar_adc', False)
+
+    all_tiles = {name: m for name, m in model.named_modules()
+                 if isinstance(m, QATLinearADC)}
+
+    for t in all_tiles.values():
+        t._capturing = True
+        t._y_int_samples = []
+
+    saved_bypass = {}
+    for name, m in model.named_modules():
+        if isinstance(m, TiledLinearADC):
+            saved_bypass[name] = getattr(m, 'bypass_adc', False)
+            m.set_bypass_adc(True)
+
+    model.eval()
+    with torch.no_grad():
+        for batch in loader:
+            batch = {k: v.to(device) for k, v in batch.items()
+                     if isinstance(v, torch.Tensor)}
+            model(**batch)
+
+    for name, m in model.named_modules():
+        if isinstance(m, TiledLinearADC) and name in saved_bypass:
+            m.set_bypass_adc(saved_bypass[name])
+
+    k_per_tile: dict = {}
+    for tile_name, tile in all_tiles.items():
+        if not tile._y_int_samples:
+            continue
+        samples = torch.cat(tile._y_int_samples).float()
+        tile._capturing = False
+        tile._y_int_samples = []
+
+        best_k   = candidates[0]
+        best_mse = float('inf')
+
+        if is_unipolar:
+            pct = getattr(cfg, 'k_search_range_percentile', 0.999)
+            if samples.numel() > 100_000:
+                samples = samples[torch.randperm(samples.numel())[:100_000]]
+            R = torch.quantile(samples, pct).item()
+            qmax_u = float((1 << tile.bx) - 1) * float((1 << tile.bw) - 1)
+            M_uint = float(tile.in_features) * qmax_u
+            k_min  = M_uint / (2.0 * max(R, 1e-9))
+            best_k = candidates[-1]
+            for k in sorted(candidates):
+                if k >= k_min:
+                    best_k = k
+                    break
+        else:
+            pa = float(2 ** (tile.ba - 1) - 1)
+            na = -pa - 1.0
+            M  = (2.0 * float(tile.in_features)
+                  * tile._activation_level_magnitude
+                  * tile._weight_level_max)
+            for k in candidates:
+                d       = M / float((2 ** tile.ba) * k)
+                y_quant = torch.clamp(torch.floor(samples / d), na, pa) * d
+                mse     = ((y_quant - samples) ** 2).mean().item()
+                if mse < best_mse:
+                    best_mse, best_k = mse, k
+
+        k_per_tile[tile_name] = best_k
+
+    dist = Counter(k_per_tile.values())
+    logger.info(f"  k_per_tile — distribution: {dict(sorted(dist.items()))}")
+    return k_per_tile
+
+
+def find_outlier_permutation(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+) -> dict:
+    """Collect per-channel mean |activation| for each TiledLinearADC input.
+
+    Returns dict: layer_name → argsort(mean_abs, descending=True).
+    Applying this permutation groups high-magnitude channels into the first tiles
+    so that per-token scale s_x is appropriate for all channels in each tile.
+    """
+    channel_stats: dict = {}
+    hooks = []
+
+    for name, m in model.named_modules():
+        if not isinstance(m, TiledLinearADC):
+            continue
+
+        def make_hook(layer_name, n_feat):
+            acc = {'sum': torch.zeros(n_feat), 'count': 0}
+            channel_stats[layer_name] = acc
+            def hook(module, inp, out):
+                x = inp[0].detach().float().reshape(-1, n_feat)
+                acc['sum'] += x.abs().sum(dim=0).cpu()
+                acc['count'] += x.shape[0]
+            return hook
+
+        h = m.register_forward_hook(make_hook(name, m.in_features_total))
+        hooks.append(h)
+
+    model.eval()
+    with torch.no_grad():
+        for batch in loader:
+            batch = {k: v.to(device) for k, v in batch.items()
+                     if isinstance(v, torch.Tensor)}
+            model(**batch)
+
+    for h in hooks:
+        h.remove()
+
+    perms = {}
+    for layer_name, acc in channel_stats.items():
+        mean_abs = acc['sum'] / max(acc['count'], 1)
+        perms[layer_name] = torch.argsort(mean_abs, descending=True)
+        logger.info(f"  {layer_name}: max_mean={mean_abs.max():.2f}  "
+                    f"min_mean={mean_abs.min():.2f}  "
+                    f"ratio={mean_abs.max() / mean_abs.min().clamp(1e-9):.1f}x")
+    return perms
+
+
+def apply_outlier_tiling(model: nn.Module, perms: dict) -> nn.Module:
+    """Apply channel permutations to TiledLinearADC layers for outlier-aware tiling."""
+    n = 0
+    for name, m in model.named_modules():
+        if isinstance(m, TiledLinearADC) and name in perms:
+            m.apply_channel_permutation(perms[name])
+            n += 1
+    logger.info(f"  Applied outlier permutation to {n} TiledLinearADC layers")
+    return model
+
+
 def _apply_flatquant_with_k(
     model: nn.Module,
     loader: DataLoader,
@@ -807,6 +952,27 @@ def run_config(cfg: BaseConfig, cache_dir: str | None = None) -> dict:
             model = apply_lora(model, loader, cfg, device, epoch_callback=epoch_callback)
             results = run_evaluation(model, tokenizer, cfg, device)
 
+        elif isinstance(cfg, (BestPTQKTileConfig, BestLoRAKTileConfig)):
+            # Per-tile k search: each QATLinearADC tile gets its own k
+            k_per_tile = search_k_per_tile(model, cfg, loader, device)
+            n_updated = 0
+            for name, m in model.named_modules():
+                if isinstance(m, QATLinearADC) and name in k_per_tile:
+                    m.set_k(k_per_tile[name])
+                    n_updated += 1
+            logger.info(f"  Applied per-tile k to {n_updated} QATLinearADC tiles in-place")
+            if isinstance(cfg, BestLoRAKTileConfig):
+                model = apply_lora(model, loader, cfg, device)
+            results = run_evaluation(model, tokenizer, cfg, device)
+
+        elif isinstance(cfg, (OutlierTilePTQConfig, OutlierTileLoRAConfig)):
+            # Outlier-aware tiling: group channels by activation magnitude
+            perms = find_outlier_permutation(model, loader, device)
+            model = apply_outlier_tiling(model, perms)
+            if isinstance(cfg, OutlierTileLoRAConfig):
+                model = apply_lora(model, loader, cfg, device)
+            results = run_evaluation(model, tokenizer, cfg, device)
+
         elif isinstance(cfg, BestLoRAKConfig):
             # Stage 1: search per-layer k (same as best_ptq_k)
             cfg.k_per_layer = search_k_per_layer(model, cfg, loader, device)
@@ -906,7 +1072,9 @@ def main():
         "--configs", nargs="+",
         choices=["fp", "int4_no_adc", "best_ptq", "best_lora",
                  "best_ptq_k", "best_ptq_k_recal", "best_lora_k",
-                 "iter_lora_k_pre", "iter_lora_k_i2", "iter_lora_k_i1", "all"],
+                 "iter_lora_k_pre", "iter_lora_k_i2", "iter_lora_k_i1",
+                 "best_ptq_k_tile", "best_lora_k_tile",
+                 "outlier_tile_ptq", "outlier_tile_lora", "all"],
         default=["all"],
         help="Which configs to run (default: all)",
     )

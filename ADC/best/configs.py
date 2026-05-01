@@ -263,6 +263,30 @@ class IterKI1LoRAConfig(BestLoRAConfig):
     lora_k_search_interval: int = 1    # search every epoch
 
 
+@dataclass
+class BestPTQKTileConfig(BestPTQConfig):
+    """Per-tile k search: each QATLinearADC tile gets its own k (not per-layer)."""
+    name: str = "best_ptq_k_tile"
+
+
+@dataclass
+class BestLoRAKTileConfig(BestLoRAConfig):
+    """Per-tile k search + post-ADC LoRA."""
+    name: str = "best_lora_k_tile"
+
+
+@dataclass
+class OutlierTilePTQConfig(BestPTQConfig):
+    """Outlier-aware channel grouping: sort channels by |activation|, tile by magnitude."""
+    name: str = "outlier_tile_ptq"
+
+
+@dataclass
+class OutlierTileLoRAConfig(BestLoRAConfig):
+    """Outlier-aware tiling + post-ADC LoRA."""
+    name: str = "outlier_tile_lora"
+
+
 # All configs in order: tells the story FP → INT4 → INT4+ADC → INT4+ADC+LoRA → per-layer k
 ALL_CONFIGS = [
     FPConfig(),
@@ -275,4 +299,8 @@ ALL_CONFIGS = [
     IterKPreLoRAConfig(),
     IterKI2LoRAConfig(),
     IterKI1LoRAConfig(),
+    BestPTQKTileConfig(),
+    BestLoRAKTileConfig(),
+    OutlierTilePTQConfig(),
+    OutlierTileLoRAConfig(),
 ]
