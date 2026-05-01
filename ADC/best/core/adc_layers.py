@@ -598,7 +598,7 @@ class TiledLinearADC(nn.Module):
         if x.shape[-1] != self.in_features_total:
             raise ValueError(f"Expected last dim={self.in_features_total}, got {x.shape[-1]}")
 
-        if self.channel_perm is not None:
+        if getattr(self, 'channel_perm', None) is not None:
             x = x[..., self.channel_perm]
 
         orig_shape = x.shape                  # (..., F)
