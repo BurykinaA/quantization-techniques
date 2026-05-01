@@ -1,13 +1,13 @@
 # Fdb version 4
-["biber main"] 1777562343.53125 "main.bcf" "main.bbl" "main" 1777562347.29261 0
-  "main.bcf" 1777562347.21224 108917 301d91ce93ac7ef435f7d6cb49d0282f "pdflatex"
-  "msc-sample.bib" 1777562225.35845 1965 6b71c687748fd8283d2c164561e46ec0 ""
+["biber main"] 1777568047.10142 "main.bcf" "main.bbl" "main" 1777568331.15623 0
+  "main.bcf" 1777568331.07246 114454 735fd1052eb55a5a71d367831594cfcd "pdflatex"
+  "msc-sample.bib" 1777566535.29123 10420 cac5456a39b71ffbc3971dc93ed27e38 ""
   (generated)
   "main.bbl"
   "main.blg"
   (rewritten before read)
-["pdflatex"] 1777562346.16112 "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" "main.pdf" "main" 1777562347.29288 0
-  "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" 1777562343.31445 59683 a9dc8629a3ade4b5da797a73be42c312 ""
+["pdflatex"] 1777568329.65038 "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" "main.pdf" "main" 1777568331.1565 0
+  "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" 1777568177.10269 90082 3918c91e076e75e479ff079760e95a65 ""
   "/usr/local/texlive/2026/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/local/texlive/2026/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/local/texlive/2026/texmf-dist/fonts/tfm/adobe/helvetic/phvb7t.tfm" 1136768653 2240 eb56c13537f4d8a0bd3fafc25572b1bd ""
@@ -104,6 +104,9 @@
   "/usr/local/texlive/2026/texmf-dist/tex/latex/booktabs/booktabs.sty" 1579038678 6078 f1cb470c9199e7110a27851508ed7a5c ""
   "/usr/local/texlive/2026/texmf-dist/tex/latex/caption/caption.sty" 1696191071 56128 c2ccf1a29d78c33bc553880402e4fb9a ""
   "/usr/local/texlive/2026/texmf-dist/tex/latex/caption/caption3.sty" 1696191071 72619 ee90b6612147680fd73c3b1406a74245 ""
+  "/usr/local/texlive/2026/texmf-dist/tex/latex/csquotes/csquotes.cfg" 1429144587 7068 06f8d141725d114847527a66439066b6 ""
+  "/usr/local/texlive/2026/texmf-dist/tex/latex/csquotes/csquotes.def" 1712263026 22135 0975a49eeaed232aa861e9425ffb2e7c ""
+  "/usr/local/texlive/2026/texmf-dist/tex/latex/csquotes/csquotes.sty" 1712263026 62767 e79d6d7a989e7da62dcf3d0a65c1faee ""
   "/usr/local/texlive/2026/texmf-dist/tex/latex/epstopdf-pkg/epstopdf-base.sty" 1579991033 13886 d1306dcf79a944f6988e688c1785f9ce ""
   "/usr/local/texlive/2026/texmf-dist/tex/latex/etoolbox/etoolbox.sty" 1759437024 46885 8953c67ffba03252c6090aa19568b8ba ""
   "/usr/local/texlive/2026/texmf-dist/tex/latex/fancyvrb/fancyvrb.sty" 1753819787 43717 653cd083c203051741d10c7e48c3b24f ""
@@ -136,6 +139,7 @@
   "/usr/local/texlive/2026/texmf-dist/tex/latex/logreq/logreq.def" 1284153563 1620 fb1c32b818f2058eca187e5c41dfae77 ""
   "/usr/local/texlive/2026/texmf-dist/tex/latex/logreq/logreq.sty" 1284153563 6187 b27afc771af565d3a9ff1ca7d16d0d46 ""
   "/usr/local/texlive/2026/texmf-dist/tex/latex/minted/minted.sty" 1772659645 73364 3ba8c7272bc91743ef9ba45bc39808ec ""
+  "/usr/local/texlive/2026/texmf-dist/tex/latex/multirow/multirow.sty" 1731446765 6696 886c9f3087d0b973ed2c19aa79cb3023 ""
   "/usr/local/texlive/2026/texmf-dist/tex/latex/parskip/parskip.sty" 1615762720 4288 94714aa7f535440f33181fec52a31963 ""
   "/usr/local/texlive/2026/texmf-dist/tex/latex/pgf/utilities/pgfkeys.sty" 1601326656 274 5ae372b7df79135d240456a1c6f2cf9a ""
   "/usr/local/texlive/2026/texmf-dist/tex/latex/pgfopts/pgfopts.sty" 1405118212 5540 d5c60cf09c59da351aa4023ed084e4eb ""
@@ -152,13 +156,13 @@
   "/usr/local/texlive/2026/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1776250877 5573038 b99aad5e4898a9034e953632f940512b ""
   "/usr/local/texlive/2026/texmf-var/web2c/pdftex/pdflatex.fmt" 1776250794 3636778 8ed075554b0566b40fa854ffedcef8ab ""
   "/usr/local/texlive/2026/texmf.cnf" 1774209515 577 648cd9f92f9c0eac486f4c71c85cfbbe ""
-  "main.aux" 1777562347.20851 19415 f71c25d85ddcf081d5f74b6cd278a5e4 "pdflatex"
-  "main.bbl" 1777562344.99868 12898 32529f9d0f3761da90a197b9b59c4b3b "biber main"
-  "main.out" 1777562347.21118 8173 904c3569dff64b44a18ebac969e0bba3 "pdflatex"
-  "main.run.xml" 1777562347.21299 2305 67c73e5f90befbcba88ad9685714fe42 "pdflatex"
-  "main.tex" 1777562343.31445 59683 a9dc8629a3ade4b5da797a73be42c312 ""
-  "main.toc" 1777562347.21321 10947 7a1fdceb38c73a93e0a57f1f0d85a107 "pdflatex"
-  "msc-logo.png" 1777562225.3583 10466 5858c652f72e0c409ddee778b9f23da6 ""
+  "main.aux" 1777568331.06617 27326 738a95824154bdd27ed790f398668bf7 "pdflatex"
+  "main.bbl" 1777568049.26116 68731 a9a9ef0eea014d9bcbd23f9d1273c906 "biber main"
+  "main.out" 1777568331.07158 5743 dbc560f89340b20cbe4babb1930ed7eb "pdflatex"
+  "main.run.xml" 1777568331.07307 2305 67c73e5f90befbcba88ad9685714fe42 "pdflatex"
+  "main.tex" 1777568177.10269 90082 3918c91e076e75e479ff079760e95a65 ""
+  "main.toc" 1777568331.07314 8198 32e3b429c0c59881dc7b32cebb96ef3d "pdflatex"
+  "msc-logo.png" 1777566329.79112 10466 5858c652f72e0c409ddee778b9f23da6 ""
   (generated)
   "main.aux"
   "main.bcf"

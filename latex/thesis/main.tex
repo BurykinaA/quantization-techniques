@@ -11,6 +11,7 @@
 \usepackage{booktabs}
 \usepackage{multirow}
 \usepackage[cache=false]{minted}
+\usepackage{csquotes}
 \usepackage{amsmath}
 \usepackage{amssymb}
 \usepackage{amsthm}
@@ -164,106 +165,698 @@
   \clearpage
   \pagenumbering{arabic}
 
+
   \section{Introduction}
+\label{sec:introduction}
 
-  \paragraph{Purpose of this chapter.}
-  Introduce the broader problem of efficient inference for large language
-  models and motivate in-memory computing as a response to the growing
-  cost of both computation and data movement. Explain why ADC precision
-  becomes a bottleneck in IMC systems and why this makes deployment of
-  LLaMA-family models particularly challenging.
+Large language models (LLMs) have become the dominant architecture for
+modern natural language processing, but their inference cost remains a
+major deployment obstacle. Transformer decoders are built primarily from
+large matrix--vector and matrix--matrix multiplications, and serving them
+requires repeatedly moving weights and activations between memory and
+compute units. As models grow, this data movement can become as important
+as the arithmetic itself. This motivates hardware architectures that move
+computation closer to memory, including in-memory computing (IMC)
+accelerators, where matrix--vector multiplication can be performed
+directly inside memory arrays rather than in a conventional digital
+compute core \cite{Xiao2021AnalogAccuracy,LeGallo2023AnalogNAS,
+Buechel2025AnalogFoundation}.
 
-  \paragraph{What to include.}
-  This chapter should explain the practical importance of the topic,
-  define the overall thesis objective, and state why the problem is
-  interesting from both a machine learning and hardware perspective. It
-  should also briefly summarize the gap between conventional digital
-  quantization methods and the specific requirements of ADC-constrained
-  inference.
+IMC is attractive for LLM inference because transformer layers are
+dominated by linear projections. In an idealized IMC pipeline, the weight
+matrix of a projection is stored in a memory array, an input activation
+vector is applied to the array, and the analog accumulation implements
+the dot product. However, this analog result must be converted back into
+a digital value before it can be consumed by the next layer. Therefore,
+the analog-to-digital converter (ADC) is not merely an implementation
+detail: it becomes part of the neural network inference path. The
+precision and range of the ADC directly determine how much information
+from the analog accumulation is preserved.
 
-  \paragraph{Suggested structure.}
-  \begin{itemize}
-    \item Motivation: efficient deployment of LLMs.
-    \item Why IMC is attractive for large matrix-vector multiplications.
-    \item Why limited ADC precision creates a distinct quantization problem.
-    \item Why LLaMA-family models are a difficult case.
-    \item A short summary of the thesis contributions.
-    \item A roadmap of the remaining chapters.
-  \end{itemize}
+This thesis studies the interaction between transformer quantization and
+ADC-constrained analog inference. In a conventional digital quantization
+setting, the main sources of error are usually the quantization of
+weights and activations. In an IMC accelerator, there is an additional
+output quantization stage after the analog accumulation:
+\begin{equation}
+    y_{\mathrm{int}} = W_q x_q,
+    \qquad
+    y_{\mathrm{adc}}
+    =
+    \Delta
+    \cdot
+    \mathrm{clip}
+    \left(
+    \left\lfloor
+    \frac{y_{\mathrm{int}}}{\Delta}
+    \right\rfloor,
+    n_a,
+    p_a
+    \right),
+    \label{eq:intro_adc_quantizer}
+\end{equation}
+where $x_q$ and $W_q$ are the activation and weight integer codes,
+$\Delta$ is the ADC step size, and $(n_a,p_a)$ are the ADC code bounds.
+The final dequantized output is then obtained by multiplying by the
+activation and weight scales. Equation~\eqref{eq:intro_adc_quantizer}
+shows the central difference between digital low-bit inference and
+ADC-constrained inference: even if the inputs and weights are quantized
+well, the accumulated output can still be severely distorted by a coarse
+ADC lattice.
 
-  \paragraph{Possible contributions paragraph.}
-  A concise contribution list at the end of the introduction could state
-  that the thesis: (i) formulates the ADC-constrained quantization
-  problem for LLaMA-family models, (ii) implements an ADC-aware FlatQuant
-  pipeline, (iii) evaluates post-training quantization baselines and
-  ablations, and (iv) analyzes when reconstruction-based PTQ is
-  sufficient and when additional adaptation is needed.
+In the hardware model considered in this work, the ADC step size is
+determined by the tile size, activation bitwidth, weight bitwidth, ADC
+bitwidth, and ADC parallelism:
+\begin{equation}
+    \Delta
+    =
+    \frac{
+    2 \cdot n_t \cdot q_x \cdot q_w
+    }{
+    2^{b_a} \cdot k
+    },
+    \label{eq:intro_delta}
+\end{equation}
+where $n_t$ is the number of input channels in one MVM tile, $q_x$ and
+$q_w$ are the maximum activation and weight code magnitudes, $b_a$ is
+the number of ADC bits, and $k$ is the ADC parallelism factor. For the
+main INT8 experiments in this thesis, $n_t=256$, $q_x=q_w=127$,
+$b_a=8$, and $k=16$, giving
+\[
+    \Delta
+    =
+    \frac{
+    2 \cdot 256 \cdot 127 \cdot 127
+    }{
+    256 \cdot 16
+    }
+    \approx 2016.
+\]
+Thus, the ADC step is a hardware-defined constant. It cannot be reduced
+by ordinary model calibration or by changing the learned quantization
+transform. This makes ADC-constrained inference a distinct optimization
+problem.
 
-  \section{Background and Related Work}
+LLMs are a particularly challenging target for this setting. Prior work
+has shown that transformer activations contain large outlier channels,
+and that these outliers are a major obstacle to low-bit quantization
+\cite{LLMint82022,SmoothQuant2022,OutlierSuppressionPlus2023,
+QuaRot2024,SpinQuant2024}. Under per-token max scaling,
+\begin{equation}
+    s_x = \frac{\|x\|_\infty}{q_{\max}},
+    \label{eq:intro_per_token_scale}
+\end{equation}
+a single large channel can determine the scale for the entire tile. As a
+result, typical activation values may receive very small integer codes,
+reducing the effective density of the integer dot product. In an ADC
+pipeline, this can produce poorly occupied ADC bins or even dead regions
+where small accumulated outputs are mapped to zero. Therefore, LLM
+activation outliers affect not only activation quantization, but also
+the quality of the analog output seen by the ADC.
 
-  \subsection{In-Memory Computing and ADC-Constrained Inference}
+This thesis focuses on LLaMA-family decoder-only transformer models,
+using Llama-3.2-1B as the main experimental target. The goal is to study
+whether transform-based post-training quantization (PTQ), combined with
+ADC-aware calibration and lightweight adaptation, can make low-bit
+LLaMA inference viable under ADC-constrained analog computation. The
+work starts from FlatQuant, a transform-based PTQ method that learns
+layer-wise affine transformations with a Kronecker-decomposed structure
+to make weights and activations easier to quantize \cite{FlatQuant2024}.
+In its basic form, the transform preserves the linear map:
+\begin{equation}
+    y = x W^\top
+    =
+    (xT^{-1})(TW^\top),
+    \label{eq:intro_transform_equivalence}
+\end{equation}
+while changing the coordinate system in which quantization is applied.
+This is attractive for ADC-constrained inference because flatter
+activation distributions make per-token scaling less dominated by a few
+outlier channels.
 
-  \paragraph{Purpose.}
-  Provide the hardware context required to understand the rest of the
-  thesis.
+However, one of the central findings of this thesis is that ordinary
+reconstruction-based PTQ is not sufficient by itself. The experiments
+show that improving the input and weight quantizers does not necessarily
+solve the ADC problem. In early experiments, a poor FlatQuant
+configuration produced a dead-rate of approximately $81\%$ and poor
+perplexity. After improving the transform training, the dead-rate dropped
+to approximately $10.3\%$ and the bypass perplexity improved to
+approximately $10.0$, close to the full-precision reference. Yet the
+full ADC perplexity remained much higher, around $28.9$. This indicates
+that the remaining error was no longer caused primarily by dead zones or
+ordinary INT8 quantization, but by the coarse ADC output lattice itself.
 
-  \paragraph{What to include.}
-  Describe how in-memory computing performs computation directly within
-  memory arrays, why the analog nature of the computation requires an
-  analog-to-digital conversion step, and why ADC precision affects both
-  efficiency and accuracy. This is the right place to define the
-  intuition behind the matrix-vector multiplication pipeline in IMC and
-  to motivate why output quantization is different from standard digital
-  quantization.
+To address this mismatch, the thesis introduces and evaluates
+ADC-aware extensions of FlatQuant. First, it uses propagated
+calibration: instead of calibrating each layer only on clean
+full-precision inputs, each layer is also trained on inputs corrupted by
+the quantized ADC path of previous layers. This is motivated by the fact
+that quantization errors accumulate through the residual stream, a
+problem also emphasized in recent propagation-aware PTQ methods
+\cite{QEP2025}. In the INT8 setting, propagated calibration reduces
+WikiText2 ADC perplexity from $28.86$ to $14.55$, and combining it with
+a small bin-center regularizer gives $14.41$.
 
-  \subsection{Quantization of Neural Networks}
+Second, the thesis investigates the harder W4A4 setting, where both
+weights and activations are quantized to 4 bits while the ADC remains
+8-bit. Although the smaller integer ranges reduce the ADC step size,
+W4A4 introduces much larger weight and activation quantization noise.
+The results show that naive INT4 calibration is unstable: early W4A4
+runs produced very high ADC perplexity. Increasing the calibration set
+and using partial propagation substantially improves the result. In
+particular, an interpolation objective
+\begin{equation}
+    \mathcal{L}
+    =
+    (1-\alpha)
+    \left\|
+    f_\ell^{\mathrm{fp}}(x_\ell^{\mathrm{fp}})
+    -
+    \hat{f}_\ell(x_\ell^{\mathrm{fp}})
+    \right\|_2^2
+    +
+    \alpha
+    \left\|
+    f_\ell^{\mathrm{fp}}(x_\ell^{\mathrm{fp}})
+    -
+    \hat{f}_\ell(x_\ell^{q})
+    \right\|_2^2
+    \label{eq:intro_partial_prop}
+\end{equation}
+with $\alpha=0.5$ gives a better trade-off than full propagation
+($\alpha=1$). This suggests that low-bit ADC-aware PTQ must balance two
+objectives: preserving the clean full-precision representation and
+becoming robust to the corrupted inference-time input distribution.
 
-  \paragraph{Purpose.}
-  Establish the machine learning background.
+Third, the thesis studies bounded diagonal equivalent scaling. Pure
+orthogonal Kronecker transforms can redistribute activation energy, but
+they cannot perform anisotropic rescaling of persistent outlier
+channels. Adding a bounded diagonal component gives the transform an
+additional degree of freedom:
+\begin{equation}
+    T(x) = x D P,
+    \label{eq:intro_diag_transform}
+\end{equation}
+where $P$ is the Kronecker-structured transform and $D$ is a diagonal
+scale matrix. Empirically, this improves the W4A4 PTQ result
+substantially: bounded diagonal scaling with partial propagation reduces
+the INT4 ADC perplexity to approximately $27.6$, close to the INT8
+baseline. Further ablations show that the MLP down-path is the main
+driver of this improvement, while attention-side diagonal scaling helps
+close the ADC gap.
 
-  \paragraph{What to include.}
-  Review the main concepts of quantization: post-training quantization
-  (PTQ), quantization-aware training (QAT), symmetric and asymmetric
-  quantization, per-tensor and per-channel quantization, and the
-  straight-through estimator. Keep this section focused on concepts that
-  are directly needed later.
+Finally, the thesis shows that pure PTQ reaches a plateau and that
+additional lightweight adaptation is needed to recover the remaining
+accuracy. A residual post-ADC LoRA branch is added on top of the frozen
+ADC path:
+\begin{equation}
+    y
+    =
+    \hat{f}^{\mathrm{ADC}}(x)
+    +
+    \frac{\alpha_{\mathrm{LoRA}}}{r}
+    B A x,
+    \label{eq:intro_adc_lora}
+\end{equation}
+where $A$ and $B$ are low-rank trainable matrices and the base
+TiledLinearADC module is frozen. Unlike pre-ADC low-rank adaptation,
+this residual branch does not backpropagate through rounding or ADC
+clamping, making training stable. With a CE+KL loss using a
+full-precision teacher, residual ADC-LoRA reduces INT4 WikiText2 ADC
+perplexity from the pure PTQ plateau of approximately $27.5$ to
+$14.03$, slightly outperforming the best INT8 PTQ result. The same
+configuration also improves C4 ADC perplexity from $46.40$ to $23.30$,
+showing that the correction generalizes beyond the calibration/evaluation
+domain used for the main ablations.
 
-  \subsection{Challenges of Quantizing Transformer Models}
+The thesis therefore addresses the following research question:
 
-  \paragraph{Purpose.}
-  Explain why LLMs, and especially LLaMA-family models, are harder to
-  quantize than smaller vision or language models.
+\begin{quote}
+\emph{
+How should post-training quantization of LLaMA-family models be modified
+when the target hardware is not a conventional digital accelerator, but
+an ADC-constrained analog in-memory computing pipeline?
+}
+\end{quote}
 
-  \paragraph{What to include.}
-  Discuss activation outliers, sensitivity of the residual stream, the
-  role of attention and MLP projections, and why preserving hidden-state
-  geometry is important. You can also explain why some projections, such
-  as \texttt{o\_proj} and \texttt{down\_proj}, are often more sensitive
-  to quantization error.
+The main contributions are as follows:
+\begin{enumerate}
+    \item \textbf{ADC-constrained formulation for LLaMA PTQ.}
+    The thesis formulates LLaMA inference under a tiled ADC-constrained
+    MVM model and implements a simulation pipeline with per-token
+    activation quantization, per-channel weight quantization, integer
+    accumulation, ADC output quantization, and dequantization.
 
-  \subsection{Existing Methods}
+    \item \textbf{Diagnosis of ADC-specific failure modes.}
+    The thesis separates ordinary weight/activation quantization error
+    from ADC output quantization error using bypass evaluation,
+    dead-rate, ADC bin usage, reconstruction error, and layer/projection
+    ablations. This shows that dead zones can be caused by poor
+    transforms, but that the remaining degradation can be dominated by
+    ADC output resolution.
 
-  \paragraph{Purpose.}
-  Position the thesis relative to the state of the art.
+    \item \textbf{ADC-aware FlatQuant calibration.}
+    The thesis extends FlatQuant with ADC simulation during calibration,
+    propagated quantized inputs, partial propagation, bounded diagonal
+    equivalent scaling, and staged training. These techniques reduce the
+    INT8 ADC perplexity from $28.86$ to $14.41$ and make W4A4 ADC
+    inference competitive with the INT8 baseline.
 
-  \paragraph{What to include.}
-  Review methods such as SmoothQuant, FlatQuant, and ADC-oriented ideas
-  such as activation shifting, weight reshaping, bit augmentation, and
-  lightweight adaptation methods. For each method, answer three
-  questions: what problem it solves, why it may help under ADC
-  constraints, and what limitation remains for the current setting.
+    \item \textbf{Analysis of pure PTQ limitations.}
+    Extensive ablations show that additional dead-zone penalties,
+    aggressive PACT-style clipping, fixed Hadamard initialization, and
+    bin-center losses are insufficient or harmful in the studied setting.
+    Pure PTQ improves substantially but eventually plateaus around
+    $27.5$--$28.5$ ADC perplexity for W4A4.
 
-  \subsection{Research Gap}
+    \item \textbf{Residual post-ADC low-rank correction.}
+    The thesis introduces a lightweight residual ADC-LoRA stage on top
+    of the frozen quantized ADC path. With CE+KL distillation, this stage
+    reduces W4A4 ADC perplexity to $14.03$ on WikiText2 and $23.30$ on
+    C4, while keeping the base ADC model frozen.
+\end{enumerate}
 
-  \paragraph{Purpose.}
-  End the chapter by identifying the precise gap that motivates your own
-  work.
+The remainder of the thesis is organized as follows.
+Chapter~\ref{sec:background} reviews the necessary background on
+in-memory computing, ADC-constrained inference, neural network
+quantization, LLM outliers, transform-based PTQ, and lightweight
+low-rank adaptation. Chapter~\ref{sec:method} describes the proposed
+ADC-aware FlatQuant pipeline, including the tiled ADC layer, propagated
+calibration, bounded diagonal scaling, and residual ADC-LoRA correction.
+Chapter~\ref{sec:experimental_setup} presents the experimental setup,
+datasets, evaluation metrics, and implementation details.
+Chapter~\ref{sec:results} reports the main INT8 and INT4 results,
+including ablations over propagation, diagonal scaling, stochastic
+training, tile size, and LoRA correction. Finally,
+Chapter~\ref{sec:conclusion} summarizes the findings, discusses the
+limitations of the current approach, and outlines directions for scaling
+the method to larger LLaMA-family models and more detailed hardware
+models.
 
-  \paragraph{What to include.}
-  The main message here can be that existing PTQ methods primarily reduce
-  activation and weight quantization error, whereas ADC-constrained
-  inference introduces a separate output quantization bottleneck that is
-  not explicitly optimized by standard reconstruction-based approaches.
+
+
+\section{Background and Related Work}
+\label{sec:background}
+
+\subsection{In-Memory Computing and ADC-Constrained Inference}
+\label{subsec:imc_adc}
+
+In-memory computing (IMC) executes matrix--vector multiplication (MVM)
+directly inside memory arrays, reducing the cost of data movement that
+dominates conventional digital inference pipelines
+\cite{Xiao2021AnalogAccuracy,LeGallo2023AnalogNAS,Buechel2025AnalogFoundation}.
+In crossbar-style accelerators, neural network weights are mapped to
+cell conductances, the input vector is applied as an analog excitation,
+and the array physics performs the accumulation. This is attractive for
+large neural networks because MVM is the dominant operation in both
+attention and MLP blocks. However, the result of the array is analog,
+whereas the next layer expects a digital tensor. Therefore, each analog
+MVM must be followed by analog-to-digital conversion.
+
+A simplified ADC-constrained inference pipeline can be written as
+\begin{align}
+x_q &= Q_x(x), \\
+W_q &= Q_w(W), \\
+y_{\mathrm{int}} &= W_q x_q, \\
+y_{\mathrm{adc}} &= Q_{\mathrm{ADC}}(y_{\mathrm{int}}), \\
+\hat{y} &= D_{\mathrm{out}} \, y_{\mathrm{adc}},
+\end{align}
+where $Q_x$ and $Q_w$ are the activation and weight quantizers,
+$Q_{\mathrm{ADC}}$ denotes the output quantizer implemented by the ADC,
+and $D_{\mathrm{out}}$ is the dequantization map. In the ADC model used
+throughout this thesis, the analog accumulation is quantized by a
+coarse output lattice:
+\begin{equation}
+Q_{\mathrm{ADC}}(u)
+=
+\Delta \cdot
+\mathrm{clip}
+\!\left(
+\left\lfloor \frac{u}{\Delta} \right\rfloor,
+n_a, p_a
+\right),
+\label{eq:adc_quantizer}
+\end{equation}
+where $\Delta$ is the ADC step size and $(n_a,p_a)$ are the output code
+bounds. In a tiled IMC setting, one common hardware model yields
+\begin{equation}
+\Delta
+=
+\frac{2\,n_t\,q_x\,q_w}{2^{b_a}k},
+\label{eq:adc_delta_background}
+\end{equation}
+where $n_t$ is the tile size, $b_a$ is the ADC bitwidth, $k$ is the ADC
+parallelism factor, and $q_x$, $q_w$ are the maximum activation and
+weight code levels. Equation~\eqref{eq:adc_delta_background} makes the
+hardware trade-off explicit: larger tiles or lower ADC precision lead to
+coarser output quantization.
+
+This output quantization stage is qualitatively different from standard
+digital quantization. In purely digital low-bit inference, the dominant
+errors are usually input quantization, weight quantization, and
+approximate integer arithmetic. In IMC, even if $Q_x$ and $Q_w$ are
+well calibrated, the accumulated output can still be projected onto an
+insufficiently fine ADC lattice
+\cite{RAOQ2024,Buechel2025AnalogFoundation}. Thus, the main bottleneck
+may shift from input-side quantization to \emph{output quantization}.
+This distinction is central to the present thesis.
+
+The problem becomes more severe for transformer models. Their hidden
+states are high-dimensional, anisotropic, and may contain rare channels
+with extremely large magnitude. These outliers stress the activation
+quantizer before the analog array and also distort the distribution of
+$y_{\mathrm{int}}$ presented to the ADC. Consequently, the question is
+not only how to quantize weights and activations, but also how to shape
+internal signals so that the analog accumulation uses the ADC range
+efficiently \cite{RAOQ2024,Buechel2025AnalogFoundation}.
+
+\subsection{Quantization of Neural Networks}
+\label{subsec:quantization_basics}
+
+Quantization maps continuous tensors to a finite set of discrete values
+in order to reduce memory, bandwidth, and arithmetic cost
+\cite{Jacob2018IntegerOnly,Wu2020IntegerQuant,Gholami2021Survey}. In
+symmetric uniform quantization, a scalar $x \in \mathbb{R}$ is mapped to
+\begin{equation}
+q(x)
+=
+\mathrm{clip}
+\!\left(
+\left\lfloor \frac{x}{s} \right\rceil,
+-q_{\max}, q_{\max}
+\right),
+\qquad
+\hat{x} = s\,q(x),
+\label{eq:symmetric_quant_background}
+\end{equation}
+where $s>0$ is the quantization scale and $q_{\max}=2^{b-1}-1$ for a
+signed $b$-bit quantizer. Symmetric quantization is widely used for
+weights and signed activations because it preserves zero exactly and
+simplifies integer arithmetic.
+
+In asymmetric quantization, one adds a zero-point $z$:
+\begin{equation}
+q(x)
+=
+\mathrm{clip}
+\!\left(
+\left\lfloor \frac{x}{s} + z \right\rceil,
+q_{\min}, q_{\max}
+\right),
+\qquad
+\hat{x}
+=
+s\,(q(x)-z).
+\label{eq:asymmetric_quant_background}
+\end{equation}
+This is useful when the signal distribution is non-negative or strongly
+shifted, as in some post-activation tensors or hardware-aware activation
+coding schemes \cite{Jacob2018IntegerOnly,Wu2020IntegerQuant}.
+
+Quantization also differs in granularity. In \emph{per-tensor}
+quantization, one scale is shared by the full tensor. In
+\emph{per-channel} quantization, each output channel receives its own
+scale; this is particularly useful for weights because different rows of
+$W$ often have very different ranges. For transformer activations, one
+also encounters per-token and per-group scaling, especially when the
+activation distribution changes strongly across tokens or heads.
+
+Two training regimes dominate the literature. In
+\emph{post-training quantization} (PTQ), a pretrained floating-point
+model is quantized after training, usually using a small calibration set
+and a local reconstruction objective
+\cite{GPTQ2022,ZeroQuant2022,AWQ2023,OmniQuant2023,CBQ2023,FlatQuant2024,QEP2025}.
+A generic PTQ objective for layer $\ell$ can be written as
+\begin{equation}
+\min_{\theta_\ell^q}
+\sum_{x \in \mathcal{C}}
+\left\|
+f_\ell(x;\theta_\ell)
+-
+\hat{f}_\ell(x;\theta_\ell^q)
+\right\|_2^2,
+\label{eq:ptq_objective_background}
+\end{equation}
+where $\mathcal{C}$ is a calibration set and $\theta_\ell^q$ are the
+quantized parameters or auxiliary calibration variables. PTQ is
+attractive because it avoids retraining the full model.
+
+In \emph{quantization-aware training} (QAT), quantization is inserted
+into the forward pass during training or finetuning:
+\begin{equation}
+\min_{\theta}
+\sum_{(x,y)}
+\mathcal{L}
+\!\left(
+y,\,
+f_q(x;\theta)
+\right),
+\label{eq:qat_objective_background}
+\end{equation}
+so that the parameters adapt directly to quantization noise
+\cite{PACT2018,LSQ2019,LLMQAT2023,EfficientQAT2024}. Since rounding is
+non-differentiable, QAT commonly relies on the straight-through
+estimator (STE), which uses the quantized function in the forward pass
+but approximates its gradient in the backward pass by
+\begin{equation}
+\frac{\partial q(x)}{\partial x} \approx 1.
+\label{eq:ste_background}
+\end{equation}
+Although heuristic, STE is one of the standard tools behind low-bit QAT
+and learned PTQ methods \cite{PACT2018,LSQ2019}.
+
+Several refinements are especially relevant for the present work. PACT
+learns activation clipping thresholds \cite{PACT2018}; LSQ learns the
+step size itself \cite{LSQ2019}; AdaRound learns non-trivial rounding
+decisions in PTQ \cite{AdaRound2020}; and QDrop introduces stochastic
+activation dequantization during calibration to stabilize extremely
+low-bit PTQ \cite{QDrop2022}. These techniques all highlight the same
+theme: in low-bit settings, choosing the bitwidth is not enough; one
+must also decide \emph{how} the signal is clipped, scaled, rounded, and
+propagated.
+
+\subsection{Challenges of Quantizing Transformer Models}
+\label{subsec:transformer_quantization_challenges}
+
+Transformer language models are notoriously difficult to quantize. A
+major reason is the presence of activation outliers. LLM.int8() showed
+that hidden states in transformers contain rare but very large features,
+and that preserving these outlier dimensions can be critical even when
+most of the model is quantized aggressively \cite{LLMint82022}. The same
+general phenomenon motivates SmoothQuant, Outlier Suppression+,
+QuaRot, SpinQuant, and FlatQuant
+\cite{SmoothQuant2022,OutlierSuppressionPlus2023,QuaRot2024,SpinQuant2024,FlatQuant2024}.
+
+This is especially problematic under max-based per-token scaling. For a
+signed activation tensor, a common choice is
+\begin{equation}
+s_x
+=
+\frac{\|x\|_\infty}{q_{\max}},
+\label{eq:per_token_max_scale}
+\end{equation}
+which ensures that the largest feature maps to the largest available
+code. If one channel has magnitude $M$ and the remaining channels are of
+order $\varepsilon \ll M$, then most quantization levels are allocated
+to that single channel. In low-bit settings, many of the smaller
+features are then quantized to zero or to a very narrow code band. In an
+ADC-constrained pipeline, this not only harms the input code density,
+but also leads to poorly occupied output bins after analog accumulation.
+
+A second challenge is the sensitivity of the residual stream. Residual
+connections propagate local errors across many layers, so local
+reconstruction loss is not always predictive of end-to-end perplexity.
+QuaRot explicitly motivates its method by the need to remove outliers
+from the residual stream \cite{QuaRot2024}, and SpinQuant shows that
+choosing or learning a suitable rotation can dramatically change the
+accuracy of low-bit LLM inference \cite{SpinQuant2024}. QEP later argues
+that one of the central failures of standard layer-wise PTQ is the
+accumulation of quantization errors across layers, and proposes explicit
+quantization-error propagation to mitigate this effect
+\cite{QEP2025}. CBQ reaches a related conclusion from a cross-block
+reconstruction perspective \cite{CBQ2023}.
+
+A third challenge is architectural non-uniformity. Not all transformer
+projections are equally sensitive. The output projections
+\texttt{o\_proj} and \texttt{down\_proj} inject their errors directly
+into the residual stream, whereas earlier projections such as
+\texttt{q\_proj}, \texttt{k\_proj}, \texttt{v\_proj},
+\texttt{up\_proj}, and \texttt{gate\_proj} are followed by additional
+mixing or nonlinear structure before their effect reaches the next
+block. This asymmetry is one reason why output-side projections often
+emerge as the most sensitive modules in low-bit transformer inference.
+
+Finally, preserving hidden-state geometry is critical. A transform that
+reduces scalar range at the price of severely distorting the hidden-state
+subspace may still harm model quality. Rotation- and affine-transform
+methods are therefore attractive because they attempt to make the model
+more quantizable while preserving the underlying full-precision linear
+map. This point is especially relevant in the present thesis, where the
+goal is not merely to reduce local error, but to shape the signal path so
+that it is robust to both ordinary low-bit quantization and ADC
+quantization at the output of each analog MVM.
+
+\subsection{Existing Methods}
+\label{subsec:existing_methods}
+
+\paragraph{Outlier-aware scaling and equivalent transformations.}
+SmoothQuant reduces activation outliers by migrating part of the dynamic
+range from activations into weights through an equivalent
+transformation,
+\begin{equation}
+x' = x D^{-1}, \qquad W' = W D,
+\label{eq:smoothquant_equiv}
+\end{equation}
+where $D$ is a diagonal scaling matrix chosen from activation and weight
+statistics \cite{SmoothQuant2022}. This can dramatically improve W8A8
+quantization for LLMs, and under ADC constraints it is appealing
+because it reduces input-side dominance before analog accumulation.
+Outlier Suppression+ extends this line with channel-wise shifting and
+scaling to better handle activation asymmetry and concentration
+\cite{OutlierSuppressionPlus2023}. AWQ, although primarily a
+weight-only method, also exploits activation statistics to protect a
+small subset of salient weights \cite{AWQ2023}. OmniQuant generalizes
+equivalent-transform ideas by combining learnable weight clipping (LWC)
+and learnable equivalent transformation (LET), making PTQ more effective
+in very low-bit settings such as W4A4 \cite{OmniQuant2023}. The common
+limitation of this family is that it mainly addresses \emph{input-side}
+quantization mismatch; it does not explicitly optimize the discrete ADC
+output lattice.
+
+\paragraph{Reconstruction-based PTQ for LLMs.}
+GPTQ formulates low-bit weight quantization as a second-order
+reconstruction problem and remains one of the strongest baselines for
+weight-only LLM quantization \cite{GPTQ2022}. ZeroQuant combines PTQ
+with layer-wise distillation and hardware-oriented deployment strategies
+\cite{ZeroQuant2022}. CBQ extends standard layer-wise PTQ to
+cross-block reconstruction \cite{CBQ2023}, while QEP explicitly feeds
+quantized hidden states forward during PTQ in order to model accumulated
+error \cite{QEP2025}. These methods are highly relevant to the present
+thesis because they move beyond purely local clean-input reconstruction.
+However, even when quantization error is propagated across layers, the
+main optimization target is still typically the reconstruction of
+digital hidden states rather than the occupancy and precision of the ADC
+output codes.
+
+\paragraph{Rotation and geometry-based methods.}
+QuaRot uses fixed rotations to eliminate hidden-state outliers without
+changing the full-precision transformer computation, enabling end-to-end
+4-bit inference for weights, activations, and KV cache
+\cite{QuaRot2024}. SpinQuant improves upon this by learning the
+rotations rather than drawing them at random, showing that the choice of
+rotation substantially affects low-bit LLM accuracy
+\cite{SpinQuant2024}. FlatQuant goes one step further and learns a
+layer-wise affine transform parameterized through Kronecker factors,
+allowing the model to flatten activation and weight distributions while
+keeping the transformed linear map equivalent to the original one
+\cite{FlatQuant2024}. These methods are highly relevant under ADC
+constraints because they preserve hidden-state geometry more carefully
+than pure clipping. Their limitation is that they were not originally
+formulated around the explicit analog output quantizer.
+
+\paragraph{ADC-aware methods.}
+RAOQ is directly motivated by the fact that output quantization in IMC
+introduces an additional bottleneck not captured by standard PTQ. It
+proposes activation shifting (A-shift), weight reshaping, and bit
+augmentation (BitAug) to improve the signal-to-quantization-noise ratio
+after ADC conversion \cite{RAOQ2024}. Analog Foundation Models push
+this idea further and train LLMs to be robust to noisy, low-precision
+analog hardware with explicit input and output quantization constraints
+\cite{Buechel2025AnalogFoundation}. These methods are conceptually
+closest to the present thesis because they treat the ADC as part of the
+model rather than as a post hoc implementation detail. Their limitation
+is that they typically go beyond standard PTQ and require a stronger
+hardware-aware adaptation stage.
+
+\paragraph{Lightweight post-quantization adaptation.}
+When pure PTQ saturates, a natural next step is to keep the quantized
+backbone fixed and attach a small trainable correction branch.
+LLM-QAT shows that extremely low-bit transformer quantization often
+requires some form of QAT or finetuning to recover quality
+\cite{LLMQAT2023}. EfficientQAT improves the practicality of this idea
+with block-wise parameter updates and end-to-end training of
+quantization parameters \cite{EfficientQAT2024}. In parallel, a line of
+low-rank methods---including INT2.1, LQER, Low-Rank Correction for
+Quantized LLMs, and LR-QAT---shows that much of the residual
+quantization error can be captured by training only a small number of
+low-rank parameters \cite{INT21_2023,LQER2024,LowRankCorrection2024,LRQAT2024}.
+For ADC-constrained inference, this family is especially attractive:
+one can preserve a frozen quantized analog path and let a lightweight
+residual branch learn the remaining distortion. This is precisely the
+direction explored in the second stage of the present thesis.
+
+\subsection{Research Gap}
+\label{subsec:research_gap}
+
+The literature reviewed above establishes two complementary facts. First,
+state-of-the-art PTQ methods for LLMs---including scaling-based,
+rotation-based, and reconstruction-based approaches---are highly
+effective at reducing \emph{input-side} activation and weight
+quantization error \cite{SmoothQuant2022,AWQ2023,OmniQuant2023,
+QuaRot2024,SpinQuant2024,FlatQuant2024}. Second, IMC-oriented work shows
+that analog output quantization introduces a separate and often dominant
+bottleneck that is not naturally captured by ordinary digital PTQ
+objectives \cite{RAOQ2024,Buechel2025AnalogFoundation}.
+
+This creates a specific gap for ADC-constrained LLM inference. Standard
+PTQ methods typically optimize a local reconstruction objective
+\begin{equation}
+\mathcal{L}_{\mathrm{PTQ}}
+=
+\sum_{x \in \mathcal{C}}
+\left\|
+f_\ell(x) - \hat{f}_\ell(x)
+\right\|_2^2,
+\label{eq:standard_ptq_gap}
+\end{equation}
+possibly with clipping or affine preconditioning. Even when
+quantization-error propagation is included, the target is usually still a
+digital hidden-state reconstruction objective \cite{QEP2025}. In an IMC
+accelerator, however, the effective layer map is
+\begin{equation}
+\hat{f}^{\mathrm{ADC}}_\ell(x)
+=
+D_{\mathrm{out}}
+\,
+Q_{\mathrm{ADC}}
+\!\left(
+Q_w(W_\ell)\,Q_x(x)
+\right),
+\label{eq:adc_layer_gap}
+\end{equation}
+so the model is constrained not only by low-bit inputs and weights, but
+also by the ADC quantization of the analog accumulation. Consequently, a
+method can achieve strong ordinary PTQ metrics and still perform poorly
+once the ADC is inserted into the inference loop.
+
+A second gap appears after pure PTQ saturates. Once the best
+transform-based ADC-aware PTQ solution has been found, the remaining
+error may no longer be well addressed by additional clipping, scaling,
+or rotation heuristics. At that point, the relevant question is whether
+the frozen ADC path can be corrected by a lightweight residual branch
+rather than by retraining the full model. Although low-rank correction
+has been studied in digital low-bit settings
+\cite{LQER2024,LowRankCorrection2024,LRQAT2024}, its interpretation as a
+\emph{post-ADC residual correction} on top of a frozen IMC signal path is
+not standard in the LLM PTQ literature.
+
+The research gap of this thesis is therefore twofold:
+\begin{enumerate}
+    \item existing PTQ methods mainly optimize input-side quantization
+    error, while ADC-constrained inference introduces a distinct output
+    quantization bottleneck that must be modeled explicitly;
+    \item once transform-based PTQ saturates, a lightweight residual
+    correction stage may be required, but it is unclear where such a
+    correction should be inserted and how it should be trained.
+\end{enumerate}
+
+The following chapters address these gaps in two stages. First, they
+extend transform-based PTQ with ADC-aware objectives, error propagation,
+and bounded equivalent scaling. Second, they investigate low-rank
+residual correction on top of the frozen quantized ADC path, showing
+that post-ADC correction can recover a large fraction of the remaining
+accuracy loss in low-bit LLaMA inference.
+
 
   \section{Problem Statement and Research Questions}
 
@@ -318,7 +911,7 @@
   layerwise reconstruction error, clipping rate, dead-zone rate, bin
   utilization, or sensitivity by projection type.
 
-  \section{Proposed Method}
+  \section{Proposed Method}\label{sec:method}
 
   \subsection{Post-Training Quantisation}
 
@@ -638,7 +1231,7 @@
   on WikiText-2, surpassing the INT8 PTQ result (14.41), and generalises
   to C4 (ADC perplexity 23.30 vs.\ PTQ baseline 46.40).
 
-  \section{Experiments and Results}\label{sec:results}
+  \section{Experiments and Results}\label{sec:results}\label{sec:experimental_setup}
 
   \subsection{Model, Data, and Hardware Setup}
 
@@ -675,7 +1268,7 @@
   $\delta = 2 M q_x q_w / (2^{b_a} k)$, giving $\delta \approx 2016$
   for INT8 and $\delta \approx 6.12$ for INT4.
 
-  \begin{table}[h]
+  \begin{table}[htbp]
     \centering
     \caption{Fixed ADC hardware parameters.}
     \label{tab:hardware}
@@ -1214,7 +1807,7 @@
   generalisation; in-place $k$ search after global-$k$ training is
   preferable.
 
-  \begin{table}[h]
+  \begin{table}[htbp]
     \centering
     \caption{Unipolar (unsigned) ADC results on Llama-3.2-1B.
              $\delta_u = 14.0625$ at global $k = 16$.}
@@ -1277,7 +1870,7 @@
   sizes, calibration dataset choice, and the gap between simplified
   hardware assumptions and a real chip implementation.
 
-  \section{Conclusion}
+  \section{Conclusion}\label{sec:conclusion}
 
   \paragraph{Purpose.}
   Provide a concise answer to the research questions and summarize the
