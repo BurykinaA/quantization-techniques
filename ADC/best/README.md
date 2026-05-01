@@ -181,10 +181,10 @@ picks largest k from {4, 8, 16, 32, 64} such that the ADC covers R without satur
 
 | Config | k\_init | k\_search | epochs | Wiki PPL | C4 PPL |
 |---|---|---|---|---|---|
-| `best_lora_k` *(baseline)* | 16 | before training | 5 | 14.56 | 23.78 |
-| `iter_lora_k_pre` | 4 | before training | 5 | — | — |
-| `iter_lora_k_i2`  | 4 | every 2 epochs | 6 | — | — |
-| `iter_lora_k_i1`  | 4 | every 1 epoch  | 5 | — | — |
+| `best_lora_k` *(baseline)* | 16 | before training | 5 | **14.56** | **23.78** |
+| `iter_lora_k_pre` | 4 | before training | 5 | **14.56** | **23.78** |
+| `iter_lora_k_i2`  | 4 | every 2 epochs | 6 | 14.90 | 24.22 |
+| `iter_lora_k_i1`  | 4 | every 1 epoch  | 5 | 14.96 | 24.18 |
 
 ---
 
