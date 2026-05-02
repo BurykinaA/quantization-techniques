@@ -11,6 +11,8 @@
 \def\@LN@column{1}
 \@writefile{toc}{\contentsline {section}{Abstract}{iii}{section*.3}\protected@file@percent }
 \def\@LN@column{1}
+\abx@aux@cite{0}{Pope2023EfficientlyScaling}
+\abx@aux@segm{0}{0}{Pope2023EfficientlyScaling}
 \abx@aux@cite{0}{Xiao2021AnalogAccuracy}
 \abx@aux@segm{0}{0}{Xiao2021AnalogAccuracy}
 \abx@aux@cite{0}{LeGallo2023AnalogNAS}
@@ -27,22 +29,11 @@
 \abx@aux@segm{0}{0}{QuaRot2024}
 \abx@aux@cite{0}{SpinQuant2024}
 \abx@aux@segm{0}{0}{SpinQuant2024}
+\abx@aux@cite{0}{FlatQuant2024}
+\abx@aux@segm{0}{0}{FlatQuant2024}
 \def\@LN@column{1}
 \@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
 \newlabel{sec:introduction}{{1}{1}{Introduction}{section.1}{}}
-\newlabel{eq:intro_adc_quantizer}{{1}{1}{Introduction}{equation.1}{}}
-\newlabel{eq:intro_delta}{{2}{1}{Introduction}{equation.2}{}}
-\abx@aux@cite{0}{FlatQuant2024}
-\abx@aux@segm{0}{0}{FlatQuant2024}
-\abx@aux@cite{0}{QEP2025}
-\abx@aux@segm{0}{0}{QEP2025}
-\def\@LN@column{1}
-\newlabel{eq:intro_per_token_scale}{{3}{2}{Introduction}{equation.3}{}}
-\newlabel{eq:intro_transform_equivalence}{{4}{2}{Introduction}{equation.4}{}}
-\def\@LN@column{1}
-\newlabel{eq:intro_partial_prop}{{5}{3}{Introduction}{equation.5}{}}
-\newlabel{eq:intro_diag_transform}{{6}{3}{Introduction}{equation.6}{}}
-\newlabel{eq:intro_adc_lora}{{7}{3}{Introduction}{equation.7}{}}
 \abx@aux@cite{0}{Xiao2021AnalogAccuracy}
 \abx@aux@segm{0}{0}{Xiao2021AnalogAccuracy}
 \abx@aux@cite{0}{LeGallo2023AnalogNAS}
@@ -50,10 +41,10 @@
 \abx@aux@cite{0}{Buechel2025AnalogFoundation}
 \abx@aux@segm{0}{0}{Buechel2025AnalogFoundation}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {section}{\numberline {2}Background and Related Work}{4}{section.2}\protected@file@percent }
-\newlabel{sec:background}{{2}{4}{Background and Related Work}{section.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}In-Memory Computing and ADC-Constrained Inference}{4}{subsection.2.1}\protected@file@percent }
-\newlabel{subsec:imc_adc}{{2.1}{4}{In-Memory Computing and ADC-Constrained Inference}{subsection.2.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {2}Background and Related Work}{2}{section.2}\protected@file@percent }
+\newlabel{sec:background}{{2}{2}{Background and Related Work}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}In-Memory Computing and ADC-Constrained Inference}{2}{subsection.2.1}\protected@file@percent }
+\newlabel{subsec:imc_adc}{{2.1}{2}{In-Memory Computing and ADC-Constrained Inference}{subsection.2.1}{}}
 \abx@aux@cite{0}{RAOQ2024}
 \abx@aux@segm{0}{0}{RAOQ2024}
 \abx@aux@cite{0}{Buechel2025AnalogFoundation}
@@ -68,6 +59,12 @@
 \abx@aux@segm{0}{0}{Wu2020IntegerQuant}
 \abx@aux@cite{0}{Gholami2021Survey}
 \abx@aux@segm{0}{0}{Gholami2021Survey}
+\def\@LN@column{1}
+\newlabel{eq:adc_quantizer}{{6}{3}{In-Memory Computing and ADC-Constrained Inference}{equation.6}{}}
+\newlabel{eq:adc_delta_background}{{7}{3}{In-Memory Computing and ADC-Constrained Inference}{equation.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Quantization of Neural Networks}{3}{subsection.2.2}\protected@file@percent }
+\newlabel{subsec:quantization_basics}{{2.2}{3}{Quantization of Neural Networks}{subsection.2.2}{}}
+\newlabel{eq:symmetric_quant_background}{{8}{3}{Quantization of Neural Networks}{equation.8}{}}
 \abx@aux@cite{0}{Jacob2018IntegerOnly}
 \abx@aux@segm{0}{0}{Jacob2018IntegerOnly}
 \abx@aux@cite{0}{Wu2020IntegerQuant}
@@ -86,13 +83,6 @@
 \abx@aux@segm{0}{0}{FlatQuant2024}
 \abx@aux@cite{0}{QEP2025}
 \abx@aux@segm{0}{0}{QEP2025}
-\def\@LN@column{1}
-\newlabel{eq:adc_quantizer}{{13}{5}{In-Memory Computing and ADC-Constrained Inference}{equation.13}{}}
-\newlabel{eq:adc_delta_background}{{14}{5}{In-Memory Computing and ADC-Constrained Inference}{equation.14}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Quantization of Neural Networks}{5}{subsection.2.2}\protected@file@percent }
-\newlabel{subsec:quantization_basics}{{2.2}{5}{Quantization of Neural Networks}{subsection.2.2}{}}
-\newlabel{eq:symmetric_quant_background}{{15}{5}{Quantization of Neural Networks}{equation.15}{}}
-\newlabel{eq:asymmetric_quant_background}{{16}{5}{Quantization of Neural Networks}{equation.16}{}}
 \abx@aux@cite{0}{PACT2018}
 \abx@aux@segm{0}{0}{PACT2018}
 \abx@aux@cite{0}{LSQ2019}
@@ -126,12 +116,12 @@
 \abx@aux@cite{0}{FlatQuant2024}
 \abx@aux@segm{0}{0}{FlatQuant2024}
 \def\@LN@column{1}
-\newlabel{eq:ptq_objective_background}{{17}{6}{Quantization of Neural Networks}{equation.17}{}}
-\newlabel{eq:qat_objective_background}{{18}{6}{Quantization of Neural Networks}{equation.18}{}}
-\newlabel{eq:ste_background}{{19}{6}{Quantization of Neural Networks}{equation.19}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Challenges of Quantizing Transformer Models}{6}{subsection.2.3}\protected@file@percent }
-\newlabel{subsec:transformer_quantization_challenges}{{2.3}{6}{Challenges of Quantizing Transformer Models}{subsection.2.3}{}}
-\newlabel{eq:per_token_max_scale}{{20}{6}{Challenges of Quantizing Transformer Models}{equation.20}{}}
+\newlabel{eq:asymmetric_quant_background}{{9}{4}{Quantization of Neural Networks}{equation.9}{}}
+\newlabel{eq:ptq_objective_background}{{10}{4}{Quantization of Neural Networks}{equation.10}{}}
+\newlabel{eq:qat_objective_background}{{11}{4}{Quantization of Neural Networks}{equation.11}{}}
+\newlabel{eq:ste_background}{{12}{4}{Quantization of Neural Networks}{equation.12}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Challenges of Quantizing Transformer Models}{4}{subsection.2.3}\protected@file@percent }
+\newlabel{subsec:transformer_quantization_challenges}{{2.3}{4}{Challenges of Quantizing Transformer Models}{subsection.2.3}{}}
 \abx@aux@cite{0}{QuaRot2024}
 \abx@aux@segm{0}{0}{QuaRot2024}
 \abx@aux@cite{0}{SpinQuant2024}
@@ -148,6 +138,12 @@
 \abx@aux@segm{0}{0}{AWQ2023}
 \abx@aux@cite{0}{OmniQuant2023}
 \abx@aux@segm{0}{0}{OmniQuant2023}
+\def\@LN@column{1}
+\newlabel{eq:per_token_max_scale}{{13}{5}{Challenges of Quantizing Transformer Models}{equation.13}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Existing Methods}{5}{subsection.2.4}\protected@file@percent }
+\newlabel{subsec:existing_methods}{{2.4}{5}{Existing Methods}{subsection.2.4}{}}
+\@writefile{toc}{\contentsline {paragraph}{Outlier-aware scaling and equivalent transformations.}{5}{section*.5}\protected@file@percent }
+\newlabel{eq:smoothquant_equiv}{{14}{5}{Outlier-aware scaling and equivalent transformations}{equation.14}{}}
 \abx@aux@cite{0}{GPTQ2022}
 \abx@aux@segm{0}{0}{GPTQ2022}
 \abx@aux@cite{0}{ZeroQuant2022}
@@ -156,12 +152,6 @@
 \abx@aux@segm{0}{0}{CBQ2023}
 \abx@aux@cite{0}{QEP2025}
 \abx@aux@segm{0}{0}{QEP2025}
-\def\@LN@column{1}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Existing Methods}{7}{subsection.2.4}\protected@file@percent }
-\newlabel{subsec:existing_methods}{{2.4}{7}{Existing Methods}{subsection.2.4}{}}
-\@writefile{toc}{\contentsline {paragraph}{Outlier-aware scaling and equivalent transformations.}{7}{section*.5}\protected@file@percent }
-\newlabel{eq:smoothquant_equiv}{{21}{7}{Outlier-aware scaling and equivalent transformations}{equation.21}{}}
-\@writefile{toc}{\contentsline {paragraph}{Reconstruction-based PTQ for LLMs.}{7}{section*.6}\protected@file@percent }
 \abx@aux@cite{0}{QuaRot2024}
 \abx@aux@segm{0}{0}{QuaRot2024}
 \abx@aux@cite{0}{SpinQuant2024}
@@ -184,6 +174,11 @@
 \abx@aux@segm{0}{0}{LowRankCorrection2024}
 \abx@aux@cite{0}{LRQAT2024}
 \abx@aux@segm{0}{0}{LRQAT2024}
+\def\@LN@column{1}
+\@writefile{toc}{\contentsline {paragraph}{Reconstruction-based PTQ for LLMs.}{6}{section*.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Rotation and geometry-based methods.}{6}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{ADC-aware methods.}{6}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Lightweight post-quantization adaptation.}{6}{section*.9}\protected@file@percent }
 \abx@aux@cite{0}{SmoothQuant2022}
 \abx@aux@segm{0}{0}{SmoothQuant2022}
 \abx@aux@cite{0}{AWQ2023}
@@ -200,12 +195,6 @@
 \abx@aux@segm{0}{0}{RAOQ2024}
 \abx@aux@cite{0}{Buechel2025AnalogFoundation}
 \abx@aux@segm{0}{0}{Buechel2025AnalogFoundation}
-\def\@LN@column{1}
-\@writefile{toc}{\contentsline {paragraph}{Rotation and geometry-based methods.}{8}{section*.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{ADC-aware methods.}{8}{section*.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Lightweight post-quantization adaptation.}{8}{section*.9}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.5}Research Gap}{8}{subsection.2.5}\protected@file@percent }
-\newlabel{subsec:research_gap}{{2.5}{8}{Research Gap}{subsection.2.5}{}}
 \abx@aux@cite{0}{QEP2025}
 \abx@aux@segm{0}{0}{QEP2025}
 \abx@aux@cite{0}{LQER2024}
@@ -215,52 +204,61 @@
 \abx@aux@cite{0}{LRQAT2024}
 \abx@aux@segm{0}{0}{LRQAT2024}
 \def\@LN@column{1}
-\newlabel{eq:standard_ptq_gap}{{22}{9}{Research Gap}{equation.22}{}}
-\newlabel{eq:adc_layer_gap}{{23}{9}{Research Gap}{equation.23}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {3}Problem Statement and Research Questions}{9}{section.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Problem Definition}{9}{subsection.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Purpose.}{9}{section*.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.5}Research Gap}{7}{subsection.2.5}\protected@file@percent }
+\newlabel{subsec:research_gap}{{2.5}{7}{Research Gap}{subsection.2.5}{}}
+\newlabel{eq:standard_ptq_gap}{{15}{7}{Research Gap}{equation.15}{}}
+\newlabel{eq:adc_layer_gap}{{16}{7}{Research Gap}{equation.16}{}}
 \abx@aux@cite{0}{flatquant}
 \abx@aux@segm{0}{0}{flatquant}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {paragraph}{What to include.}{10}{section*.11}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Research Questions}{10}{subsection.3.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Suggested research questions.}{10}{section*.12}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Scope and Assumptions}{10}{subsection.3.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Purpose.}{10}{section*.13}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{What to include.}{10}{section*.14}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Evaluation Criteria}{10}{subsection.3.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Purpose.}{10}{section*.15}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{What to include.}{10}{section*.16}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Problem Statement and Research Questions}{8}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Problem Definition}{8}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Purpose.}{8}{section*.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{What to include.}{8}{section*.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Research Questions}{8}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Suggested research questions.}{8}{section*.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Scope and Assumptions}{8}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Purpose.}{8}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{What to include.}{8}{section*.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Evaluation Criteria}{8}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Purpose.}{8}{section*.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{What to include.}{8}{section*.16}\protected@file@percent }
 \abx@aux@cite{0}{llama3}
 \abx@aux@segm{0}{0}{llama3}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {section}{\numberline {4}Proposed Method}{11}{section.4}\protected@file@percent }
-\newlabel{sec:method}{{4}{11}{Proposed Method}{section.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Post-Training Quantisation}{11}{subsection.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.1}Baseline: FlatQuant for LLaMA}{11}{subsubsection.4.1.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.2}ADC Hardware Model and Forward Simulation}{11}{subsubsection.4.1.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.3}Limitations of Per-Layer Reconstruction}{11}{subsubsection.4.1.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Proposed Method}{9}{section.4}\protected@file@percent }
+\newlabel{sec:method}{{4}{9}{Proposed Method}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Post-Training Quantisation}{9}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.1}Baseline: FlatQuant for LLaMA}{9}{subsubsection.4.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.2}ADC Hardware Model and Forward Simulation}{9}{subsubsection.4.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.3}Limitations of Per-Layer Reconstruction}{9}{subsubsection.4.1.3}\protected@file@percent }
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.4}Block-wise Calibration with Propagation and $\alpha $-Mixing}{12}{subsubsection.4.1.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Block-level reconstruction.}{12}{section*.17}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Propagation across blocks.}{12}{section*.18}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{$\alpha $-mixed objective.}{12}{section*.19}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.5}Trainable Per-Channel Diagonals}{12}{subsubsection.4.1.5}\protected@file@percent }
-\newlabel{lem:rotation-bound}{{4.1}{12}{Rotation-only outlier suppression bound}{lemma.4.1}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces ADC dead-zone illustration. Inputs with $|y_{\mathrm  {int}}| < \delta $ are floored to zero, discarding the analog signal entirely. The two failure modes (dead zone and clipping) are determined by the fixed step $\delta $ and the $b_a$-bit ADC range.}}{10}{figure.caption.17}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{fig:dead_zone}{{1}{10}{ADC dead-zone illustration. Inputs with $|y_{\mathrm {int}}| < \delta $ are floored to zero, discarding the analog signal entirely. The two failure modes (dead zone and clipping) are determined by the fixed step $\delta $ and the $b_a$-bit ADC range}{figure.caption.17}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.4}Block-wise Calibration with Propagation and $\alpha $-Mixing}{10}{subsubsection.4.1.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Block-level reconstruction.}{10}{section*.18}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Propagation across blocks.}{10}{section*.19}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{$\alpha $-mixed objective.}{10}{section*.20}\protected@file@percent }
 \def\@LN@column{1}
-\newlabel{cor:kronecker-capacity}{{4.2}{13}{Kronecker capacity}{lemma.4.2}{}}
-\@writefile{toc}{\contentsline {paragraph}{Implications for INT4 ADC.}{13}{section*.20}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Motivation and formulation.}{13}{section*.21}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.5}Trainable Per-Channel Diagonals}{11}{subsubsection.4.1.5}\protected@file@percent }
+\newlabel{lem:rotation-bound}{{4.1}{11}{Rotation-only outlier suppression bound}{lemma.4.1}{}}
+\newlabel{cor:kronecker-capacity}{{4.2}{11}{Kronecker capacity}{lemma.4.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Implications for INT4 ADC.}{11}{section*.21}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Motivation and formulation.}{11}{section*.22}\protected@file@percent }
+\def\@LN@column{1}
+\@writefile{toc}{\contentsline {paragraph}{Placement in attention and MLP blocks.}{12}{section*.23}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.6}Staged Training}{12}{subsubsection.4.1.6}\protected@file@percent }
+\newlabel{sec:staged}{{4.1.6}{12}{Staged Training}{subsubsection.4.1.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Quantisation-Aware Adaptation via Post-ADC Residual LoRA}{12}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.1}Architecture}{12}{subsubsection.4.2.1}\protected@file@percent }
 \abx@aux@cite{0}{lora}
 \abx@aux@segm{0}{0}{lora}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {paragraph}{Placement in attention and MLP blocks.}{14}{section*.22}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.6}Staged Training}{14}{subsubsection.4.1.6}\protected@file@percent }
-\newlabel{sec:staged}{{4.1.6}{14}{Staged Training}{subsubsection.4.1.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Quantisation-Aware Adaptation via Post-ADC Residual LoRA}{14}{subsection.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.1}Architecture}{14}{subsubsection.4.2.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.2}Training Objective}{14}{subsubsection.4.2.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Pure PTQ plateau. After all transform-based PTQ improvements (sample count, $\alpha $-mixing, diagonals, staged training), INT4 ADC perplexity saturates around 27.5--28.5, independent of calibration strategy. The remaining gap to the FP and INT8 baselines motivates the post-ADC residual correction stage.}}{13}{figure.caption.24}\protected@file@percent }
+\newlabel{fig:ptq_plateau}{{2}{13}{Pure PTQ plateau. After all transform-based PTQ improvements (sample count, $\alpha $-mixing, diagonals, staged training), INT4 ADC perplexity saturates around 27.5--28.5, independent of calibration strategy. The remaining gap to the FP and INT8 baselines motivates the post-ADC residual correction stage}{figure.caption.24}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.2}Training Objective}{13}{subsubsection.4.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.3}Why Post-ADC Placement}{13}{subsubsection.4.2.3}\protected@file@percent }
 \abx@aux@cite{0}{llama3}
 \abx@aux@segm{0}{0}{llama3}
 \abx@aux@cite{0}{wikitext2}
@@ -268,100 +266,135 @@
 \abx@aux@cite{0}{c4}
 \abx@aux@segm{0}{0}{c4}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.3}Why Post-ADC Placement}{15}{subsubsection.4.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {5}Experiments and Results}{15}{section.5}\protected@file@percent }
-\newlabel{sec:results}{{5}{15}{Experiments and Results}{section.5}{}}
-\newlabel{sec:experimental_setup}{{5}{15}{Experiments and Results}{section.5}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Model, Data, and Hardware Setup}{15}{subsection.5.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Model.}{15}{section*.23}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Calibration data.}{15}{section*.24}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Evaluation.}{15}{section*.25}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{ADC hardware parameters.}{15}{section*.26}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Experiments and Results}{14}{section.5}\protected@file@percent }
+\newlabel{sec:results}{{5}{14}{Experiments and Results}{section.5}{}}
+\newlabel{sec:experimental_setup}{{5}{14}{Experiments and Results}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Model, Data, and Hardware Setup}{14}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Model.}{14}{section*.25}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Calibration data.}{14}{section*.26}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Evaluation.}{14}{section*.27}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{ADC hardware parameters.}{14}{section*.28}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Fixed ADC hardware parameters.}}{14}{table.caption.29}\protected@file@percent }
+\newlabel{tab:hardware}{{1}{14}{Fixed ADC hardware parameters}{table.caption.29}{}}
 \def\@LN@column{1}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Fixed ADC hardware parameters.}}{16}{table.caption.27}\protected@file@percent }
-\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{tab:hardware}{{1}{16}{Fixed ADC hardware parameters}{table.caption.27}{}}
-\@writefile{toc}{\contentsline {paragraph}{FlatQuant calibration settings.}{16}{section*.28}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Evaluation Metrics}{16}{subsection.5.2}\protected@file@percent }
-\newlabel{sec:metrics}{{5.2}{16}{Evaluation Metrics}{subsection.5.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{FlatQuant calibration settings.}{15}{section*.30}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Evaluation Metrics}{15}{subsection.5.2}\protected@file@percent }
+\newlabel{sec:metrics}{{5.2}{15}{Evaluation Metrics}{subsection.5.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Bipolar ADC: Ablation Results}{15}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.1}INT8: Effect of Calibration Objective}{15}{subsubsection.5.3.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces INT8 calibration study. Llama-3.2-1B, 128 samples, $\delta \approx 2016$.}}{16}{table.caption.31}\protected@file@percent }
+\newlabel{tab:int8}{{2}{16}{INT8 calibration study. Llama-3.2-1B, 128 samples, $\delta \approx 2016$}{table.caption.31}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces INT8 calibration ablation. Bin-centre loss alone has no effect; propagated calibration drops ADC PPL by 47\% (28.86~$\to $~14.55) by exposing the calibration to the same ADC-distorted inputs that the model sees at inference.}}{16}{figure.caption.32}\protected@file@percent }
+\newlabel{fig:int8_main_results}{{3}{16}{INT8 calibration ablation. Bin-centre loss alone has no effect; propagated calibration drops ADC PPL by 47\% (28.86~$\to $~14.55) by exposing the calibration to the same ADC-distorted inputs that the model sees at inference}{figure.caption.32}{}}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Bipolar ADC: Ablation Results}{17}{subsection.5.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.1}INT8: Effect of Calibration Objective}{17}{subsubsection.5.3.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces INT8 calibration study. Llama-3.2-1B, 128 samples, $\delta \approx 2016$.}}{17}{table.caption.29}\protected@file@percent }
-\newlabel{tab:int8}{{2}{17}{INT8 calibration study. Llama-3.2-1B, 128 samples, $\delta \approx 2016$}{table.caption.29}{}}
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.2}INT4: Sample Count and Propagation}{17}{subsubsection.5.3.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces INT4 sample count and propagation sweep. $\delta \approx 6.12$.}}{17}{table.caption.30}\protected@file@percent }
-\newlabel{tab:int4v1}{{3}{17}{INT4 sample count and propagation sweep. $\delta \approx 6.12$}{table.caption.30}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces INT4 sample count and propagation sweep. $\delta \approx 6.12$.}}{17}{table.caption.33}\protected@file@percent }
+\newlabel{tab:int4v1}{{3}{17}{INT4 sample count and propagation sweep. $\delta \approx 6.12$}{table.caption.33}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Step-by-step INT4 PTQ progression. Each step targets one failure mode: 128 samples (catastrophic, ADC PPL~2355); propagation $+$ 1024 samples (40.6); partial $\alpha =0.5$ mixing and bounded diagonals (27.56); staged training (27.60 with cleanest bypass~18.50). FP baseline and INT8-prop+centre reference lines are shown.}}{17}{figure.caption.34}\protected@file@percent }
+\newlabel{fig:int4_ptq_progression}{{4}{17}{Step-by-step INT4 PTQ progression. Each step targets one failure mode: 128 samples (catastrophic, ADC PPL~2355); propagation $+$ 1024 samples (40.6); partial $\alpha =0.5$ mixing and bounded diagonals (27.56); staged training (27.60 with cleanest bypass~18.50). FP baseline and INT8-prop+centre reference lines are shown}{figure.caption.34}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.3}INT4: $\alpha $-Mixing Sweep (1024 Samples)}{17}{subsubsection.5.3.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces INT4 $\alpha $-mixing sweep. 1024 calibration samples.}}{18}{table.caption.35}\protected@file@percent }
+\newlabel{tab:int4v2}{{4}{18}{INT4 $\alpha $-mixing sweep. 1024 calibration samples}{table.caption.35}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces $\alpha $-mixing sweep at 1024 calibration samples. ADC PPL is minimised at $\alpha = 0.5$; smaller values under-weight the ADC regime, larger values amplify gradient noise from the floor operator and degrade bypass PPL.}}{18}{figure.caption.36}\protected@file@percent }
+\newlabel{fig:alpha_sweep}{{5}{18}{$\alpha $-mixing sweep at 1024 calibration samples. ADC PPL is minimised at $\alpha = 0.5$; smaller values under-weight the ADC regime, larger values amplify gradient noise from the floor operator and degrade bypass PPL}{figure.caption.36}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Loss-landscape visualisation around the converged transforms for $\alpha \in \{0, 0.5, 1\}$ via filter-normalised random perturbations. The $\alpha = 0.5$ minimum is the widest and flattest, indicating that mixed FP/ADC calibration finds smoother solutions than either extreme.}}{18}{figure.caption.37}\protected@file@percent }
+\newlabel{fig:loss_landscape}{{6}{18}{Loss-landscape visualisation around the converged transforms for $\alpha \in \{0, 0.5, 1\}$ via filter-normalised random perturbations. The $\alpha = 0.5$ minimum is the widest and flattest, indicating that mixed FP/ADC calibration finds smoother solutions than either extreme}{figure.caption.37}{}}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.3}INT4: $\alpha $-Mixing Sweep (1024 Samples)}{18}{subsubsection.5.3.3}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces INT4 $\alpha $-mixing sweep. 1024 calibration samples.}}{18}{table.caption.31}\protected@file@percent }
-\newlabel{tab:int4v2}{{4}{18}{INT4 $\alpha $-mixing sweep. 1024 calibration samples}{table.caption.31}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.4}INT4: Diagonal Placement, MLP Decomposition, and Staged Training}{18}{subsubsection.5.3.4}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces INT4 diagonal placement and staged training. 1024 samples, $\alpha =0.5$.}}{18}{table.caption.32}\protected@file@percent }
-\newlabel{tab:int4v3v4}{{5}{18}{INT4 diagonal placement and staged training. 1024 samples, $\alpha =0.5$}{table.caption.32}{}}
-\def\@LN@column{1}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.4}INT4: Diagonal Placement, MLP Decomposition, and Staged Training}{19}{subsubsection.5.3.4}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces INT4 diagonal placement and staged training. 1024 samples, $\alpha =0.5$.}}{19}{table.caption.38}\protected@file@percent }
+\newlabel{tab:int4v3v4}{{5}{19}{INT4 diagonal placement and staged training. 1024 samples, $\alpha =0.5$}{table.caption.38}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Roles of the MLP and attention diagonals. The MLP diagonal drives bypass-PPL improvements (transform quality); the attention diagonal closes the bypass--ADC gap (robustness to ADC noise). Either alone leaves significant perplexity on the table; staged training combines both.}}{19}{figure.caption.39}\protected@file@percent }
+\newlabel{fig:diag_roles}{{7}{19}{Roles of the MLP and attention diagonals. The MLP diagonal drives bypass-PPL improvements (transform quality); the attention diagonal closes the bypass--ADC gap (robustness to ADC noise). Either alone leaves significant perplexity on the table; staged training combines both}{figure.caption.39}{}}
 \@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.5}INT4: Stochastic Propagation}{19}{subsubsection.5.3.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces INT4 stochastic propagation. 1024 samples.}}{19}{table.caption.33}\protected@file@percent }
-\newlabel{tab:int4v5}{{6}{19}{INT4 stochastic propagation. 1024 samples}{table.caption.33}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.6}Post-ADC Residual LoRA: Initial Sweep}{19}{subsubsection.5.3.6}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces LoRA initial sweep (v6). Base PTQ: bypass~18.50, ADC~27.60.}}{19}{table.caption.34}\protected@file@percent }
-\newlabel{tab:lorav6}{{7}{19}{LoRA initial sweep (v6). Base PTQ: bypass~18.50, ADC~27.60}{table.caption.34}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.7}Post-ADC Residual LoRA: Ablation Study}{19}{subsubsection.5.3.7}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces MLP-diagonal decomposition. \texttt  {down\_proj} contributes nearly all of the bypass improvement; the \texttt  {up}/\texttt  {gate} diagonal contributes little, since \texttt  {down\_proj} sits immediately before the next ADC accumulation and shapes the signal that is read.}}{20}{figure.caption.40}\protected@file@percent }
+\newlabel{fig:mlp_split}{{8}{20}{MLP-diagonal decomposition. \texttt {down\_proj} contributes nearly all of the bypass improvement; the \texttt {up}/\texttt {gate} diagonal contributes little, since \texttt {down\_proj} sits immediately before the next ADC accumulation and shapes the signal that is read}{figure.caption.40}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces INT4 stochastic propagation. 1024 samples.}}{20}{table.caption.41}\protected@file@percent }
+\newlabel{tab:int4v5}{{6}{20}{INT4 stochastic propagation. 1024 samples}{table.caption.41}{}}
 \def\@LN@column{1}
-\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces LoRA ablation study (v7). Llama-3.2-1B, INT4.}}{20}{table.caption.35}\protected@file@percent }
-\newlabel{tab:lorav7}{{8}{20}{LoRA ablation study (v7). Llama-3.2-1B, INT4}{table.caption.35}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.8}Post-ADC Residual LoRA: Generalisation to C4}{20}{subsubsection.5.3.8}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces LoRA generalisation (v8). WikiText-2 and C4 perplexity.}}{20}{table.caption.36}\protected@file@percent }
-\newlabel{tab:lorav8}{{9}{20}{LoRA generalisation (v8). WikiText-2 and C4 perplexity}{table.caption.36}{}}
-\def\@LN@column{1}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.6}Post-ADC Residual LoRA: Initial Sweep}{21}{subsubsection.5.3.6}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces LoRA initial sweep (v6). Base PTQ: bypass~18.50, ADC~27.60.}}{21}{table.caption.42}\protected@file@percent }
+\newlabel{tab:lorav6}{{7}{21}{LoRA initial sweep (v6). Base PTQ: bypass~18.50, ADC~27.60}{table.caption.42}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.7}Post-ADC Residual LoRA: Ablation Study}{21}{subsubsection.5.3.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.8}Post-ADC Residual LoRA: Generalisation to C4}{21}{subsubsection.5.3.8}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Unsigned (Unipolar) ADC: A Second Hardware Setting}{21}{subsection.5.4}\protected@file@percent }
 \newlabel{sec:unipolar}{{5.4}{21}{Unsigned (Unipolar) ADC: A Second Hardware Setting}{subsection.5.4}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.1}Unsigned Shift-Subtract ADC Algorithm}{21}{subsubsection.5.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Step 1 — Shift to unsigned.}{21}{section*.37}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Step 2 — Hardware MVM.}{21}{section*.38}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Step 3 — ADC floor.}{21}{section*.39}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Step 4 — Digital correction (exact).}{21}{section*.40}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Step 5 — Dequantisation.}{21}{section*.41}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces LoRA ablation study (v7). Llama-3.2-1B, INT4.}}{22}{table.caption.43}\protected@file@percent }
+\newlabel{tab:lorav7}{{8}{22}{LoRA ablation study (v7). Llama-3.2-1B, INT4}{table.caption.43}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces LoRA ablation grid. \emph  {Top-left}: CE+KL beats CE across both target sets. \emph  {Top-right}: rank saturates near $r=4$. \emph  {Bottom-left}: layer coverage — first-8 beats last-8, all-16 is best, confirming that ADC error accumulates across depth. \emph  {Bottom-right}: pre-ADC placement diverges, post-ADC is stable from epoch~1.}}{22}{figure.caption.44}\protected@file@percent }
+\newlabel{fig:lora_ablations}{{9}{22}{LoRA ablation grid. \emph {Top-left}: CE+KL beats CE across both target sets. \emph {Top-right}: rank saturates near $r=4$. \emph {Bottom-left}: layer coverage — first-8 beats last-8, all-16 is best, confirming that ADC error accumulates across depth. \emph {Bottom-right}: pre-ADC placement diverges, post-ADC is stable from epoch~1}{figure.caption.44}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces LoRA generalisation (v8). WikiText-2 and C4 perplexity.}}{23}{table.caption.45}\protected@file@percent }
+\newlabel{tab:lorav8}{{9}{23}{LoRA generalisation (v8). WikiText-2 and C4 perplexity}{table.caption.45}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Final results across configurations on WikiText-2 and C4. INT4~$+$~LoRA (all-7, CE$+$KL, $r=4$) surpasses the best INT8 PTQ on WikiText-2 (13.96 vs.\ 14.41) and reduces C4 ADC PPL by 50\% relative to the INT4 PTQ baseline (46.40~$\to $~23.30).}}{23}{figure.caption.46}\protected@file@percent }
+\newlabel{fig:final_results}{{10}{23}{Final results across configurations on WikiText-2 and C4. INT4~$+$~LoRA (all-7, CE$+$KL, $r=4$) surpasses the best INT8 PTQ on WikiText-2 (13.96 vs.\ 14.41) and reduces C4 ADC PPL by 50\% relative to the INT4 PTQ baseline (46.40~$\to $~23.30)}{figure.caption.46}{}}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.2}Per-Layer $k$ Search}{22}{subsubsection.5.4.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.3}Calibration Objective for Unipolar ADC}{22}{subsubsection.5.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.4}Experiment Configurations}{22}{subsubsection.5.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.1}Unsigned Shift-Subtract ADC Algorithm}{24}{subsubsection.5.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 1 — Shift to unsigned.}{24}{section*.47}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 2 — Hardware MVM.}{24}{section*.48}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 3 — ADC floor.}{24}{section*.49}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 4 — Digital correction (exact).}{24}{section*.50}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Step 5 — Dequantisation.}{24}{section*.51}\protected@file@percent }
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.5}Experiment History and Hardware Setting Evolution}{23}{subsubsection.5.4.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Bipolar ADC (signed accumulation).}{23}{section*.42}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Four-quadrant unipolar.}{23}{section*.43}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Mismatched unsigned evaluation (historical).}{23}{section*.44}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Unipolar FQ — current.}{23}{section*.45}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Unipolar (unsigned) ADC results on Llama-3.2-1B. $\delta _u = 14.0625$ at global $k = 16$.}}{23}{table.caption.46}\protected@file@percent }
-\newlabel{tab:unipolar}{{10}{23}{Unipolar (unsigned) ADC results on Llama-3.2-1B. $\delta _u = 14.0625$ at global $k = 16$}{table.caption.46}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.2}Per-Layer $k$ Search}{25}{subsubsection.5.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.3}Calibration Objective for Unipolar ADC}{25}{subsubsection.5.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.4}Experiment Configurations}{25}{subsubsection.5.4.4}\protected@file@percent }
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Discussion}{24}{section.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Interpretation of Results}{24}{subsection.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Purpose.}{24}{section*.47}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{What to include.}{24}{section*.48}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Limits of PTQ Under ADC Constraints}{24}{subsection.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Purpose.}{24}{section*.49}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{What to include.}{24}{section*.50}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Practical Implications}{24}{subsection.6.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Purpose.}{24}{section*.51}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{What to include.}{24}{section*.52}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Threats to Validity}{24}{subsection.6.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Purpose.}{24}{section*.53}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{What to include.}{24}{section*.54}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Conclusion}{24}{section.7}\protected@file@percent }
-\newlabel{sec:conclusion}{{7}{24}{Conclusion}{section.7}{}}
-\@writefile{toc}{\contentsline {paragraph}{Purpose.}{24}{section*.55}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{What to include.}{24}{section*.56}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.4.5}Experiment History and Hardware Setting Evolution}{26}{subsubsection.5.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Bipolar ADC (signed accumulation).}{26}{section*.52}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Four-quadrant unipolar.}{26}{section*.53}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Mismatched unsigned evaluation (historical).}{26}{section*.54}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Unipolar FQ — current.}{26}{section*.55}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Unipolar (unsigned) ADC results on Llama-3.2-1B. $\delta _u = 14.0625$ at global $k = 16$.}}{26}{table.caption.56}\protected@file@percent }
+\newlabel{tab:unipolar}{{10}{26}{Unipolar (unsigned) ADC results on Llama-3.2-1B. $\delta _u = 14.0625$ at global $k = 16$}{table.caption.56}{}}
+\def\@LN@column{1}
+\@writefile{toc}{\contentsline {section}{\numberline {6}Discussion}{27}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Interpretation of Results}{27}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Purpose.}{27}{section*.57}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{What to include.}{27}{section*.58}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Limits of PTQ Under ADC Constraints}{27}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Purpose.}{27}{section*.59}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{What to include.}{27}{section*.60}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Practical Implications}{27}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Purpose.}{27}{section*.61}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{What to include.}{27}{section*.62}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Threats to Validity}{27}{subsection.6.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Purpose.}{27}{section*.63}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{What to include.}{27}{section*.64}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Conclusion}{27}{section.7}\protected@file@percent }
+\newlabel{sec:conclusion}{{7}{27}{Conclusion}{section.7}{}}
+\@writefile{toc}{\contentsline {paragraph}{Purpose.}{27}{section*.65}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{What to include.}{27}{section*.66}\protected@file@percent }
 \def\@LN@column{1}
 \def\@LN@column{1}
 \def\@LN@column{1}
-\@writefile{toc}{\contentsline {section}{\numberline {A}Detailed Experimental Configurations}{27}{appendix.A}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Suggested contents.}{27}{section*.58}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {B}Additional Figures and Tables}{27}{appendix.B}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Suggested contents.}{27}{section*.59}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {C}Code Organization and Reproducibility Notes}{27}{appendix.C}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Suggested contents.}{27}{section*.60}\protected@file@percent }
-\abx@aux@read@bbl@mdfivesum{A9A9EF0EEA014D9BCBD23F9D1273C906}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Detailed Experimental Configurations}{30}{appendix.A}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Suggested contents.}{30}{section*.68}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {B}Additional Figures and Tables}{30}{appendix.B}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Suggested contents.}{30}{section*.69}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {C}Code Organization and Reproducibility Notes}{30}{appendix.C}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Suggested contents.}{30}{section*.70}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {D}Key Code Listings}{30}{appendix.D}\protected@file@percent }
+\newlabel{app:code}{{D}{30}{Key Code Listings}{appendix.D}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.1}ADC Forward Pass}{30}{subsection.D.1}\protected@file@percent }
+\newlabel{app:code:adc}{{D.1}{30}{ADC Forward Pass}{subsection.D.1}{}}
+\newlabel{lst:qat_adc_forward}{{1}{30}{Per-tile ADC forward pass (\texttt {QATLinearADC.forward})}{lstlisting.1}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}{\ignorespaces Per-tile ADC forward pass (\texttt  {QATLinearADC.forward}).}}{30}{lstlisting.1}\protected@file@percent }
+\def\@LN@column{1}
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.2}Kronecker Transform with Diagonal}{31}{subsection.D.2}\protected@file@percent }
+\newlabel{app:code:kron}{{D.2}{31}{Kronecker Transform with Diagonal}{subsection.D.2}{}}
+\newlabel{lst:kron}{{2}{31}{Kronecker transform with optional diagonal scaling (\texttt {KroneckerTransform.forward})}{lstlisting.2}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {2}{\ignorespaces Kronecker transform with optional diagonal scaling (\texttt  {KroneckerTransform.forward}).}}{31}{lstlisting.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.3}Block-Level Loss with $\alpha $-Mixing}{31}{subsection.D.3}\protected@file@percent }
+\newlabel{app:code:alpha}{{D.3}{31}{Block-Level Loss with $\alpha $-Mixing}{subsection.D.3}{}}
+\newlabel{lst:alpha}{{3}{31}{Block-level $\alpha $-mixed reconstruction loss}{lstlisting.3}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {3}{\ignorespaces Block-level $\alpha $-mixed reconstruction loss.}}{31}{lstlisting.3}\protected@file@percent }
+\def\@LN@column{1}
+\newlabel{lst:staged}{{4}{32}{Staged training schedule (Stage~A~$\rightarrow $~Stage~B)}{lstlisting.4}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {4}{\ignorespaces Staged training schedule (Stage~A~$\rightarrow $~Stage~B).}}{32}{lstlisting.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {D.4}Post-ADC Residual LoRA}{32}{subsection.D.4}\protected@file@percent }
+\newlabel{app:code:lora}{{D.4}{32}{Post-ADC Residual LoRA}{subsection.D.4}{}}
+\newlabel{lst:lora}{{5}{32}{Post-ADC residual LoRA wrapper (\texttt {ResidualLoRATiledLinearADC})}{lstlisting.5}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {5}{\ignorespaces Post-ADC residual LoRA wrapper (\texttt  {ResidualLoRATiledLinearADC}).}}{32}{lstlisting.5}\protected@file@percent }
+\abx@aux@read@bbl@mdfivesum{B9BAAB52C4D1A3364E9A201A89F56FE8}
 \abx@aux@defaultrefcontext{0}{QEP2025}{nty/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{QuaRot2024}{nty/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{LRQAT2024}{nty/global//global/global/global}
@@ -387,6 +420,7 @@
 \abx@aux@defaultrefcontext{0}{SpinQuant2024}{nty/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{wikitext2}{nty/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{AdaRound2020}{nty/global//global/global/global}
+\abx@aux@defaultrefcontext{0}{Pope2023EfficientlyScaling}{nty/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{c4}{nty/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{LowRankCorrection2024}{nty/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{OmniQuant2023}{nty/global//global/global/global}
@@ -396,4 +430,4 @@
 \abx@aux@defaultrefcontext{0}{SmoothQuant2022}{nty/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{Xiao2021AnalogAccuracy}{nty/global//global/global/global}
 \abx@aux@defaultrefcontext{0}{ZeroQuant2022}{nty/global//global/global/global}
-\gdef \@abspage@last{31}
+\gdef \@abspage@last{36}

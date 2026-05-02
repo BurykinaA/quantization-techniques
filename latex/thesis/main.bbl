@@ -1225,6 +1225,71 @@
       \field{title}{Up or Down? Adaptive Rounding for Post-Training Quantization}
       \field{year}{2020}
     \endentry
+    \entry{Pope2023EfficientlyScaling}{article}{}{}
+      \name{author}{9}{}{%
+        {{hash=d8be19e523fa307d44a1fddbff485f5c}{%
+           family={Pope},
+           familyi={P\bibinitperiod},
+           given={Reiner},
+           giveni={R\bibinitperiod}}}%
+        {{hash=5f9ac8488ec08b42c64992884a30aef4}{%
+           family={Douglas},
+           familyi={D\bibinitperiod},
+           given={Sholto},
+           giveni={S\bibinitperiod}}}%
+        {{hash=fd55b702c004c13506e70bb76a4e987c}{%
+           family={Chowdhery},
+           familyi={C\bibinitperiod},
+           given={Aakanksha},
+           giveni={A\bibinitperiod}}}%
+        {{hash=13202969e372bc82318f9629cbdd199b}{%
+           family={Devlin},
+           familyi={D\bibinitperiod},
+           given={Jacob},
+           giveni={J\bibinitperiod}}}%
+        {{hash=b75383e6b48c8360c7a60031424c85cf}{%
+           family={Bradbury},
+           familyi={B\bibinitperiod},
+           given={James},
+           giveni={J\bibinitperiod}}}%
+        {{hash=dfde3d21dc3264e89f86d7ab9845c22a}{%
+           family={Heek},
+           familyi={H\bibinitperiod},
+           given={Jonathan},
+           giveni={J\bibinitperiod}}}%
+        {{hash=09ffd4b93ef88f7c84a3174e6904f976}{%
+           family={Xiao},
+           familyi={X\bibinitperiod},
+           given={Kefan},
+           giveni={K\bibinitperiod}}}%
+        {{hash=aea4a56bc73650d2a59fd044b9b80fde}{%
+           family={Agrawal},
+           familyi={A\bibinitperiod},
+           given={Shivani},
+           giveni={S\bibinitperiod}}}%
+        {{hash=62f954323339abeba6c6a240e9d2855b}{%
+           family={Dean},
+           familyi={D\bibinitperiod},
+           given={Jeff},
+           giveni={J\bibinitperiod}}}%
+      }
+      \strng{namehash}{80b3feac7c62618b8124a8c157a39f0e}
+      \strng{fullhash}{ae8212d4e93659094a800e923fe54eab}
+      \strng{fullhashraw}{ae8212d4e93659094a800e923fe54eab}
+      \strng{bibnamehash}{80b3feac7c62618b8124a8c157a39f0e}
+      \strng{authorbibnamehash}{80b3feac7c62618b8124a8c157a39f0e}
+      \strng{authornamehash}{80b3feac7c62618b8124a8c157a39f0e}
+      \strng{authorfullhash}{ae8212d4e93659094a800e923fe54eab}
+      \strng{authorfullhashraw}{ae8212d4e93659094a800e923fe54eab}
+      \field{sortinit}{P}
+      \field{sortinithash}{ff3bcf24f47321b42cb156c2cc8a8422}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Proceedings of Machine Learning and Systems}
+      \field{title}{Efficiently Scaling Transformer Inference}
+      \field{volume}{5}
+      \field{year}{2023}
+    \endentry
     \entry{c4}{article}{}{}
       \name{author}{9}{}{%
         {{hash=81a5a94e2388c149a73a86381db45e07}{%
