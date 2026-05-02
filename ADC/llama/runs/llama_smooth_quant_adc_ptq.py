@@ -334,24 +334,44 @@ def _run_lm_eval(model, tokenizer, args) -> dict:
     except ImportError:
         logger.warning("[lm-eval] lm_eval not installed. Run: pip install lm-eval>=0.4.0")
         return results
+
+    def _get_acc(r: dict):
+        # lm-eval >=0.4 uses "acc_norm,none" / "acc,none"; older uses "acc_norm" / "acc"
+        for key in ("acc_norm,none", "acc_norm", "acc,none", "acc"):
+            if key in r and r[key] is not None:
+                return float(r[key])
+        return None
+
     try:
-        tasks = list(args.lm_eval_tasks)
-        num_fewshot = {"hellaswag": 0, "winogrande": 5, "mmlu": 5}
-        logger.info(f"[lm-eval] Running tasks: {tasks}")
         lm_wrapper = HFLM(
             pretrained=model, tokenizer=tokenizer,
             batch_size=getattr(args, "lm_eval_batch_size", 4),
         )
-        eval_out = lm_eval.simple_evaluate(
-            model=lm_wrapper,
-            tasks=tasks,
-            num_fewshot=num_fewshot,
-        )
-        for task, r in eval_out["results"].items():
-            acc = r.get("acc_norm,none") or r.get("acc,none")
-            if acc is not None:
-                results[f"lm_{task}"] = round(float(acc) * 100, 2)
-                logger.info(f"[lm-eval] {task}: {acc:.4f}  ({acc * 100:.2f}%)")
+        tasks = list(args.lm_eval_tasks)
+
+        # lm_eval.simple_evaluate expects num_fewshot as int, not dict.
+        # Group tasks by few-shot count: hellaswag is 0-shot, rest are 5-shot.
+        zero_shot_tasks = [t for t in tasks if t in ("hellaswag",)]
+        five_shot_tasks = [t for t in tasks if t not in ("hellaswag",)]
+
+        task_groups = []
+        if zero_shot_tasks:
+            task_groups.append((zero_shot_tasks, 0))
+        if five_shot_tasks:
+            task_groups.append((five_shot_tasks, 5))
+
+        for task_list, nfewshot in task_groups:
+            logger.info(f"[lm-eval] Running {task_list} ({nfewshot}-shot)")
+            eval_out = lm_eval.simple_evaluate(
+                model=lm_wrapper,
+                tasks=task_list,
+                num_fewshot=nfewshot,
+            )
+            for task, r in eval_out["results"].items():
+                acc = _get_acc(r)
+                if acc is not None:
+                    results[f"lm_{task}"] = round(acc * 100, 2)
+                    logger.info(f"[lm-eval] {task}: {acc:.4f}  ({acc * 100:.2f}%)")
     except Exception as e:
         logger.warning(f"[lm-eval] FAILED: {e}")
     return results

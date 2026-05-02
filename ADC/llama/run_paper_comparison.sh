@@ -50,6 +50,7 @@ FQ_INT4=(
     --fq_epochs 30 --fq_stage_b_epochs 10
     --fq_w_bits 4 --fq_a_bits 4
     --fq_lwc --fq_lac --fq_add_diag
+    --fq_diag_mlp
     --fq_stage_b_prop_alpha 0.5 --fq_stage_b_diag_attn
     --mvm_limit 256
 )
@@ -60,6 +61,7 @@ FQ_INT8=(
     --fq_epochs 30 --fq_stage_b_epochs 10
     --fq_w_bits 8 --fq_a_bits 8
     --fq_lwc --fq_lac --fq_add_diag
+    --fq_diag_mlp
     --fq_stage_b_prop_alpha 0.5 --fq_stage_b_diag_attn
     --mvm_limit 256
 )
