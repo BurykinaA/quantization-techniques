@@ -325,6 +325,38 @@ def compute_perplexity_sliding_window(
     }
 
 
+def _run_lm_eval(model, tokenizer, args) -> dict:
+    """Run lm-evaluation-harness tasks; return dict of {lm_<task>: acc%}.  Never raises."""
+    results = {}
+    try:
+        import lm_eval
+        from lm_eval.models.huggingface import HFLM
+    except ImportError:
+        logger.warning("[lm-eval] lm_eval not installed. Run: pip install lm-eval>=0.4.0")
+        return results
+    try:
+        tasks = list(args.lm_eval_tasks)
+        num_fewshot = {"hellaswag": 0, "winogrande": 5, "mmlu": 5}
+        logger.info(f"[lm-eval] Running tasks: {tasks}")
+        lm_wrapper = HFLM(
+            pretrained=model, tokenizer=tokenizer,
+            batch_size=getattr(args, "lm_eval_batch_size", 4),
+        )
+        eval_out = lm_eval.simple_evaluate(
+            model=lm_wrapper,
+            tasks=tasks,
+            num_fewshot=num_fewshot,
+        )
+        for task, r in eval_out["results"].items():
+            acc = r.get("acc_norm,none") or r.get("acc,none")
+            if acc is not None:
+                results[f"lm_{task}"] = round(float(acc) * 100, 2)
+                logger.info(f"[lm-eval] {task}: {acc:.4f}  ({acc * 100:.2f}%)")
+    except Exception as e:
+        logger.warning(f"[lm-eval] FAILED: {e}")
+    return results
+
+
 def prepare_dataset_for_lm(dataset, tokenizer, max_length: int, max_samples: int = None,
                            min_text_length: int = 50, streaming: bool = False):
     """Prepare a dataset for language modeling evaluation."""
@@ -2002,6 +2034,19 @@ def main():
                              "(q/k/v/o/gate/up/down) across all layers. Shows which projection "
                              "type is the bottleneck. Reuses layer_ablation_max_windows.")
 
+    # FP16 only evaluation (skip all quantization)
+    parser.add_argument("--fp_only_eval", action="store_true",
+                        help="Skip all quantization — load FP16 model and evaluate only")
+
+    # lm-evaluation-harness integration
+    parser.add_argument("--run_lm_eval", action="store_true",
+                        help="Run lm-evaluation-harness after PPL evaluation")
+    parser.add_argument("--lm_eval_tasks", type=str, nargs="+",
+                        default=["hellaswag", "winogrande", "mmlu"],
+                        help="Tasks to evaluate with lm-eval")
+    parser.add_argument("--lm_eval_batch_size", type=int, default=4,
+                        help="Batch size for lm-eval")
+
     args = parser.parse_args()
     set_seed(args.seed)
 
@@ -2195,6 +2240,61 @@ def main():
                 f"Stage eval: truncated to {_max_tokens} tokens "
                 f"(~{args.stage_eval_max_windows} windows per stage)"
             )
+
+    # =========================================================================
+    # fp_only_eval: evaluate raw FP16 model without any quantization
+    # =========================================================================
+    if getattr(args, "fp_only_eval", False):
+        logger.info("=" * 80)
+        logger.info("FP16 ONLY EVAL — skipping all quantization")
+        logger.info("=" * 80)
+        model.eval()
+        _fp_metrics = {}
+        for ds in args.eval_datasets:
+            enc = load_and_tokenize_for_sliding_window(
+                ds, args.eval_split, tokenizer,
+                max_samples=args.max_eval_samples if ds == "c4" else None,
+            )
+            if enc is None:
+                logger.warning(f"  Skipping {ds} (unavailable)")
+                continue
+            m = compute_perplexity_sliding_window(
+                model, enc, device,
+                max_length=args.max_length, stride=args.stride,
+                desc=f"FP16 eval {ds}",
+            )
+            _fp_metrics[ds] = m
+            logger.info(f"  {ds.upper()} PPL = {m['perplexity']:.4f}")
+
+        _fp_lm = {}
+        if getattr(args, "run_lm_eval", False):
+            _fp_lm = _run_lm_eval(model, tokenizer, args)
+
+        if args.results_json_path:
+            import json as _json
+            _record = {
+                "run_name":  getattr(args, "wandb_run_name", None) or args.output_dir,
+                "timestamp": __import__("datetime").datetime.now().isoformat(),
+                "status":    "success",
+                "config":    {"model": args.model_name, "bits": "fp16"},
+                "results":   {
+                    **{f"ppl_{ds}": float(_fp_metrics[ds]["perplexity"]) for ds in _fp_metrics},
+                    **_fp_lm,
+                },
+            }
+            _existing = []
+            try:
+                with open(args.results_json_path) as _f:
+                    _existing = _json.load(_f)
+            except (FileNotFoundError, _json.JSONDecodeError):
+                pass
+            _existing = [r for r in _existing if r.get("run_name") != _record["run_name"]]
+            _existing.append(_record)
+            os.makedirs(os.path.dirname(os.path.abspath(args.results_json_path)), exist_ok=True)
+            with open(args.results_json_path, "w") as _f:
+                _json.dump(_existing, _f, indent=2)
+            logger.info(f"Results saved to: {args.results_json_path}")
+        return
 
     # =========================================================================
     # STEP 0: OPTIONAL PREPROCESSING (SmoothQuant / FlatQuant / None)
@@ -2923,6 +3023,11 @@ def main():
         wandb.run.summary["eval_max_length"] = args.max_length
         wandb.run.summary["eval_stride"] = args.stride or args.max_length // 2
 
+    # lm-evaluation-harness (optional, never interrupts the run)
+    _lm_eval_results = {}
+    if getattr(args, "run_lm_eval", False):
+        _lm_eval_results = _run_lm_eval(model, tokenizer, args)
+
     # Save calibrated model
     logger.info(f"Saving calibrated model to: {args.output_dir}")
     os.makedirs(args.output_dir, exist_ok=True)
@@ -3054,6 +3159,7 @@ def main():
                 "dead_rate_mean":        float(np.mean(_dead_vals)) if _dead_vals else None,
                 "dead_rate_max":         float(np.max(_dead_vals))  if _dead_vals else None,
                 "reconstruction_rel_mean": float(np.mean(_rel_vals)) if _rel_vals else None,
+                **_lm_eval_results,
             },
         }
         _existing = []

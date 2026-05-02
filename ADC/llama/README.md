@@ -1,5 +1,29 @@
 # FlatQuant + ADC PTQ for Llama
 
+## Paper Results
+
+**3 models × 4 methods** | WikiText2 PPL ↓, C4 PPL ↓, accuracy % ↑
+
+| Model | Method | Wiki PPL | C4 PPL | HellaSwag | MMLU | WinoGrande |
+|-------|--------|:--------:|:------:|:---------:|:----:|:----------:|
+| Llama-3.2-1B | FP16 | — | — | — | — | — |
+| | INT8 PTQ | — | — | — | — | — |
+| | INT4+ADC PTQ | — | — | — | — | — |
+| | INT4+ADC+LoRA | — | — | — | — | — |
+| Llama-3.2-3B | FP16 | — | — | — | — | — |
+| | INT8 PTQ | — | — | — | — | — |
+| | INT4+ADC PTQ | — | — | — | — | — |
+| | INT4+ADC+LoRA | — | — | — | — | — |
+| Llama-3.1-8B | FP16 | — | — | — | — | — |
+| | INT8 PTQ | — | — | — | — | — |
+| | INT4+ADC PTQ | — | — | — | — | — |
+| | INT4+ADC+LoRA | — | — | — | — | — |
+
+Run: `bash ADC/llama/run_paper_comparison.sh`  
+Results saved to: `outputs/paper_comparison/results.json`
+
+---
+
 ## Setup
 
 **Model:** Llama-3.2-1B
