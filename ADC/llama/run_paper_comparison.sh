@@ -89,6 +89,7 @@ fq_cali_bsz_for() {
 
 COMMON_EVAL=(
     --eval_datasets wikitext2 c4
+    --run_no_adc_eval                # also measure bypass (INT-only, no ADC) PPL
     --run_lm_eval
     --disable_visualizations
 )
