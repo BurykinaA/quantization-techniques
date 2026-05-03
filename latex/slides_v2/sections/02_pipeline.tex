@@ -1,0 +1,47 @@
+% ─── Slide: Analog MVM Signal Path ───────────────────────────────────────────
+\begin{frame}[shrink=5]{Analog MVM Signal Path}
+
+  \vspace{0.7em}
+  \begin{center}
+  \begin{tikzpicture}[
+      every node/.style={font=\small},
+      q/.style={draw=mybluedark, rounded corners=3pt, fill=myblue!22,
+                minimum width=1.9cm, minimum height=0.72cm, align=center},
+      tile/.style={draw, rounded corners=3pt, fill=mybluedark!15, text=mybluedark,
+                   minimum width=2.2cm, minimum height=1.0cm, align=center},
+      adc/.style={draw=myorange, line width=1.5pt, rounded corners=3pt,
+                  fill=myorange!25, minimum width=1.7cm, minimum height=0.72cm,
+                  align=center},
+      arr/.style={-{Latex[length=2.5mm]}, thick, mybluedark}
+    ]
+    \node (w)  at (0,   1.1) {$w$};
+    \node[q] (qw) at (2.1,  1.1) {Digital\\quantiser};
+    \node (wb) at (4.0,  1.1) {$\hat w$};
+
+    \node (x)  at (0,  -1.1) {$x$};
+    \node[q] (qx) at (2.1, -1.1) {Digital\\quantiser};
+    \node (xb) at (4.0, -1.1) {$\hat x$};
+
+    \draw[arr] (w)--(qw);   \draw[arr] (qw)--(wb);
+    \draw[arr] (x)--(qx);   \draw[arr] (qx)--(xb);
+
+    \node[tile] (T) at (6.2, 0) {Analog IMC tile\\$y{=}\langle\hat w,\hat x\rangle$};
+    \draw[arr] (wb) -- (T.north west);
+    \draw[arr] (xb) -- (T.south west);
+
+    \node (y)  at (8.05, 0) {$y$};
+    \draw[arr] (T)--(y);
+
+    \node[adc] (A) at (9.4, 0) {ADC\\$\lfloor y/\delta\rfloor$};
+    \draw[arr] (y)--(A);
+
+    \node (yb) at (11.0, 0) {$\hat y$};
+    \draw[arr] (A)--(yb);
+
+
+  \end{tikzpicture}
+  \end{center}
+
+  \note{Показываю общую схему. Линейный слой проходит через два ключевых этапа: сначала квантизация весов и активаций, потом аналоговое умножение матриц, результат которого читается через АЦП.}
+
+\end{frame}

@@ -1,0 +1,121 @@
+\documentclass[10pt, aspectratio=169]{beamer}
+
+% ─── Theme ────────────────────────────────────────────────────────────────────
+\usetheme[progressbar=frametitle, block=fill]{metropolis}
+\usepackage{appendixnumberbeamer}
+
+% ─── Packages ─────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage{pgfplotstable}
+\usepackage{xcolor}
+\usepackage{amsmath, amssymb}
+\usepackage{mathtools}
+\usepackage{graphicx}
+\usepackage{colortbl}
+\usepackage{multirow}
+\usepackage{tabularx}
+
+\usepackage[T2A,T1]{fontenc}
+\usepackage[main=english,russian]{babel}
+
+\usetikzlibrary{arrows.meta, positioning, fit, backgrounds, shapes.geometric, calc}
+
+% ─── Colors ───────────────────────────────────────────────────────────────────
+\definecolor{myblue}{HTML}{2E86AB}
+\definecolor{myorange}{HTML}{E07A5F}
+\definecolor{mygreen}{HTML}{3D9970}
+\definecolor{mygray}{HTML}{AAAAAA}
+\definecolor{myyellow}{HTML}{F2CC8F}
+\definecolor{myred}{HTML}{C0392B}
+\definecolor{mybluedark}{HTML}{1A5276}
+\definecolor{mydarknav}{HTML}{071923}
+\definecolor{mycyan}{HTML}{00C8FF}
+
+\setbeamercolor{progress bar}{fg=myorange}
+\setbeamercolor{frametitle}{bg=mybluedark}
+\setbeamercolor{alerted text}{fg=myorange}
+
+% ─── Placeholder macros ───────────────────────────────────────────────────────
+\newcommand{\figplaceholder}[2][0.50\textheight]{%
+  \begin{center}
+    \fbox{%
+      \parbox[c][#1][c]{0.90\linewidth}{%
+        \centering
+        \textcolor{myorange}{\large\textbf{TODO figure}}\\[0.4em]
+        \small #2
+      }%
+    }
+  \end{center}%
+}
+
+\newcommand{\tableplaceholder}[2][0.30\textheight]{%
+  \begin{center}
+    \fbox{%
+      \parbox[c][#1][c]{0.90\linewidth}{%
+        \centering
+        \textcolor{myblue}{\large\textbf{TODO table}}\\[0.4em]
+        \small #2
+      }%
+    }
+  \end{center}%
+}
+
+% ─── Global layout tuning ────────────────────────────────────────────────────
+% Reduce base font to \small (9pt) and tighten list spacing
+\setbeamerfont{normal text}{size=\small}
+\AtBeginDocument{\usebeamerfont{normal text}}
+\setlength{\leftmargini}{1.2em}
+\setlength{\leftmarginii}{1.0em}
+
+% ─── Convenience macros ───────────────────────────────────────────────────────
+\newcommand{\ppl}[1]{\ensuremath{\mathrm{PPL}_{#1}}}
+\newcommand{\bypass}{\ppl{\mathrm{bypass}}}
+\newcommand{\adcppl}{\ppl{\mathrm{ADC}}}
+\newcommand{\fp}{\texttt{FP}}
+\newcommand{\inteight}{\texttt{INT8}}
+\newcommand{\intfour}{\texttt{INT4}}
+\newcommand{\better}[1]{\textcolor{mygreen}{\textbf{#1}}}
+\newcommand{\worse}[1]{\textcolor{myred}{\textbf{#1}}}
+\newcommand{\best}[1]{\cellcolor{mygreen!25}\textbf{#1}}
+
+% ─── Metadata ─────────────────────────────────────────────────────────────────
+\title{ADC-aware PTQ and Post-ADC\\Low-Rank Correction for Llama}
+\subtitle{From Dead-Zone Diagnosis to INT4~$\approx$~INT8 PTQ Quality}
+\author{Alina Burykina}
+\institute{Constructor University}
+\date{April 2026}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{document}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\input{sections/00_title}
+\input{sections/01_optical_motivation}
+
+\input{sections/02_pipeline}
+\input{sections/03_outliers}
+\input{sections/04_adc_math}
+% sections/06_quant_primer — moved to backup; audience knows QAT vs PTQ
+\input{sections/07_flatquant}
+\input{sections/05_research_questions}
+\input{sections/09_block_propagation}
+\input{sections/08_diagonals}
+\input{sections/10_staged_training}
+\input{sections/11_ptq_results}
+\input{sections/12_adc_lora}
+\input{sections/13_ablations}
+\input{sections/14_final_results}
+\input{sections/15_takeaways}
+
+% ─── Appendix ─────────────────────────────────────────────────────────────────
+\appendix
+\input{sections/A_backup}
+\input{sections/related_work}
+\input{sections/lora_overhead}
+\input{sections/thankyou}
+
+\end{document}

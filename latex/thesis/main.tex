@@ -719,58 +719,255 @@ that post-ADC correction can recover a large fraction of the remaining
 accuracy loss in low-bit LLaMA inference.
 
 
-  \section{Problem Statement and Research Questions}
 
-  \subsection{Problem Definition}
+\section{Problem Statement and Research Questions}
+\label{sec:problem_statement}
 
-  \paragraph{Purpose.}
-  Formally define the problem studied in the thesis.
+\subsection{Problem Definition}
+\label{subsec:problem_definition}
 
-  \paragraph{What to include.}
-  Introduce the linear operation in quantized code space, define the
-  ADC-constrained output quantization step, and explain the roles of the
-  main parameters such as activation precision, weight precision, ADC
-  precision, tile size, and the hardware parameter \(k\). Clearly state
-  that the goal is to preserve model quality under these constraints.
+The core problem studied in this thesis is how to deploy LLaMA-family transformer models on an in-memory computing (IMC) inference path in which every large linear projection is constrained not only by low-bit weight and activation quantization, but also by a finite-resolution analog-to-digital converter (ADC) after the matrix--vector multiplication. In a standard digital setting, a linear projection in a transformer block computes
+\begin{equation}
+    y = x W^\top + b,
+\end{equation}
+where \(x \in \mathbb{R}^{d_{\mathrm{in}}}\) is the input hidden state, \(W \in \mathbb{R}^{d_{\mathrm{out}} \times d_{\mathrm{in}}}\) is the projection matrix, and \(b\) is an optional bias term. In the IMC setting considered here, the same operation is executed tile by tile in quantized code space.
 
-  \subsection{Research Questions}
+Let the input dimension be split into tiles of width \(M\). For tile \(t\), the activation and weight tensors are quantized as
+\begin{equation}
+    x_t \approx s_{x,t} \hat{x}_t, 
+    \qquad
+    W_t \approx \operatorname{diag}(\mathbf{s}_{w,t}) \hat{W}_t,
+\end{equation}
+where \(\hat{x}_t\) and \(\hat{W}_t\) are integer activation and weight codes, \(s_{x,t}\) is the activation scale, and \(\mathbf{s}_{w,t}\) is the vector of per-output-channel weight scales. The analog array accumulates the integer dot product
+\begin{equation}
+    z_t = \hat{x}_t \hat{W}_t^\top .
+\end{equation}
+Unlike conventional digital quantization, this accumulated value is not immediately available at full integer precision. It must first be discretized by the ADC:
+\begin{equation}
+    Q_{\mathrm{ADC}}(z_t; \Delta, n_a, p_a)
+    =
+    \Delta \cdot
+    \operatorname{clip}
+    \left(
+        \left\lfloor \frac{z_t}{\Delta} \right\rfloor,
+        n_a,
+        p_a
+    \right),
+\end{equation}
+where \(\Delta\) is the ADC step size and \((n_a,p_a)\) are the lower and upper ADC code bounds. The dequantized output of the tiled projection is then
+\begin{equation}
+    \hat{y}
+    =
+    b
+    +
+    \sum_t
+    s_{x,t}
+    \left(
+        \mathbf{s}_{w,t}
+        \odot
+        Q_{\mathrm{ADC}}(z_t; \Delta, n_a, p_a)
+    \right),
+\end{equation}
+where \(\odot\) denotes element-wise multiplication.
 
-  \paragraph{Suggested research questions.}
-  \begin{enumerate}
-    \item How strongly does limited ADC precision degrade the quality of
-    LLaMA-family models compared with conventional quantization?
-    \item To what extent can a FlatQuant-style post-training approach
-    mitigate this degradation?
-    \item Does reconstruction-only PTQ remain sufficient under ADC
-    constraints, or are ADC-aware objectives required?
-    \item Which layers and projections are most sensitive to ADC
-    quantization?
-    \item Under what conditions does the problem require lightweight
-    model adaptation beyond PTQ?
-  \end{enumerate}
+The ADC step size is a hardware-defined quantity. For the signed bipolar ADC model used in the main experiments, it is given by
+\begin{equation}
+    \Delta
+    =
+    \frac{2 M q_x q_w}{2^{b_a} k},
+\end{equation}
+where \(b_a\) is the ADC bit-width, \(k\) is the ADC parallelism factor, and \(q_x\), \(q_w\) are the maximum activation and weight code levels determined by the activation and weight precisions \(b_x\) and \(b_w\). In the unsigned shift-subtract setting, the same role is played by the unipolar step size
+\begin{equation}
+    \Delta_u
+    =
+    \frac{M(2^{b_x}-1)(2^{b_w}-1)}{2^{b_a}k}.
+\end{equation}
+In both cases, the essential property is the same: the output lattice is fixed by hardware parameters and cannot be made finer by ordinary post-training calibration.
 
-  \subsection{Scope and Assumptions}
+This makes ADC-constrained inference fundamentally different from standard digital post-training quantization (PTQ). A PTQ method may successfully reduce the error in \(\hat{x}_t\) and \(\hat{W}_t\), while the accumulated output \(z_t\) may still be mapped to a coarse ADC lattice. If \(|z_t| < \Delta\), the output falls into the ADC dead zone and may be mapped to zero. If \(z_t\) exceeds the ADC range, the output is clipped. Therefore, the objective is not only to quantize weights and activations accurately, but also to shape the internal integer accumulation so that the ADC range is used effectively.
 
-  \paragraph{Purpose.}
-  Clarify what the thesis covers and what it does not cover.
+The software-side degrees of freedom considered in this thesis are transform-based PTQ parameters and, in the second stage, a lightweight residual adaptation branch. Following the FlatQuant idea, an invertible transform \(T_\ell\) can be inserted into a linear projection without changing the full-precision computation:
+\begin{equation}
+    x W_\ell^\top
+    =
+    (x T_\ell^{-1})(T_\ell W_\ell^\top).
+\end{equation}
+However, after quantization and ADC discretization, this equivalence no longer holds exactly. The practical calibration problem is therefore to choose transforms that minimize the mismatch between the full-precision block output and the ADC-constrained quantized block output:
+\begin{equation}
+    \min_{\phi}
+    \;
+    \mathbb{E}_{x \in \mathcal{C}}
+    \left[
+        \left\|
+            B_\ell(x)
+            -
+            \hat{B}^{\mathrm{ADC}}_\ell(x; \phi, \mathcal{H})
+        \right\|_2^2
+    \right],
+\end{equation}
+where \(B_\ell\) is the full-precision transformer block, \(\hat{B}^{\mathrm{ADC}}_\ell\) is its quantized ADC-constrained counterpart, \(\phi\) denotes the PTQ calibration parameters, \(\mathcal{C}\) is the calibration set, and
+\begin{equation}
+    \mathcal{H} = (b_x, b_w, b_a, M, k, \mathrm{ADC\ mode})
+\end{equation}
+is the fixed hardware configuration.
 
-  \paragraph{What to include.}
-  State which LLaMA-family models are evaluated, what hardware behavior
-  is modeled, which parts of the inference pipeline are abstracted, and
-  whether the study focuses on PTQ only or also includes limited
-  adaptation baselines. This subsection is also the right place to state
-  that the work relies on simulation rather than fabricated hardware.
+At the model level, the goal is to obtain an ADC-constrained model \(\hat{F}^{\mathrm{ADC}}\) whose quality remains close to the full-precision model \(F\) and to the corresponding digital quantized model with the ADC bypassed:
+\begin{equation}
+    \min_{\phi, \psi}
+    \;
+    \operatorname{PPL}
+    \left(
+        \hat{F}^{\mathrm{ADC}}_{\phi,\psi};
+        \mathcal{D}_{\mathrm{eval}}
+    \right),
+    \qquad
+    \text{subject to fixed } \mathcal{H}
+    \text{ and } |\psi| \ll |\theta|.
+\end{equation}
+Here \(\psi = 0\) corresponds to pure PTQ, while \(\psi\) denotes the optional lightweight residual correction parameters used in the adaptation stage. The central question is whether ADC-aware PTQ alone is sufficient, or whether the fixed ADC output lattice creates a residual error that must be corrected by a small trainable module.
 
-  \subsection{Evaluation Criteria}
+\subsection{Research Questions}
+\label{subsec:research_questions}
 
-  \paragraph{Purpose.}
-  Define how success will be measured.
+This thesis is guided by the following research questions.
 
-  \paragraph{What to include.}
-  Include both model-level and ADC-level metrics. Model-level metrics may
-  include perplexity or task accuracy. Internal metrics may include
-  layerwise reconstruction error, clipping rate, dead-zone rate, bin
-  utilization, or sensitivity by projection type.
+\begin{description}
+    \item[RQ1.]
+    \textbf{How much quality degradation is caused specifically by ADC output quantization in LLaMA-family models?}
+
+    This question separates ordinary digital quantization error from the additional degradation introduced by the ADC. The comparison is made between full-precision inference, quantized inference with the ADC bypassed, and quantized inference with the full ADC path enabled. The goal is to determine whether the ADC is a minor implementation detail or a dominant source of error under low-bit IMC inference.
+
+    \item[RQ2.]
+    \textbf{To what extent can FlatQuant-style post-training transformations mitigate ADC-induced degradation?}
+
+    This question studies whether learned equivalent transformations can reshape activation and weight distributions so that the integer accumulation uses the ADC range more effectively. In particular, the thesis evaluates block-wise calibration, propagated quantized inputs, mixed full-precision/ADC objectives, trainable diagonal scaling, and staged training.
+
+    \item[RQ3.]
+    \textbf{Is reconstruction-only PTQ sufficient under ADC constraints, or are explicitly ADC-aware objectives required?}
+
+    Standard PTQ methods usually minimize reconstruction error under digital quantization assumptions. This thesis investigates whether such objectives remain predictive once the ADC is inserted into the inference path. The question is answered by comparing clean-input reconstruction, ADC-propagated reconstruction, and objectives that explicitly expose the calibration process to ADC noise.
+
+    \item[RQ4.]
+    \textbf{Which layers and projection types are most sensitive to ADC quantization?}
+
+    LLaMA decoder blocks contain several linear projections: \(q\), \(k\), \(v\), \(o\), \(\mathrm{gate}\), \(\mathrm{up}\), and \(\mathrm{down}\). These projections do not contribute equally to end-to-end degradation. This question identifies whether ADC sensitivity is concentrated in particular projections, such as output-side attention and MLP projections, or distributed uniformly across the architecture.
+
+    \item[RQ5.]
+    \textbf{Under what conditions does ADC-constrained inference require lightweight model adaptation beyond PTQ?}
+
+    If transform-based PTQ reaches a quality plateau, the remaining error may be caused by the finite ADC output resolution rather than by poorly calibrated weights or activations. This question evaluates whether a small post-ADC residual correction branch can close the remaining quality gap while keeping the quantized ADC backbone frozen.
+\end{description}
+
+Together, these questions connect three levels of analysis: the hardware-level ADC discretization, the layer-level behavior of quantized transformer projections, and the model-level language modeling quality.
+
+\subsection{Scope and Assumptions}
+\label{subsec:scope_assumptions}
+
+The thesis focuses on decoder-only LLaMA-family transformer models, with Llama-3.2-1B used as the main experimental target. This model is large enough to exhibit the activation outlier and residual-stream sensitivity typical of modern LLMs, while still being small enough to support extensive ablation studies over quantization precision, ADC settings, calibration strategies, and residual adaptation variants.
+
+The hardware behavior is studied through simulation rather than through measurements on a fabricated IMC chip. The simulator models tiled integer matrix--vector multiplication, per-token activation quantization, per-channel weight quantization, ADC floor quantization, ADC clipping, and dequantization. Two ADC settings are considered: a signed bipolar ADC and an unsigned unipolar shift-subtract ADC. The hardware parameters \(M\), \(b_x\), \(b_w\), \(b_a\), and \(k\) are treated as fixed during each experiment unless an explicit per-layer \(k\)-search experiment is performed.
+
+Several hardware effects are outside the scope of this work. The simulator does not model device-to-device variation, thermal noise, conductance drift, IR drop, nonlinear crossbar behavior, write noise, peripheral circuit latency, or full chip-level energy consumption. The purpose of the study is therefore not to claim final hardware efficiency for a specific IMC implementation, but to isolate the algorithmic consequences of ADC output discretization.
+
+The quantization study is restricted to the main linear projections inside the transformer decoder blocks. Other components, such as layer normalization, nonlinearities, softmax, rotary embeddings, and token embeddings, are not the primary target of the ADC simulation. This restriction reflects the fact that large linear projections dominate transformer inference cost and are the most natural mapping target for IMC arrays.
+
+The main methodological focus is post-training quantization. The thesis does not retrain the full model and does not modify the original pretraining objective. When adaptation is considered, it is limited to a small residual low-rank branch trained on top of a frozen quantized ADC path. This allows the thesis to distinguish between what can be achieved by calibration alone and what requires additional trainable parameters.
+
+The calibration data is finite and substantially smaller than the original pretraining data. Therefore, the reported results should be interpreted as evidence about practical calibration and adaptation under limited data, not as an upper bound on what could be achieved with large-scale quantization-aware training.
+
+\subsection{Evaluation Criteria}
+\label{subsec:evaluation_criteria}
+
+The primary model-level metric is perplexity. For each configuration, the thesis compares
+\begin{equation}
+    \operatorname{PPL}_{\mathrm{FP}},
+    \qquad
+    \operatorname{PPL}_{\mathrm{bypass}},
+    \qquad
+    \operatorname{PPL}_{\mathrm{ADC}},
+\end{equation}
+where \(\operatorname{PPL}_{\mathrm{FP}}\) is the full-precision baseline, \(\operatorname{PPL}_{\mathrm{bypass}}\) measures quantized inference with the ADC disabled, and \(\operatorname{PPL}_{\mathrm{ADC}}\) measures the full ADC-constrained inference path. The difference between bypass and ADC perplexity isolates the degradation introduced by output quantization:
+\begin{equation}
+    \Delta_{\mathrm{ADC}}
+    =
+    \operatorname{PPL}_{\mathrm{ADC}}
+    -
+    \operatorname{PPL}_{\mathrm{bypass}},
+\end{equation}
+while the ratio
+\begin{equation}
+    \rho_{\mathrm{ADC}}
+    =
+    \frac{
+        \operatorname{PPL}_{\mathrm{ADC}}
+    }{
+        \operatorname{PPL}_{\mathrm{bypass}}
+    }
+\end{equation}
+measures the relative severity of the ADC bottleneck. A successful ADC-aware method should reduce both \(\operatorname{PPL}_{\mathrm{ADC}}\) and the bypass--ADC gap without severely degrading bypass quality.
+
+In addition to perplexity, the thesis uses internal ADC-level metrics to diagnose why a configuration succeeds or fails. The dead-zone rate is defined as
+\begin{equation}
+    r_{\mathrm{dead}}
+    =
+    \frac{1}{N}
+    \sum_{i=1}^{N}
+    \mathbf{1}
+    \left[
+        |z_i| < \Delta
+    \right],
+\end{equation}
+where \(z_i\) denotes a pre-ADC accumulated value. A high dead-zone rate indicates that many analog outputs are too small to be represented by the ADC lattice. The clipping rate is defined as
+\begin{equation}
+    r_{\mathrm{clip}}
+    =
+    \frac{1}{N}
+    \sum_{i=1}^{N}
+    \mathbf{1}
+    \left[
+        c_i = n_a
+        \;\;\mathrm{or}\;\;
+        c_i = p_a
+    \right],
+\end{equation}
+where \(c_i\) is the ADC code after discretization and clipping. This metric detects whether the integer accumulation systematically exceeds the representable ADC range.
+
+The thesis also evaluates ADC bin utilization:
+\begin{equation}
+    u_{\mathrm{bin}}
+    =
+    \frac{
+        \left|
+            \{c_i : i = 1,\ldots,N\}
+        \right|
+    }{
+        2^{b_a}
+    },
+\end{equation}
+which measures how much of the available ADC codebook is actually used. Low bin utilization indicates that the ADC behaves like a much lower-precision device than its nominal bit-width suggests.
+
+Layer-level reconstruction quality is measured by the relative error
+\begin{equation}
+    e_\ell
+    =
+    \frac{
+        \left\|
+            \hat{y}_\ell
+            -
+            y^\star_\ell
+        \right\|_2^2
+    }{
+        \left\|
+            y^\star_\ell
+        \right\|_2^2
+    },
+\end{equation}
+where \(y^\star_\ell\) is the full-precision reference output and \(\hat{y}_\ell\) is the quantized ADC output. This metric is used to identify local failures even when the final perplexity alone does not reveal their source.
+
+Finally, architectural sensitivity is evaluated by comparing the behavior of different projection types and layer groups. A projection is considered ADC-sensitive if improving, bypassing, or correcting it produces a disproportionate reduction in end-to-end perplexity or reconstruction error. This criterion is especially important for distinguishing projections that primarily affect local reconstruction from projections whose errors are injected directly into the residual stream.
+
+For residual adaptation experiments, success is evaluated not only by perplexity reduction but also by parameter efficiency and placement. A useful adaptation method should keep the ADC backbone frozen, add only a small fraction of new parameters, train stably, generalize beyond the calibration distribution, and outperform pre-ADC correction baselines. These criteria ensure that the adaptation stage remains a lightweight correction to the ADC path rather than a full quantization-aware retraining procedure.
+
 
   \section{Proposed Method}\label{sec:method}
 

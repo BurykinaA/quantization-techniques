@@ -1,0 +1,70 @@
+% ─── Slide 12: Post-ADC LoRA ─────────────────────────────────────────────────
+\begin{frame}[shrink=10]{Method II: Post-ADC Residual LoRA}
+
+  \[
+    y \;=\; \underbrace{\mathrm{ADC}_{\mathrm{frozen}}\!\left(\hat x\right)}_{\text{quantised path}} \;+\; \underbrace{\tfrac{\alpha_{\scriptscriptstyle\mathrm{LoRA}}}{r}\, B\bigl(A\bigl(x_{\mathrm{fp}}\bigr)\bigr)}_{\text{residual correction, rank }r}
+  \]
+
+  \vspace{2.0em}
+  \begin{columns}[T]
+    % ── LoRA-paper-style diagram ─────────────────────────────────
+    \begin{column}{0.5\textwidth}
+      \begin{center}
+      \resizebox{0.98\linewidth}{!}{%
+      \begin{tikzpicture}[
+          every node/.style={font=\footnotesize},
+          box/.style={draw, rounded corners=2pt, minimum width=1.6cm, minimum height=0.6cm, align=center},
+          frozen/.style={fill=mygray!15, draw=mygray!60},
+          traina/.style={fill=myorange!25, draw=myorange!80, thick},
+          sum/.style={draw, circle, minimum size=0.55cm, inner sep=0pt},
+          lab/.style={font=\tiny, text=mygray}
+        ]
+
+        \node (x) at (0, 3.5) {$x_{\mathrm{fp}}$};
+
+        % Left branch: frozen ADC path
+        \node[box, frozen] (qx) at (-1.7, 2.5) {quantise $\hat x$};
+        \node[box, frozen] (w)  at (-1.7, 1.5) {$\hat W$ \small(frozen)};
+        \node[box, frozen] (adc) at (-1.7, 0.5) {ADC (frozen)};
+
+        \draw[-{Latex}] (x) -| (qx);
+        \draw[-{Latex}] (qx) -- (w);
+        \draw[-{Latex}] (w) -- (adc);
+
+        % Right branch: LoRA
+        \node[box, traina] (a) at (1.7, 2.0) {$A\in\mathbb R^{r\times d}$\\ \scriptsize trainable};
+        \node[box, traina] (b) at (1.7, 0.9) {$B\in\mathbb R^{d\times r}$\\ \scriptsize trainable};
+        \draw[-{Latex}] (x) -| (a);
+        \draw[-{Latex}] (a) -- (b);
+
+        % Sum
+        \node[sum] (plus) at (0, -0.3) {$+$};
+        \draw[-{Latex}] (adc.south) |- (plus);
+        \draw[-{Latex}] (b.south) |- (plus);
+
+        \node[below=0.15cm of plus] (y) {$y$};
+        \draw[-{Latex}] (plus) -- (y);
+
+        \node[lab, left=0.05cm of adc.west] {analog path};
+        \node[lab, right=0.05cm of b.east] {digital rank-$r$};
+      \end{tikzpicture}}
+      \end{center}
+    \end{column}
+
+    % ── right column: loss and trainable params ─────────────────
+    \begin{column}{0.48\textwidth}
+      \vspace*{1.4cm}
+      \footnotesize
+      \textbf{Loss: distill from FP teacher.}
+      \[
+        \mathcal L_{\mathrm{LoRA}} \;=\; \mathrm{CE}(\hat p, y) \;+\; \lambda\,\mathrm{KL}\!\left(\hat p\,\Vert\, p_{\mathrm{FP}}\right)
+      \]
+
+      \vspace{0.4em}
+      \textbf{What is trained:}
+      \begin{itemize}\scriptsize
+        \item Only $A, B$ for each of 7 projections ($q,k,v,o,\text{gate},\text{up},\text{down}$).
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}

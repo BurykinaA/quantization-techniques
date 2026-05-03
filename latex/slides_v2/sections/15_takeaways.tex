@@ -1,0 +1,38 @@
+% ─── Slide 15: Takeaways ──────────────────────────────────────────────────────
+\begin{frame}[shrink=25]{Takeaways}
+
+  \begin{columns}[T]
+    \begin{column}{0.6\textwidth}
+      \footnotesize
+      \begin{enumerate}
+        \setlength\itemsep{0.4em}
+        \item \textbf{ADC $\ne$ conventional quantisation.} Fixed $\delta$, fixed clip, no per-layer knobs. Algorithmic fixes must act on $x,w$ statistics.
+        \item \textbf{LLM outliers make a single $k$ infeasible.} Diagonals + rotations solve this at the projection level.
+        \item \textbf{Block-wise + $\alpha$-mix is the biggest PTQ lever.} Same knob halves INT8 ADC PPL and enables INT4 recovery.
+        \item \textbf{Staged training.} MLP-first warm-up makes INT4 PTQ trainable at all.
+        \item \textbf{Post-ADC LoRA breaks the PTQ plateau.} 0.22\% extra params $\to$ INT4 matches INT8.
+      \end{enumerate}
+    \end{column}
+
+    \begin{column}{0.38\textwidth}
+      \footnotesize
+      \begin{center}
+      \begin{tikzpicture}[every node/.style={font=\scriptsize},
+                         box/.style={draw, rounded corners=2pt, minimum width=2.2cm, minimum height=0.6cm, align=center}]
+        \node[box, fill=myred!20] (a) {INT4 PTQ naive\\ {\scriptsize $\adcppl{}{=}2355$}};
+        \node[box, fill=myyellow!40, below=0.2cm of a] (b) {+ diag, staged\\ {\scriptsize $27.60$}};
+        \node[box, fill=mygreen!30, below=0.2cm of b] (c) {\textbf{+ Post-ADC LoRA}\\ {\scriptsize $\best{13.96}$}};
+        \node[box, fill=mygray!25, below=0.2cm of c] (d) {FP ref.\ $10.53$};
+        \draw[-{Latex}, thick] (a) -- (b);
+        \draw[-{Latex}, thick] (b) -- (c);
+        \draw[-{Latex}, thick, dashed] (c) -- (d);
+      \end{tikzpicture}
+      \end{center}
+
+      \vspace{0.3em}
+      \begin{alertblock}{Punchline}
+        \small\emph{The right place to correct ADC error is \textbf{after} the ADC, not before it.}
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+\end{frame}

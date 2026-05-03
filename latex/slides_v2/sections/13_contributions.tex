@@ -1,0 +1,75 @@
+% ─── Slide: Contributions ─────────────────────────────────────────────────────
+\begin{frame}[shrink=20]{Takeaways}
+  \begin{columns}[T]
+    \begin{column}{0.54\textwidth}
+      \begin{enumerate}
+        \setlength\itemsep{0.25em}
+        \item \textbf{Dead zone was a training problem, not hardware.}\\
+              Better FlatQuant calibration: 81\% $\to$ 10.3\% dead rate.
+
+        \item \textbf{Propagated calibration fixes INT8.}\\
+              ADC PPL: 28.86 $\to$ 14.41 ($-47\%$), near FP baseline.
+
+        \item \textbf{Staged PTQ closes the INT4 gap to $\times$1.4.}\\
+              $\alpha$-mixed loss + MLP-first diagonal training.
+
+        \item \textbf{MLP drives bypass; attn drives ADC robustness.}\\
+              Staged training combines both — insight, not just tuning.
+
+        \item \textbf{Post-ADC LoRA breaks the PTQ plateau.}\\
+              INT4 ADC 13.96 $<$ INT8 PTQ 14.41.
+              Generalises to C4 ($-50\%$ vs PTQ baseline).
+      \end{enumerate}
+
+      \vspace{0.3em}
+      \begin{center}
+        \small\textit{The right place to correct ADC error is
+        \textbf{after} ADC, not before it.}
+      \end{center}
+    \end{column}
+    \begin{column}{0.42\textwidth}
+      \begin{tikzpicture}[
+          every node/.style={font=\scriptsize},
+          state/.style={draw, rounded corners=4pt, minimum width=2.6cm,
+                        minimum height=0.58cm, align=center},
+          arr/.style={-{Latex[length=2mm]}, thick},
+          lbl/.style={font=\tiny, text=mybluedark, align=center}
+        ]
+
+        \def\ys{0.85}  % vertical step
+
+        % nodes (top to bottom)
+        \node[state, fill=myred!25]     (n1) at (0, 5*\ys)
+          {Dead zone \textbf{81\%}};
+        \node[state, fill=myorange!25]  (n2) at (0, 4*\ys)
+          {Dead zone \textbf{10.3\%}};
+        \node[state, fill=myyellow!60]  (n3) at (0, 3*\ys)
+          {INT8 PTQ \textbf{14.41}};
+        \node[state, fill=myblue!20]    (n4) at (0, 2*\ys)
+          {INT4 PTQ \textbf{27.56}};
+        \node[state, fill=myblue!35]    (n5) at (0, 1*\ys)
+          {INT4 PTQ \textbf{27.60}};
+        \node[state, fill=mygreen!30]   (n6) at (0, 0)
+          {INT4+LoRA \textbf{13.96}};
+
+        % arrows + labels
+        \draw[arr] (n1) -- (n2)
+          node[midway, right=2pt, lbl] {better FlatQuant\\training};
+        \draw[arr] (n2) -- (n3)
+          node[midway, right=2pt, lbl] {propagated\\calibration};
+        \draw[arr] (n3) -- (n4)
+          node[midway, right=2pt, lbl] {$\alpha$-mixed loss\\+ diag scaling};
+        \draw[arr] (n4) -- (n5)
+          node[midway, right=2pt, lbl] {staged MLP\\$\to$ attn};
+        \draw[arr] (n5) -- (n6)
+          node[midway, right=2pt, lbl] {post-ADC\\LoRA (CE+KL)};
+
+        % C4 side note
+        \node[draw=mygreen!70, fill=mygreen!10, rounded corners=3pt,
+              font=\tiny, align=center, left=0.2cm of n6]
+          {C4: \textbf{23.30}};
+
+      \end{tikzpicture}
+    \end{column}
+  \end{columns}
+\end{frame}

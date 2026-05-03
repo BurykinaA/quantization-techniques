@@ -1,0 +1,50 @@
+% ─── Slide: LoRA overhead ─────────────────────────────────────────────────────
+\begin{frame}[shrink=20]{Post-ADC LoRA: Parameter and Compute Overhead}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      \textbf{Trainable parameter count} (r=4, all 7 projections):
+      \begin{center}
+      \renewcommand{\arraystretch}{1.2}
+      \resizebox{\linewidth}{!}{%
+      \begin{tabular}{lrr}
+        \toprule
+        Projection & $A$ & $B$ \\
+        \midrule
+        q\_proj  & $4{\times}2048$ & $2048{\times}4$ \\
+        k\_proj  & $4{\times}2048$ & $256{\times}4$  \\
+        v\_proj  & $4{\times}2048$ & $256{\times}4$  \\
+        o\_proj  & $4{\times}2048$ & $2048{\times}4$ \\
+        gate\_proj & $4{\times}2048$ & $8192{\times}4$ \\
+        up\_proj  & $4{\times}2048$ & $8192{\times}4$ \\
+        down\_proj & $4{\times}8192$ & $2048{\times}4$ \\
+        \midrule
+        \multicolumn{2}{l}{Per layer} & 174\,K \\
+        \multicolumn{2}{l}{$\times$16 layers} & \textbf{2.8M} \\
+        \multicolumn{2}{l}{Base model (1.24B)} & \textbf{0.22\%} \\
+        \bottomrule
+      \end{tabular}}%
+      \end{center}
+    \end{column}
+    \begin{column}{0.46\textwidth}
+      \textbf{Inference overhead} (per forward pass):
+      \begin{itemize}
+        \item Extra FLOPs per projection:
+              $d_\mathrm{in}{\cdot}r + r{\cdot}d_\mathrm{out} \ll d_\mathrm{in}{\cdot}d_\mathrm{out}$
+        \item Example: \texttt{q\_proj}: $8192{+}8192$ vs.\ $4M$
+              \textbf{($<\!0.5\%$ overhead)}
+        \item Memory: 2.8M fp32 params $\approx$ \textbf{11 MB}
+              vs.\ $\sim$2 GB base model
+        \item LoRA correction runs on \emph{digital} hardware
+              — does not increase analog area
+      \end{itemize}
+
+      \vspace{0.15em}
+      \vspace{0.15em}
+      \begin{exampleblock}{Bottom line}
+        \small 0.22\% extra params, $<0.5\%$ extra FLOPs,
+        correction entirely in digital post-processing.
+        The trade-off is \textbf{strongly favourable}.
+      \end{exampleblock}
+    \end{column}
+  \end{columns}
+\end{frame}

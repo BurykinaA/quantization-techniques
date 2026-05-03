@@ -1,0 +1,25 @@
+% ─── Slide 5: Research Questions ─────────────────────────────────────────────
+\begin{frame}{Research Questions}
+
+  \vfill
+  \begin{description}
+    \setlength\itemsep{1.0em}
+    \item[\color{mybluedark}\textbf{Q1}]
+      \textbf{How severe is the ADC bottleneck on LLM inference?}\\
+      \textit{\small $\to$ quantify the gap: FP vs bypass vs ADC}
+
+    \item[\color{mybluedark}\textbf{Q2}]
+      \textbf{Can ADC-aware PTQ alone recover FP quality?}\\
+      \textit{\small $\to$ block-wise prop., $\alpha$-mix, diag, staged training}
+
+    \item[\color{mybluedark}\textbf{Q3}]
+      \textbf{When PTQ plateaus, what is the minimum intervention beyond it?}\\
+      \textit{\small $\to$ Post-ADC residual LoRA}
+
+    \item[\color{mybluedark}\textbf{Q4}]
+      \textbf{Does the correction generalise out-of-domain?}\\
+      \textit{\small $\to$ train LoRA on WikiText-2, evaluate on C4}
+  \end{description}
+  \vfill
+
+\end{frame}
