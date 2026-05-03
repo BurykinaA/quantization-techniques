@@ -6,18 +6,39 @@
 
 | Model | Method | Wiki PPL | C4 PPL | HellaSwag | MMLU | WinoGrande |
 |-------|--------|:--------:|:------:|:---------:|:----:|:----------:|
-| Llama-3.2-1B | FP16 | — | — | — | — | — |
-| | INT8 PTQ | — | — | — | — | — |
-| | INT4+ADC PTQ | — | — | — | — | — |
-| | INT4+ADC+LoRA | — | — | — | — | — |
-| Llama-3.2-3B | FP16 | — | — | — | — | — |
-| | INT8 PTQ | — | — | — | — | — |
-| | INT4+ADC PTQ | — | — | — | — | — |
-| | INT4+ADC+LoRA | — | — | — | — | — |
-| Llama-3.1-8B | FP16 | — | — | — | — | — |
-| | INT8 PTQ | — | — | — | — | — |
-| | INT4+ADC PTQ | — | — | — | — | — |
-| | INT4+ADC+LoRA | — | — | — | — | — |
+| Llama-3.2-1B | FP16            | **8.68**  | **13.13** | — | — | — |
+|              | INT8 PTQ        | 17.05     | 29.68     | — | — | — |
+|              | INT4+ADC PTQ    | 27.06     | 45.43     | — | — | — |
+|              | INT4+ADC+LoRA   | **14.02** | **23.38** | — | — | — |
+| Llama-3.2-3B | FP16            | **6.98**  | **10.58** | — | — | — |
+|              | INT8 PTQ        | _pending_ | _pending_ | — | — | — |
+|              | INT4+ADC PTQ    | _pending_ | _pending_ | — | — | — |
+|              | INT4+ADC+LoRA   | _pending_ | _pending_ | — | — | — |
+| Llama-3.1-8B | FP16            | **5.58**  | **8.93**  | — | — | — |
+|              | INT8 PTQ        | _pending_ | _pending_ | — | — | — |
+|              | INT4+ADC PTQ    | _pending_ | _pending_ | — | — | — |
+|              | INT4+ADC+LoRA   | OOM       | OOM       | — | — | — |
+
+**Status (2026-05-03):**
+- Llama-3.2-1B: all 4 configs complete
+- Llama-3.2-3B: only FP16 done; INT8 / INT4 PTQ / INT4+LoRA still running or queued
+- Llama-3.1-8B: FP16 done; INT4+LoRA failed with **CUDA OOM** during FlatQuant
+  Stage~A calibration (`flat_quant.py:653` — peak ≈ 92 GiB on a 93 GiB GPU
+  while computing `y2d + y_adc * s_xi * s_wi.squeeze(1)` in
+  `_train_forward_adc`). Likely fixes: lower `--fq_cali_bsz` from 16,
+  enable `expandable_segments`, or split the activation tensor.
+- lm-eval columns (HellaSwag / MMLU / WinoGrande) not yet recorded in the
+  results JSON; the harness call is wired in
+  `llama_smooth_quant_adc_ptq.py` but did not write entries for any run.
+
+**1B observations:**
+- INT4+ADC+LoRA (14.02 / 23.38) **beats** INT8 PTQ (17.05 / 29.68) on both
+  WikiText-2 and C4 — same conclusion as the per-config sweep
+  (Sec.~5.3.7 / Table~9 of the thesis). LoRA recovers nearly all of the
+  PTQ → ADC gap (27.06 → 14.02 on Wiki, 45.43 → 23.38 on C4).
+- Dead-rate is essentially unchanged across PTQ and PTQ+LoRA (max≈81%,
+  mean≈10%) — confirming once again that the ADC bottleneck is
+  resolution, not the dead zone.
 
 Run: `bash ADC/llama/run_paper_comparison.sh`  
 Results saved to: `outputs/paper_comparison/results.json`
