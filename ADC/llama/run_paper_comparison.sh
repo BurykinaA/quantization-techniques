@@ -91,6 +91,7 @@ COMMON_EVAL=(
     --eval_datasets wikitext2 c4
     --run_no_adc_eval                # also measure bypass (INT-only, no ADC) PPL
     --run_lm_eval
+    --run_lm_eval_bypass             # second lm-eval pass in bypass mode for INT-vs-ADC comparison
     --disable_visualizations
 )
 

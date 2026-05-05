@@ -9,68 +9,75 @@
 
 | Model | Method | Wiki PPL | C4 PPL | HellaSwag | MMLU | WinoGrande |
 |-------|--------|:--------:|:------:|:---------:|:----:|:----------:|
-| Llama-3.2-1B | FP16             | **8.68**   | **13.13**  | — | — | — |
-|              | INT8 PTQ         | _pending_  | _pending_  | — | — | — |
-|              | INT8+ADC PTQ     | 17.05      | 29.68      | — | — | — |
-|              | INT4 PTQ         | _pending_  | _pending_  | — | — | — |
-|              | INT4+ADC PTQ     | 27.06      | 45.43      | — | — | — |
-|              | INT4+ADC+LoRA    | **14.02**  | **23.38**  | — | — | — |
-| Llama-3.2-3B | FP16             | **6.98**   | **10.58**  | — | — | — |
-|              | INT8 PTQ         | _pending_  | _pending_  | — | — | — |
-|              | INT8+ADC PTQ     | _pending_  | _pending_  | — | — | — |
-|              | INT4 PTQ         | _pending_  | _pending_  | — | — | — |
-|              | INT4+ADC PTQ     | _pending_  | _pending_  | — | — | — |
-|              | INT4+ADC+LoRA    | _pending_  | _pending_  | — | — | — |
-| Llama-3.1-8B | FP16             | **5.58**   | **8.93**   | — | — | — |
-|              | INT8 PTQ         | _pending_  | _pending_  | — | — | — |
-|              | INT8+ADC PTQ     | _pending_  | _pending_  | — | — | — |
-|              | INT4 PTQ         | _pending_  | _pending_  | — | — | — |
-|              | INT4+ADC PTQ     | _pending_  | _pending_  | — | — | — |
-|              | INT4+ADC+LoRA    | _pending_  | _pending_  | — | — | — |
+| Llama-3.2-1B | FP16             | **8.68**     | **13.13**    | **64.19** | **32.15** | **63.06** |
+|              | INT8 PTQ         | 18.96        | 27.27        | —         | —         | —         |
+|              | INT8+ADC PTQ     | 17.18        | 30.05        | 44.87     | 27.03     | 55.80     |
+|              | INT4 PTQ         | 18.06        | 29.05        | —         | —         | —         |
+|              | INT4+ADC PTQ     | 28.25        | 47.61        | 40.37     | 24.43     | 52.25     |
+|              | INT4+ADC+LoRA    | **14.03**    | **23.20**    | **49.96** | **25.72** | 53.67     |
+| Llama-3.2-3B | FP16             | **6.98**     | **10.58**    | **74.15** | **56.67** | **72.22** |
+|              | INT8 PTQ         | 10.37        | 17.01        | —         | —         | —         |
+|              | INT8+ADC PTQ     | ⚠ 157810     | ⚠ 136625     | 26.77     | 26.63     | 48.38     |
+|              | INT4 PTQ         | _pending_    | _pending_    | —         | —         | —         |
+|              | INT4+ADC PTQ     | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
+|              | INT4+ADC+LoRA    | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
+| Llama-3.1-8B | FP16             | **5.58**     | **8.93**     | _pending_ | _pending_ | _pending_ |
+|              | INT8 PTQ         | _pending_    | _pending_    | —         | —         | —         |
+|              | INT8+ADC PTQ     | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
+|              | INT4 PTQ         | _pending_    | _pending_    | —         | —         | —         |
+|              | INT4+ADC PTQ     | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
+|              | INT4+ADC+LoRA    | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
 
-**Status (2026-05-03):**
-- Llama-3.2-1B: ADC numbers complete; bypass numbers pending re-eval (the
-  initial run did not pass `--run_no_adc_eval`, so `ppl_bypass` is `null`
-  in the JSON).
-- Llama-3.2-3B: only FP16 done; all quantized configs OOM'd in
-  FlatQuant **Stage B** (4h27m of Stage A wasted before crash on the
-  first Stage B batch in `floor_ste`).
-- Llama-3.1-8B: only FP16 done; INT4+LoRA crashed in **Stage A** with
-  92.91 GiB / 93 GiB used (`flat_quant.py:653`). Other quantized configs
-  did not record results either.
-- lm-eval columns (HellaSwag / MMLU / WinoGrande) not yet recorded in the
-  JSON — the harness call is wired in `llama_smooth_quant_adc_ptq.py`
-  but failed silently for every run (most likely `lm-eval` not installed
-  on the compute node).
+**Status (2026-05-05, partial):**
+- **Llama-3.2-1B — complete** (all 5 methods, both bypass and ADC PPL,
+  full lm-eval triple).
+- **Llama-3.2-3B — partial.** FP16 done; INT8 PTQ bypass excellent (10.37
+  Wiki, 17.01 C4 — close to FP); **INT8+ADC PTQ catastrophic
+  (157810 / 136625 PPL on Wiki / C4)**. INT4 / LoRA still running.
+- **Llama-3.1-8B — only FP16 (PPL only).** Quantized configs not yet run.
+  The 8B FP entry in the JSON is from before `lm-eval` was installed on
+  the remote, so its accuracy columns are also pending re-eval.
 
-**Re-run plan (with the fixes from this branch):**
-1. `pip install "lm-eval>=0.4.0"` on the remote.
-2. The script now sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
-   and uses per-model `fq_cali_bsz` (1B: 16, 3B: 4, 8B: 2) — should clear
-   the Stage A / Stage B OOMs.
-3. `--run_no_adc_eval` is now in `COMMON_EVAL`, so each run records both
-   bypass and ADC PPL plus all three lm-eval accuracies in one go.
-4. Re-run only the missing rows:
-   ```bash
-   SKIP_COMPLETED=1 bash ADC/llama/run_paper_comparison.sh
-   ```
-   or, more conservatively, force a clean rerun of every quantized config
-   (also gives bypass PPL for 1B, which the first run did not record):
-   ```bash
-   ONLY="llama-3_2-1b_int8_ptq,llama-3_2-1b_int4_ptq,llama-3_2-1b_int4_lora,\
-   llama-3_2-3b_int8_ptq,llama-3_2-3b_int4_ptq,llama-3_2-3b_int4_lora,\
-   llama-3_1-8b_int8_ptq,llama-3_1-8b_int4_ptq,llama-3_1-8b_int4_lora" \
-     bash ADC/llama/run_paper_comparison.sh
-   ```
+**1B observations (now with bypass + accuracy):**
+- **INT4+ADC+LoRA wins on every metric except WinoGrande** vs INT8+ADC
+  PTQ: Wiki 14.03 vs 17.18, C4 23.20 vs 30.05, HellaSwag 49.96 vs 44.87,
+  MMLU 25.72 vs 27.03 (close), WinoGrande 53.67 vs 55.80. LoRA recovers
+  the PTQ → ADC gap (28.25 → 14.03 Wiki, 47.61 → 23.20 C4) and improves
+  HellaSwag by +9.6 points over INT4+ADC PTQ.
+- **Bypass / ADC gap is small for INT8** (18.96 → 17.18 Wiki, ADC actually
+  *better* by 1.8 PPL — within reproduction noise) and **large for INT4**
+  (18.06 → 28.25 Wiki, ADC ×1.56 worse). LoRA partially closes the INT4
+  gap (18.61 / 14.03) — the LoRA "fixes" ADC distortion, not the INT
+  rounding error itself.
+- MMLU and WinoGrande for INT4+LoRA are essentially at INT4 PTQ level
+  (within noise). PPL recovery is much stronger than zero-/few-shot
+  accuracy recovery — likely because the calibration set is text-only.
 
-**1B observations (so far, ADC-only — bypass numbers pending):**
-- INT4+ADC+LoRA (14.02 / 23.38) **beats** INT8+ADC PTQ (17.05 / 29.68)
-  on both WikiText-2 and C4 — same conclusion as the per-config sweep
-  (Sec.~5.3.7 / Table~9 of the thesis). LoRA recovers nearly all of the
-  PTQ → ADC gap (27.06 → 14.02 on Wiki, 45.43 → 23.38 on C4).
-- Dead-rate is essentially unchanged across PTQ and PTQ+LoRA (max≈81%,
-  mean≈10%) — confirming once again that the ADC bottleneck is
-  resolution, not the dead zone.
+**3B INT8+ADC catastrophe — needs investigation.**
+Bypass is healthy (10.37 / 17.01) but ADC produces ~10⁵ PPL.
+`dead_rate_mean = 0.17`, `reconstruction_rel = 0.0156` — both look
+*better* than 1B INT8+ADC. Most likely cause: with the smaller
+`fq_cali_bsz=4` (set down from 16 to fit 3B in memory), the Kronecker
+factors and diagonals underfit, and the resulting transforms shape the
+pre-ADC signal in a way that explodes through deeper layers.
+Worth trying: bump bsz back to 8 with `expandable_segments`, or train
+Stage B for more epochs.
+
+**Re-run plan (remaining work):**
+1. Investigate / re-run **3B INT8+ADC** (catastrophic).
+2. Re-run **1B INT4+ADC PTQ** — Wiki 28.25 is noticeably worse than the
+   thesis result (~27.5). Could be the smaller per-token amax behaviour
+   in the new pipeline; worth a sanity rerun on a different seed.
+3. Run remaining 3B configs (INT4 PTQ / INT4+ADC PTQ / INT4+LoRA).
+4. Run all 8B quantized configs. Re-run 8B FP to capture lm-eval.
+
+```bash
+SKIP_COMPLETED=1 bash ADC/llama/run_paper_comparison.sh
+# or specific configs:
+ONLY="llama-3_2-3b_int8_ptq,llama-3_2-3b_int4_ptq,llama-3_2-3b_int4_lora,\
+llama-3_1-8b_fp,llama-3_1-8b_int8_ptq,llama-3_1-8b_int4_ptq,llama-3_1-8b_int4_lora" \
+  bash ADC/llama/run_paper_comparison.sh
+```
 
 Run: `bash ADC/llama/run_paper_comparison.sh`  
 Results saved to: `outputs/paper_comparison/results.json`

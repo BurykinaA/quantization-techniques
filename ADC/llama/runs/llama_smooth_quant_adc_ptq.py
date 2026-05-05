@@ -2061,6 +2061,10 @@ def main():
     # lm-evaluation-harness integration
     parser.add_argument("--run_lm_eval", action="store_true",
                         help="Run lm-evaluation-harness after PPL evaluation")
+    parser.add_argument("--run_lm_eval_bypass", action="store_true",
+                        help="Also run lm-eval once more in bypass mode (ADC disabled). "
+                             "Requires --run_lm_eval and --run_no_adc_eval. "
+                             "Doubles lm-eval time; saves keys with bypass_lm_<task> prefix.")
     parser.add_argument("--lm_eval_tasks", type=str, nargs="+",
                         default=["hellaswag", "winogrande", "mmlu"],
                         help="Tasks to evaluate with lm-eval")
@@ -3043,10 +3047,31 @@ def main():
         wandb.run.summary["eval_max_length"] = args.max_length
         wandb.run.summary["eval_stride"] = args.stride or args.max_length // 2
 
-    # lm-evaluation-harness (optional, never interrupts the run)
+    # lm-evaluation-harness (optional, never interrupts the run).
+    # If --run_lm_eval_bypass is set together with --run_no_adc_eval, also run
+    # the same tasks once more in bypass mode (ADC disabled) and save the
+    # accuracies under bypass_lm_<task> keys.
     _lm_eval_results = {}
     if getattr(args, "run_lm_eval", False):
         _lm_eval_results = _run_lm_eval(model, tokenizer, args)
+
+    if (getattr(args, "run_lm_eval", False)
+            and getattr(args, "run_lm_eval_bypass", False)
+            and getattr(args, "run_no_adc_eval", False)):
+        logger.info("=" * 80)
+        logger.info("STEP 4b: lm-evaluation-harness — BYPASS (ADC disabled)")
+        logger.info("=" * 80)
+        for _, _module in model.named_modules():
+            if isinstance(_module, TiledLinearADC):
+                _module.set_bypass_adc(True)
+        try:
+            _bypass_lm = _run_lm_eval(model, tokenizer, args)
+        finally:
+            for _, _module in model.named_modules():
+                if isinstance(_module, TiledLinearADC):
+                    _module.set_bypass_adc(False)
+        # Re-key  lm_<task>  ->  bypass_lm_<task>  to avoid collision with ADC keys.
+        _lm_eval_results.update({f"bypass_{k}": v for k, v in _bypass_lm.items()})
 
     # Save calibrated model
     logger.info(f"Saving calibrated model to: {args.output_dir}")
