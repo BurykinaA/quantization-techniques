@@ -1846,6 +1846,11 @@ def main():
                         help="Number of calibration samples for FlatQuant")
     parser.add_argument("--fq_cali_bsz", type=int, default=4,
                         help="Batch size for FlatQuant layer-by-layer calibration")
+    parser.add_argument("--fq_grad_accum_steps", type=int, default=1,
+                        help="Gradient accumulation steps for FlatQuant calibration. "
+                             "Effective batch size = fq_cali_bsz * fq_grad_accum_steps. "
+                             "Use to keep the effective batch constant when fq_cali_bsz "
+                             "must be reduced for memory (e.g. 3B/8B models).")
     parser.add_argument("--fq_epochs", type=int, default=15,
                         help="Training epochs per layer for FlatQuant")
     parser.add_argument("--fq_lr", type=float, default=5e-3,
@@ -2514,6 +2519,7 @@ def main():
                     stochastic_prop=args.fq_stochastic_prop,
                     stochastic_mode=args.fq_stochastic_mode,
                     beta_param=args.fq_beta_param,
+                    grad_accum_steps=args.fq_grad_accum_steps,
                 )
 
             if args.fq_stage_b_epochs > 0:
@@ -2553,6 +2559,7 @@ def main():
                     stochastic_prop=args.fq_stochastic_prop,
                     stochastic_mode=args.fq_stochastic_mode,
                     beta_param=args.fq_beta_param,
+                    grad_accum_steps=args.fq_grad_accum_steps,
                 )
 
             if args.fq_save_transforms:

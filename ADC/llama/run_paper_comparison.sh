@@ -74,14 +74,26 @@ run_config() {
     fi
 }
 
-# ─── Per-model FlatQuant batch size (Stage B propagation needs ~2× memory) ───
+# ─── Per-model FlatQuant batch sizing ────────────────────────────────────────
+# Effective batch (= cali_bsz * grad_accum_steps) is kept at 16 for ALL models so
+# the same LR / cosine schedule is well-conditioned regardless of micro-batch.
+# Smaller cali_bsz is the memory knob for 3B/8B; grad_accum compensates.
 
 fq_cali_bsz_for() {
     case "$1" in
         *Llama-3.2-1B*) echo 16 ;;
-        *Llama-3.2-3B*) echo  4 ;;   # was 16, OOM in Stage B
-        *Llama-3.1-8B*) echo  2 ;;   # was 16, OOM even in Stage A
+        *Llama-3.2-3B*) echo  4 ;;   # was 16 → OOM in Stage B
+        *Llama-3.1-8B*) echo  2 ;;   # was 16 → OOM even in Stage A
         *)              echo  4 ;;
+    esac
+}
+
+fq_grad_accum_for() {
+    case "$1" in
+        *Llama-3.2-1B*) echo 1 ;;    # 16 * 1 = 16
+        *Llama-3.2-3B*) echo 4 ;;    # 4  * 4 = 16
+        *Llama-3.1-8B*) echo 8 ;;    # 2  * 8 = 16
+        *)              echo 4 ;;
     esac
 }
 
@@ -140,7 +152,8 @@ MODELS=(
 for MODEL_ID in "${MODELS[@]}"; do
     SHORT=$(echo "$MODEL_ID" | sed 's|.*/||' | tr '[:upper:]' '[:lower:]' | tr '.' '_')
     BSZ=$(fq_cali_bsz_for "$MODEL_ID")
-    BSZ_ARG=(--fq_cali_bsz "$BSZ")
+    ACCUM=$(fq_grad_accum_for "$MODEL_ID")
+    BSZ_ARG=(--fq_cali_bsz "$BSZ" --fq_grad_accum_steps "$ACCUM")
 
     # 1. FP16
     run_config "${SHORT}_fp" \

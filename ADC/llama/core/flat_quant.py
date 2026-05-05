@@ -1088,6 +1088,7 @@ def calibrate_flat_quant(
     stochastic_prop: bool = False,
     stochastic_mode: str = "bernoulli",  # "bernoulli" | "beta"
     beta_param: float = 2.0,
+    grad_accum_steps: int = 1,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1357,10 +1358,22 @@ def calibrate_flat_quant(
                 _m._penalty_lambda_center  = lambda_center if _is_target else 0.0
 
         optimizer = torch.optim.AdamW(trained_params)
-        total_steps = epochs * (actual_nsamples // cali_bsz)
+        # Effective optimizer steps = batches / grad_accum_steps (rounded up for last batch).
+        # LR scheduler is stepped per optimizer step, not per micro-batch — so the
+        # cosine decay sees the same number of LR updates regardless of accum.
+        _accum = max(1, int(grad_accum_steps))
+        n_batches_per_epoch = actual_nsamples // cali_bsz
+        opt_steps_per_epoch = (n_batches_per_epoch + _accum - 1) // _accum
+        total_steps = epochs * opt_steps_per_epoch
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=max(total_steps, 1), eta_min=flat_lr * 1e-3,
         )
+        if _accum > 1:
+            logger.info(
+                f"  layer {i}: grad_accum_steps={_accum}, "
+                f"effective_batch={cali_bsz * _accum}, "
+                f"opt_steps_per_epoch={opt_steps_per_epoch}"
+            )
 
         # (d) Train transforms via MSE loss ─────────────────────────
         # Layer-wise alpha: early layers (i < prop_late_start) can use a
@@ -1398,6 +1411,12 @@ def calibrate_flat_quant(
             epoch_band = 0.0
             epoch_pen_count = 0
             nan_count = 0
+            # Track grad accumulation cycle independently of nan-skipped batches:
+            # zero_grad at start of each cycle, optimizer.step() when accum_count == _accum
+            # OR at end of epoch (last batch). NaN-loss batches are skipped without
+            # affecting the cycle count (they contribute nothing).
+            optimizer.zero_grad(set_to_none=True)
+            accum_count = 0
             batch_bar = tqdm(range(n_batches), desc=f"    L{i} E{epoch} batches", unit="batch", leave=False)
             for j in batch_bar:
                 idx = j * cali_bsz
@@ -1478,17 +1497,26 @@ def calibrate_flat_quant(
                 if torch.isnan(loss) or torch.isinf(loss):
                     nan_count += 1
                     batch_bar.set_postfix(loss="NaN", nan=nan_count)
-                    scheduler.step()
+                    # Don't step scheduler here — we step it per optimizer.step() now.
                     continue
                 epoch_mse += loss.detach().item()
-                # Cast to float32 before backward so 1/loss doesn't overflow
+                # Cast to float32 before backward so 1/loss doesn't overflow.
+                # Divide by _accum so accumulated grads have the same magnitude
+                # as a single full-batch update (no double-counting at step time).
                 loss_f32 = loss.float()
-                normalized_loss = loss_f32 / loss_f32.clone().detach()
-                optimizer.zero_grad()
+                normalized_loss = (loss_f32 / loss_f32.clone().detach()) / float(_accum)
                 normalized_loss.backward()
-                # Guard: skip step if any gradient is NaN/Inf.
-                # clip_grad_norm_ with a NaN grad returns NaN norm,
-                # which then poisons ALL gradients and all parameters.
+                accum_count += 1
+
+                # Step only on accumulation boundary OR at the very last batch of
+                # the epoch (otherwise residual grads would carry into next epoch).
+                is_last_batch = (j == n_batches - 1)
+                if not (accum_count >= _accum or is_last_batch):
+                    continue
+
+                # Guard: skip step if any accumulated gradient is NaN/Inf.
+                # clip_grad_norm_ with a NaN grad returns NaN norm, which then
+                # poisons ALL gradients and all parameters.
                 all_params = [p for g in optimizer.param_groups for p in g["params"]]
                 has_nan_grad = any(
                     p.grad is not None
@@ -1516,8 +1544,9 @@ def calibrate_flat_quant(
                                 )
                     nan_count += 1
                     batch_bar.set_postfix(loss="NaN/grad", nan=nan_count)
-                    optimizer.zero_grad()
-                    scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
+                    accum_count = 0
+                    scheduler.step()  # advance LR even on dropped step
                     continue
                 # Clip gradients to prevent explosion through 1/diag paths
                 torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
@@ -1544,6 +1573,10 @@ def calibrate_flat_quant(
                             # Keep alpha = softplus(raw) in [0.1, 100]
                             # softplus^{-1}(0.1) ≈ -2.25, softplus^{-1}(100) ≈ 100
                             param.data.clamp_(min=-2.25, max=100.0)
+                # Finished one optimizer step: zero grads for next accumulation cycle
+                # and advance the LR scheduler.
+                optimizer.zero_grad(set_to_none=True)
+                accum_count = 0
                 scheduler.step()
                 _pf: dict = dict(
                     loss=f"{loss.item():.3e}",
