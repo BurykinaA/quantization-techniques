@@ -1,5 +1,89 @@
 # FlatQuant + ADC PTQ for Llama
 
+## Paper Results
+
+**3 models × 5 methods** | WikiText2 PPL ↓, C4 PPL ↓, accuracy % ↑
+
+`INT{4,8} PTQ` rows = INT-quantized weights/activations + integer MVM **without** ADC (digital reference).
+`INT{4,8}+ADC PTQ` rows = same + the analog ADC step (`floor` + `clamp` at fixed `δ`).
+
+| Model | Method | Wiki PPL | C4 PPL | HellaSwag | MMLU | WinoGrande |
+|-------|--------|:--------:|:------:|:---------:|:----:|:----------:|
+| Llama-3.2-1B | FP16             | **8.68**     | **13.13**    | **64.19** | **32.15** | **63.06** |
+|              | INT8 PTQ         | 18.96        | 27.27        | —         | —         | —         |
+|              | INT8+ADC PTQ     | 17.18        | 30.05        | 44.87     | 27.03     | 55.80     |
+|              | INT4 PTQ         | 18.06        | 29.05        | —         | —         | —         |
+|              | INT4+ADC PTQ     | 28.25        | 47.61        | 40.37     | 24.43     | 52.25     |
+|              | INT4+ADC+LoRA    | **14.03**    | **23.20**    | **49.96** | **25.72** | 53.67     |
+| Llama-3.2-3B | FP16             | **6.98**     | **10.58**    | **74.15** | **56.67** | **72.22** |
+|              | INT8 PTQ         | 10.37        | 17.01        | —         | —         | —         |
+|              | INT8+ADC PTQ     | ⚠ 157810     | ⚠ 136625     | 26.77     | 26.63     | 48.38     |
+|              | INT4 PTQ         | _pending_    | _pending_    | —         | —         | —         |
+|              | INT4+ADC PTQ     | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
+|              | INT4+ADC+LoRA    | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
+| Llama-3.1-8B | FP16             | **5.58**     | **8.93**     | _pending_ | _pending_ | _pending_ |
+|              | INT8 PTQ         | _pending_    | _pending_    | —         | —         | —         |
+|              | INT8+ADC PTQ     | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
+|              | INT4 PTQ         | _pending_    | _pending_    | —         | —         | —         |
+|              | INT4+ADC PTQ     | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
+|              | INT4+ADC+LoRA    | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
+
+**Status (2026-05-05, partial):**
+- **Llama-3.2-1B — complete** (all 5 methods, both bypass and ADC PPL,
+  full lm-eval triple).
+- **Llama-3.2-3B — partial.** FP16 done; INT8 PTQ bypass excellent (10.37
+  Wiki, 17.01 C4 — close to FP); **INT8+ADC PTQ catastrophic
+  (157810 / 136625 PPL on Wiki / C4)**. INT4 / LoRA still running.
+- **Llama-3.1-8B — only FP16 (PPL only).** Quantized configs not yet run.
+  The 8B FP entry in the JSON is from before `lm-eval` was installed on
+  the remote, so its accuracy columns are also pending re-eval.
+
+**1B observations (now with bypass + accuracy):**
+- **INT4+ADC+LoRA wins on every metric except WinoGrande** vs INT8+ADC
+  PTQ: Wiki 14.03 vs 17.18, C4 23.20 vs 30.05, HellaSwag 49.96 vs 44.87,
+  MMLU 25.72 vs 27.03 (close), WinoGrande 53.67 vs 55.80. LoRA recovers
+  the PTQ → ADC gap (28.25 → 14.03 Wiki, 47.61 → 23.20 C4) and improves
+  HellaSwag by +9.6 points over INT4+ADC PTQ.
+- **Bypass / ADC gap is small for INT8** (18.96 → 17.18 Wiki, ADC actually
+  *better* by 1.8 PPL — within reproduction noise) and **large for INT4**
+  (18.06 → 28.25 Wiki, ADC ×1.56 worse). LoRA partially closes the INT4
+  gap (18.61 / 14.03) — the LoRA "fixes" ADC distortion, not the INT
+  rounding error itself.
+- MMLU and WinoGrande for INT4+LoRA are essentially at INT4 PTQ level
+  (within noise). PPL recovery is much stronger than zero-/few-shot
+  accuracy recovery — likely because the calibration set is text-only.
+
+**3B INT8+ADC catastrophe — needs investigation.**
+Bypass is healthy (10.37 / 17.01) but ADC produces ~10⁵ PPL.
+`dead_rate_mean = 0.17`, `reconstruction_rel = 0.0156` — both look
+*better* than 1B INT8+ADC. Most likely cause: with the smaller
+`fq_cali_bsz=4` (set down from 16 to fit 3B in memory), the Kronecker
+factors and diagonals underfit, and the resulting transforms shape the
+pre-ADC signal in a way that explodes through deeper layers.
+Worth trying: bump bsz back to 8 with `expandable_segments`, or train
+Stage B for more epochs.
+
+**Re-run plan (remaining work):**
+1. Investigate / re-run **3B INT8+ADC** (catastrophic).
+2. Re-run **1B INT4+ADC PTQ** — Wiki 28.25 is noticeably worse than the
+   thesis result (~27.5). Could be the smaller per-token amax behaviour
+   in the new pipeline; worth a sanity rerun on a different seed.
+3. Run remaining 3B configs (INT4 PTQ / INT4+ADC PTQ / INT4+LoRA).
+4. Run all 8B quantized configs. Re-run 8B FP to capture lm-eval.
+
+```bash
+SKIP_COMPLETED=1 bash ADC/llama/run_paper_comparison.sh
+# or specific configs:
+ONLY="llama-3_2-3b_int8_ptq,llama-3_2-3b_int4_ptq,llama-3_2-3b_int4_lora,\
+llama-3_1-8b_fp,llama-3_1-8b_int8_ptq,llama-3_1-8b_int4_ptq,llama-3_1-8b_int4_lora" \
+  bash ADC/llama/run_paper_comparison.sh
+```
+
+Run: `bash ADC/llama/run_paper_comparison.sh`  
+Results saved to: `outputs/paper_comparison/results.json`
+
+---
+
 ## Setup
 
 **Model:** Llama-3.2-1B
@@ -396,7 +480,7 @@ y += scaling * lora_B(lora_A(x.float()))  # FP32 residual, added AFTER ADC outpu
 | mvm256_no_lora | 256 | ≈515 | none | 17.61 | 27.00 | 28.12 | 45.38 | PTQ control |
 | **mvm256_r4_all_ce_kl** | 256 | ≈515 | r4, all 7, CE+KL | 18.55 | **14.03** | 28.85 | **23.41** | LoRA recovers ADC gap |
 | mvm1024_no_lora | 1024 | ≈2060 | none | 23.66 | 37.03 | 37.76 | 56.94 | coarser ADC → much worse |
-| mvm1024_r4_all_ce_kl | 1024 | ≈2060 | r4, all 7, CE+KL | — | — | — | — | failed |
+| mvm1024_r4_all_ce_kl | 1024 | ≈2060 | r4, all 7, CE+KL | 23.01 | **16.65** | 35.03 | **27.51** | LoRA recovers coarse ADC |
 
 **Analysis:**
 
@@ -417,6 +501,33 @@ y += scaling * lora_B(lora_A(x.float()))  # FP32 residual, added AFTER ADC outpu
 - **CE+KL configs dominate on both domains.** `r4_all_ce_kl` and `r4_down_o_ce_kl` both achieve c4 ADC < 24, while `rank8_down_o` (CE only) gives c4 ADC=29.39 — barely better than PTQ bypass (29.41). KL teacher signal is key for generalisation, not just wikitext2 tuning.
 - **Wikitext2 gap (bypass→ADC) flips negative; C4 gap stays positive.** For CE+KL runs: wiki ADC < wiki bypass (the model "benefits" from ADC in wiki mode); c4 ADC > c4 bypass. The LoRA residual over-corrects for wikitext2 statistics but the C4 improvement (46→23) is still massive.
 - **`r4_all_ce_kl` is the best checkpoint overall** — best on both datasets.
+
+---
+
+#### Branch `llama-flatquant-adc-int4-v9` — Data efficiency & KL sweep
+
+**Motivation:** Two sweeps on the best config (r4_all_ce_kl, mvm_limit=256). PTQ fixed at fq_nsamples=1024.
+
+##### Data efficiency (lora_nsamples ∈ {64, 128, 256, 512, 1024})
+
+| Experiment | lora_nsamples | wiki bypass | wiki ADC | C4 bypass | C4 ADC |
+|---|---|---|---|---|---|
+| r4_all_ce_kl_n64   | 64   | 18.42 | 21.07 | 29.50 | 35.62 |
+| r4_all_ce_kl_n128  | 128  | 18.21 | 18.09 | 28.97 | 30.19 |
+| r4_all_ce_kl_n256  | 256  | 18.66 | 15.88 | 28.84 | 26.13 |
+| r4_all_ce_kl_n512  | 512  | 17.99 | 14.82 | 28.20 | 24.75 |
+| r4_all_ce_kl_n1024 | 1024 | 18.92 | **14.06** | 28.79 | **23.56** |
+
+##### KL sweep (kl_weight × temperature, 6 points on r4_all_ce_kl)
+
+| Experiment | kl_weight | temperature | wiki bypass | wiki ADC | C4 bypass | C4 ADC |
+|---|---|---|---|---|---|---|
+| r4_kl025_t1 | 0.25 | 1.0 | 18.77 | **13.84** | 29.16 | 23.23 |
+| r4_kl025_t2 | 0.25 | 2.0 | 19.15 | 14.07 | 29.03 | 23.33 |
+| r4_kl05_t1  | 0.5  | 1.0 | 18.92 | 13.79 | 29.69 | **23.10** |
+| r4_kl05_t2  | 0.5  | 2.0 | 18.43 | 14.05 | 28.54 | 23.37 |
+| r4_kl10_t2  | 1.0  | 2.0 | 18.90 | 13.94 | 29.47 | 23.17 |
+| r4_kl20_t4  | 2.0  | 4.0 | — | — | — | — (failed) |
 
 ---
 

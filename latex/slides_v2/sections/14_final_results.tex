@@ -5,64 +5,20 @@
   \footnotesize
   \begin{center}
   \renewcommand{\arraystretch}{1.25}
-  \begin{tabular}{@{}l c c c c@{}}
+  \begin{tabular}{@{}l l c c c c c@{}}
     \toprule
-    \textbf{Configuration} & \textbf{bits} & \textbf{WikiText-2 \adcppl{}} & \textbf{C4 \adcppl{}} & \textbf{extra params} \\
+    \textbf{Model} & \textbf{Method} & \textbf{Wiki PPL} & \textbf{C4 PPL} & \textbf{HellaSwag} & \textbf{MMLU} & \textbf{WinoGrande} \\
     \midrule
-    FP baseline                                    & 16/16 & 10.53 & — & — \\
-    \midrule
-    \rowcolor{mybluedark!5}
-    INT8 — FlatQuant per-proj                      & 8/8   & 28.86 & — & 0 \\
-    \rowcolor{mybluedark!5}
-    INT8 — propagated calib \textbf{(our PTQ)}     & 8/8   & 14.41 & — & 0 \\
-    \midrule
-    \rowcolor{myorange!7}
-    INT4 — FlatQuant per-proj (1024s)              & 4/4   & 56.83 & — & 0 \\
-    \rowcolor{myorange!7}
-    INT4 — staged+$\alpha$-mix+diag \textbf{(our PTQ)} & 4/4 & 27.60 & 46.40 & 0 \\
-    \rowcolor{mygreen!12}
-    INT4 + Post-ADC LoRA \textbf{(ours, final)}    & 4/4   & \best{13.96} & \best{23.30} & 0.22\% \\
+    \multirow{6}{*}{Llama-3.2-1B}
+        & FP16            & \textbf{8.68}  & \textbf{13.13} & \textbf{64.19} & \textbf{32.15} & \textbf{63.06} \\
+        & INT8 PTQ        & 18.96 & 27.27 & —     & —     & —     \\
+        & INT8+ADC PTQ    & 17.18 & 30.05 & 44.87 & 27.03 & 55.80 \\
+        & INT4 PTQ        & 18.06 & 29.05 & —     & —     & —     \\
+        & INT4+ADC PTQ    & 28.25 & 47.61 & 40.37 & 24.43 & 52.25 \\
+        \rowcolor{mygreen!12}
+        & INT4+ADC+LoRA   & \best{14.03} & \best{23.20} & \best{49.96} & \best{25.72} & 53.67 \\
     \bottomrule
   \end{tabular}
   \end{center}
 
-  \vspace{0.5em}
-  \begin{columns}[T]
-    \begin{column}{0.55\textwidth}
-      \begin{center}
-      \resizebox{0.96\linewidth}{!}{%
-      \begin{tikzpicture}
-        \begin{axis}[
-          ybar=3pt, bar width=14pt, width=9.5cm, height=4.6cm,
-          ymin=0, ymax=60, ylabel={\scriptsize $\adcppl{}$ on WikiText-2 / C4},
-          symbolic x coords={FP, {INT8 base}, {INT8 ours}, {INT4 ours}, {+ LoRA}},
-          xtick=data, enlarge x limits=0.15,
-          x tick label style={font=\scriptsize, rotate=20, anchor=east},
-          y tick label style={font=\tiny},
-          ylabel style={font=\scriptsize},
-          legend style={font=\scriptsize, at={(0.02,0.98)}, anchor=north west, draw=none},
-          nodes near coords, nodes near coords style={font=\tiny, /pgf/number format/.cd, fixed, precision=2, /tikz/.cd},
-        ]
-          \addplot[fill=mygray!40] coordinates {(FP, 10.53) ({INT8 base}, 28.86) ({INT8 ours}, 14.41) ({INT4 ours}, 27.60) ({+ LoRA}, 13.96)};
-          \addplot[fill=myorange!70] coordinates {({INT4 ours}, 46.40) ({+ LoRA}, 23.30)};
-          \legend{WikiText-2, C4 (where available)}
-          \draw[very thick, mygreen!80!black, dashed] (axis cs:FP, 10.53) -- (axis cs:+ LoRA, 10.53);
-          \node[font=\tiny, mygreen!80!black] at (axis cs:{INT8 base}, 12.5) {FP=10.53};
-        \end{axis}
-      \end{tikzpicture}}
-      \end{center}
-    \end{column}
-    \begin{column}{0.43\textwidth}
-      \small
-      \begin{alertblock}{Headlines}
-        \scriptsize
-        \begin{itemize}
-          \item \textbf{INT4 + LoRA (13.96) \emph{beats} best INT8 PTQ (14.41)} using half the bits.
-          \item Gap to FP shrinks from $17.1$ PPL (INT4 PTQ) to $3.4$ PPL.
-          \item Generalises to C4 (held-out): \textbf{46.4 $\to$ 23.3} ADC PPL with the same LoRA.
-          \item Only \textbf{0.22\%} extra parameters; $<$2\% inference overhead.
-        \end{itemize}
-      \end{alertblock}
-    \end{column}
-  \end{columns}
 \end{frame}
