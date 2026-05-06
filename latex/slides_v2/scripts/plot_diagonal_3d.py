@@ -186,16 +186,22 @@ def bar3d(ax, data, title, color_inlier="#4a78c0", color_outlier="#c0392b",
 def calibrate_with_config(model, dataloader, device, *, add_diag, epochs):
     """Apply FlatQuant wrappers and run calibration with the given add_diag flag.
 
-    We pass adc_config=None — for this illustration we don't need the ADC
-    floor inside the calibration loss. Only the Kronecker (+diag) trained
-    transforms are interesting for the activation plot.
+    Calibration loss includes the full ADC pipeline (tiled INT MVM + floor
+    quantisation at fixed delta), matching the paper_comparison FQ_INT4
+    setup. The Kronecker (+diag) transforms thus learn to flatten activations
+    *for the analog ADC*, not just for plain INT4 fake-quant.
     """
+    adc_config = {
+        "bx": 4, "bw": 4, "ba": 8, "k": 16,
+        "mvm_limit": 256,
+        "signed_activations": True,   # bipolar ADC (matches v2/v4 + paper_comparison default)
+    }
     apply_flatquant_to_model(
         model,
         w_bits=4, a_bits=4,
         add_diag=add_diag,
         lwc=False, lac=False,
-        adc_config=None,
+        adc_config=adc_config,
     )
     calibrate_flat_quant(
         model, dataloader, device=device,

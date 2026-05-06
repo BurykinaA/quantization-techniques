@@ -2,7 +2,6 @@
 \begin{frame}{Trainable Diagonals (FlatQuant Component)}
 
   \footnotesize
-  \emph{FlatQuant feature (Sec.~3.1, ``Per-channel Scaling'').}
   Absorb a trainable diagonal $D=\mathrm{diag}(d_1,\ldots,d_c)$ into the rotation:
   \[
     \tilde T \;=\; T\cdot D,\qquad d_i > 0
@@ -11,15 +10,10 @@
   \[
     y \;=\; (xD^{-1}T^{-1})\,(T D W^\top).
   \]
-  In FlatQuant, $D$ is one global flag — \emph{on or off everywhere}.
 
   \vspace{0.6em}
   \begin{center}
-    \fbox{\parbox[c][0.32\textheight][c]{0.92\linewidth}{%
-      \centering
-      \textcolor{myorange}{\large\textbf{TODO: before / after picture}}\\[0.4em]
-      \scriptsize activation distribution before and after diagonal scaling (horizontal)
-    }}
+    \includegraphics[width=0.95\linewidth]{figs/plot_diag_3d.pdf}
   \end{center}
 \end{frame}
 

@@ -1,5 +1,5 @@
 # Fdb version 4
-["pdflatex"] 1778081473.91958 "/Users/alina_burykina/git_repos/quantization-techniques/latex/slides_v2/main.tex" "main.pdf" "main" 1778081476.8971 0
+["pdflatex"] 1778085096.5259 "/Users/alina_burykina/git_repos/quantization-techniques/latex/slides_v2/main.tex" "main.pdf" "main" 1778085099.53791 0
   "/Users/alina_burykina/git_repos/quantization-techniques/latex/slides_v2/main.tex" 1778068591.22906 5276 9a39c58f7181e26d1ee6bff1d948c129 ""
   "/usr/local/texlive/2026/texmf-dist/fonts/enc/dvips/cm-super/cm-super-t1.enc" 1136849721 2971 def0b6c1f0b107b3b936def894055589 ""
   "/usr/local/texlive/2026/texmf-dist/fonts/enc/dvips/cm-super/cm-super-ts1.enc" 1136849721 2900 1537cc8184ad1792082cd229ecc269f4 ""
@@ -382,9 +382,10 @@
   "figs/dist_y.pdf" 1778068591.21036 22727 ab63fd1413002944fb6e418e4d1b5c2b ""
   "figs/dist_y_hat.pdf" 1778068591.21072 17036 64f136fe9cc80c5a92dec02e8851d72c ""
   "figs/plot_alpha_sweep.pdf" 1778068591.21109 12444 f5589886b9f21962b505fd9e135feecd ""
-  "main.aux" 1778081476.66318 5643 7142950526700fff1cc3d72ae526d5ec "pdflatex"
-  "main.nav" 1778081476.66458 3709 e03d03bcac6e31a3b0b56e9118a1e77f "pdflatex"
-  "main.out" 1778081476.66434 81 5bcea9cf7d2d9aece7cac4018e9f6c5b "pdflatex"
+  "figs/plot_diag_3d.pdf" 1778084026.27206 4636148 8841b450a0d67a500240e5197bdd630d ""
+  "main.aux" 1778085099.30339 5643 7142950526700fff1cc3d72ae526d5ec "pdflatex"
+  "main.nav" 1778085099.30479 3709 e03d03bcac6e31a3b0b56e9118a1e77f "pdflatex"
+  "main.out" 1778085099.30456 81 5bcea9cf7d2d9aece7cac4018e9f6c5b "pdflatex"
   "main.tex" 1778068591.22906 5276 9a39c58f7181e26d1ee6bff1d948c129 ""
   "sections/00_title.tex" 1778068591.22996 639 be8fffe454e6aea4939baac99f8e7a90 ""
   "sections/01_optical_motivation.tex" 1778068591.23037 2462 0075ce80ad8a37bc5f94041f6f2c2c7c ""
@@ -393,7 +394,7 @@
   "sections/04_adc_math.tex" 1778068591.23179 3378 c28820e29f89b35289f61403d1e275ce ""
   "sections/05_research_questions.tex" 1778068591.23239 1021 206e9f466f823c732c1cb9d95fe90b95 ""
   "sections/07_flatquant.tex" 1778068871.26323 1711 5b3ed8d37a75c9ddc8487fdd196f7ef4 ""
-  "sections/08_diagonals.tex" 1778069574.23764 2205 4833720bf5043952f56c96599dc71d4d ""
+  "sections/08_diagonals.tex" 1778084804.16653 1882 a4ec0998a017a1dc8f13e8a40ebeeb55 ""
   "sections/09_block_propagation.tex" 1778068839.99086 13575 b3b55789679b92fe8176cf2c896fd070 ""
   "sections/10_staged_training.tex" 1778068591.23497 10227 cf6a3a5082096fbf3066cfa9c121fd9a ""
   "sections/11_ptq_results.tex" 1778080109.70148 1440 a886dfa42726f8d85202bae5b581c887 ""
