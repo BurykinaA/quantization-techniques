@@ -146,14 +146,18 @@ def bar3d(ax, data, title, color_inlier="#4a78c0", color_outlier="#c0392b",
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def calibrate_with_config(model, dataloader, device, *, add_diag, epochs):
-    """Apply FlatQuant wrappers and run calibration with the given add_diag flag."""
+    """Apply FlatQuant wrappers and run calibration with the given add_diag flag.
+
+    We pass adc_config=None — for this illustration we don't need the ADC
+    floor inside the calibration loss. Only the Kronecker (+diag) trained
+    transforms are interesting for the activation plot.
+    """
     apply_flatquant_to_model(
         model,
-        w_bits=4, a_bits=4,             # bit-widths; here only the *transforms*
-        adc_bits=8, mvm_limit=256, k=16,
+        w_bits=4, a_bits=4,
         add_diag=add_diag,
         lwc=False, lac=False,
-        unipolar_delta=False,
+        adc_config=None,
     )
     calibrate_flat_quant(
         model, dataloader, device=device,
