@@ -5,7 +5,7 @@
     \begin{column}{0.55\textwidth}
       \scriptsize
       \textbf{Ablations (Llama-3.2-1B, INT4, \adcppl{}$\downarrow$)}\\
-      \emph{Base: $r{=}4$, down\,+\,o, CE.\ Each block varies one axis.}\\[0.3em]
+      \emph{Base PTQ: staged INT4 ($\adcppl{}\approx 27.5$).}\\[0.3em]
 
       \renewcommand{\arraystretch}{1.05}
       \begin{tabular}{@{}l l c@{}}
@@ -27,12 +27,12 @@
           & all 16      & \best{15.57} \\
         \midrule
         \multirow{2}{*}{Placement}
-          & Pre-ADC          & 105.6 \textcolor{myred}{(diverges)} \\
-          & \alert{Post-ADC} & \best{15.57} \\
+          & Pre-ADC  & 105.6 \\
+          & Post-ADC & \best{15.57} \\
         \midrule
         \multirow{2}{*}{Coverage}
           & down\,+\,o (CE\,+\,KL) & 14.33 \\
-          & \alert{all\,7 (CE\,+\,KL)} & \best{14.03} \\
+          & all\,7 (CE\,+\,KL) & \best{14.03} \\
         \bottomrule
       \end{tabular}
 
@@ -40,6 +40,7 @@
 
     \begin{column}{0.43\textwidth}
       \footnotesize
+      \begin{center}
       \textbf{Overhead on Llama-3.2-1B}\\
       \emph{($d{=}2048$, 16 blocks, $r{=}4$, all 7 proj.)}\\[0.4em]
 
@@ -54,17 +55,8 @@
         inference MAC overhead & $<$\,0.5\% \\
         \bottomrule
       \end{tabular}
+      \end{center}
 
-      \vspace{0.7em}
-      \begin{alertblock}{Observations}
-        \scriptsize
-        \begin{itemize}
-          \item Rank gain saturates fast: $r{=}1$ already gives 15.9.
-          \item KL distillation adds $\sim$1.2 PPL on top of CE.
-          \item Early layers matter most — skipping first 8 hurts more than last 8.
-          \item Pre-ADC LoRA \emph{diverges} — its correction is quantised by $\delta$.
-        \end{itemize}
-      \end{alertblock}
     \end{column}
   \end{columns}
 \end{frame}

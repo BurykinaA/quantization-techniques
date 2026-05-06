@@ -5,48 +5,30 @@
   \footnotesize
   \begin{center}
   \renewcommand{\arraystretch}{1.2}
-  \begin{tabular}{@{}l c c c c c@{}}
+  \begin{tabular}{@{}l c c c@{}}
     \toprule
-    \textbf{Method} & \textbf{bits (w\,/\,a)} & $\bypass$ & $\adcppl{}$ & \textbf{dead-rate} & \textbf{notes} \\
+    \textbf{Method} & \textbf{bits (w\,/\,a)} & $\bypass$ & $\adcppl{}$ \\
     \midrule
-    FP baseline                        & 16\,/\,16 & 10.53 & 10.53 & — & reference \\
+    FP baseline                        & 16\,/\,16 & 8.68 & 8.68 \\
     \midrule
     \rowcolor{mybluedark!5}
-    FlatQuant per-proj MSE             & 8\,/\,8   & \textbf{10.01} & 28.86 & 10.3\% & base implementation \\
+    FlatQuant per-proj MSE             & 8\,/\,8   & \textbf{10.01} & 28.86 \\
     \rowcolor{mybluedark!5}
-    \;+ propagated calib (block)       & 8\,/\,8   & 11.00 & \best{14.41} & 10.3\% & INT8 PTQ best \\
+    \;+ propagated calib (block)       & 8\,/\,8   & 11.00 & 14.41 \\
+    \rowcolor{mybluedark!5}
+    \;+ staged + diag (full pipeline)  & 8\,/\,8   & 19.32 & \best{16.85} \\
     \midrule
     \rowcolor{myorange!7}
-    FlatQuant per-proj MSE             & 4\,/\,4   & 15.41 & 2354 & 10.6\% & 128 calib samples \\
+    FlatQuant per-proj MSE             & 4\,/\,4   & 15.41 & 2354 \\
     \rowcolor{myorange!7}
-    \;+ 1024 calib samples             & 4\,/\,4   & 19.80 & 56.83 & 10.4\% & more data, no other change \\
+    \;+ 1024 calib samples             & 4\,/\,4   & 19.80 & 56.83 \\
     \rowcolor{myorange!7}
-    \;+ block prop., $\alpha{=}0.5$    & 4\,/\,4   & 24.24 & 31.22 & 10.4\% & propagation + $\alpha$-mix \\
+    \;+ block prop., $\alpha{=}0.5$    & 4\,/\,4   & 24.24 & 31.22 \\
     \rowcolor{myorange!7}
-    \;+ diag (bounded LET)             & 4\,/\,4   & 20.23 & 27.56 & 10.4\% & per-channel scaling \\
+    \;+ diag (bounded LET)             & 4\,/\,4   & 20.23 & 27.56 \\
     \rowcolor{myorange!7}
-    \;+ staged: MLP$\to$attn           & 4\,/\,4   & \textbf{18.50} & \best{27.60} & 10.4\% & INT4 PTQ best \\
+    \;+ staged: MLP$\to$attn           & 4\,/\,4   & \textbf{17.83} & \best{26.66} \\
     \bottomrule
   \end{tabular}
   \end{center}
-
-  \vspace{0.5em}
-  \begin{columns}[T]
-    \begin{column}{0.5\textwidth}
-      \begin{alertblock}{\small Take-aways on PTQ alone}
-        \scriptsize
-        \begin{itemize}
-          \item INT8: propagated calib is the single biggest lever — no extra params. \textbf{\color{mygreen!80!black}$2\times$ better}.
-          \item INT4: $\alpha$-mix prop drops ADC from 56.8 to 31.2; diag $+$ staged push it to \textbf{27.6}.
-        \end{itemize}
-      \end{alertblock}
-    \end{column}
-    \begin{column}{0.48\textwidth}
-      \begin{block}{\small The plateau}
-        \scriptsize
-        Every PTQ lever combined still leaves a \emph{$17\,$PPL gap} on INT4 (27.6 vs 10.5 FP). PTQ by itself has plateaued. \\
-        $\to$ \emph{Method II: Post-ADC LoRA.}
-      \end{block}
-    \end{column}
-  \end{columns}
 \end{frame}

@@ -1,13 +1,14 @@
 % ─── Slide 9a: Training Block 0 ──────────────────────────────────────────────
-\begin{frame}{Our Extension I: Block-wise Calibration}
+\begin{frame}{Block-wise Calibration (FlatQuant Baseline)}
 
   \begin{columns}[T]
     \begin{column}{0.32\textwidth}
       \vspace{1.5em}
       \footnotesize
-      Train \emph{one block at a time}:
+      \emph{FlatQuant standard.} Train \emph{one block at a time},
+      both teacher and student see the \alert{same FP input} $x^\star$:
       \[
-        \mathcal L = \bigl\| \hat B(\hat x) - B_{\mathrm{FP}}(x^\star) \bigr\|_2^2
+        \mathcal L = \bigl\| \hat B(x^\star) - B_{\mathrm{FP}}(x^\star) \bigr\|_2^2
       \]
     \end{column}
 
@@ -91,13 +92,15 @@
 \end{frame}
 
 % ─── Slide 9b: Propagation — Block 1 with Block 0 done ───────────────────────
-\begin{frame}{Our Extension I: Propagation Across Blocks}
+\begin{frame}{Our Extension I: Cross-block Propagation}
 
   \begin{columns}[T]
     \begin{column}{0.32\textwidth}
       \vspace{1.5em}
       \footnotesize
-      Input to block $\ell$ $=$ \alert{ADC-quantised output of block $\ell{-}1$}.\\[0.5em]
+      \emph{Departure from FlatQuant.} Input to block $\ell$ is the
+      \alert{ADC-quantised output of block $\ell{-}1$}, not the clean
+      FP input.\\[0.5em]
       Error accumulates the same way at train and inference.
     \end{column}
 

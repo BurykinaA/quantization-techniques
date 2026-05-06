@@ -1,15 +1,17 @@
 % ─── Slide 8a: Diagonals — fix + before/after picture ────────────────────────
-\begin{frame}{Our Extension II: Trainable Diagonals (\texttt{add\_diag})}
+\begin{frame}{Trainable Diagonals (FlatQuant Component)}
 
   \footnotesize
+  \emph{FlatQuant feature (Sec.~3.1, ``Per-channel Scaling'').}
   Absorb a trainable diagonal $D=\mathrm{diag}(d_1,\ldots,d_c)$ into the rotation:
   \[
-    \tilde T \;=\; T\cdot D,\qquad d_i \in [10^{-4},\, 10]
+    \tilde T \;=\; T\cdot D,\qquad d_i > 0
   \]
   Invariance preserved — opposite scaling on the next layer:
   \[
     y \;=\; (xD^{-1}T^{-1})\,(T D W^\top).
   \]
+  In FlatQuant, $D$ is one global flag — \emph{on or off everywhere}.
 
   \vspace{0.6em}
   \begin{center}
@@ -22,12 +24,12 @@
 \end{frame}
 
 % ─── Slide 8b: Diagonals — placement + ablation table ────────────────────────
-\begin{frame}{Our Extension II: Trainable Diagonals — Placement \& Ablation}
+\begin{frame}{Our Extension II: Selective Diagonal Placement}
 
   \begin{columns}[T]
     \begin{column}{0.46\textwidth}
       \footnotesize
-      \textbf{Where we place them.}
+      \textbf{We split FlatQuant's global diagonal by block type.}
       \begin{itemize}\setlength\itemsep{0.4em}
         \item \texttt{diag\_attn}: before \texttt{q/k/v/o} projections\\
               {\scriptsize attention-head variance}
