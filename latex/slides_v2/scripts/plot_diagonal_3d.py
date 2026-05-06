@@ -167,6 +167,10 @@ def calibrate_with_config(model, dataloader, device, *, add_diag, epochs):
         add_diag=add_diag, lwc=False, lac=False,
         propagate_quant_inputs=False,   # plain "trained Kronecker(+diag)" — no propagation
     )
+    # calibrate_flat_quant offloads layers to CPU during training to save VRAM;
+    # move the whole model back so subsequent forward passes don't fail with
+    # device mismatch on embed_tokens.
+    model.to(device)
     model.eval()
 
 
