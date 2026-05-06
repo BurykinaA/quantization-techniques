@@ -1,8 +1,9 @@
 % ─── Slide: Analog MVM Signal Path ───────────────────────────────────────────
-\begin{frame}[shrink=5]{Analog MVM Signal Path}
+\begin{frame}{Analog MVM Signal Path}
 
-  \vspace{0.7em}
+  \vfill
   \begin{center}
+  \resizebox{\linewidth}{!}{%
   \begin{tikzpicture}[
       every node/.style={font=\small},
       q/.style={draw=mybluedark, rounded corners=3pt, fill=myblue!22,
@@ -39,8 +40,9 @@
     \draw[arr] (A)--(yb);
 
 
-  \end{tikzpicture}
+  \end{tikzpicture}}
   \end{center}
+  \vfill
 
   \note{Показываю общую схему. Линейный слой проходит через два ключевых этапа: сначала квантизация весов и активаций, потом аналоговое умножение матриц, результат которого читается через АЦП.}
 

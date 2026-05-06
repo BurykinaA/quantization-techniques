@@ -11,10 +11,12 @@
     \midrule
     \multirow{6}{*}{Llama-3.2-1B}
         & FP16            & \textbf{8.68}  & \textbf{13.13} & \textbf{64.19} & \textbf{32.15} & \textbf{63.06} \\
-        & INT8 PTQ        & 18.96 & 27.27 & —     & —     & —     \\
-        & INT8+ADC PTQ    & 17.18 & 30.05 & 44.87 & 27.03 & 55.80 \\
-        & INT4 PTQ        & 18.06 & 29.05 & —     & —     & —     \\
-        & INT4+ADC PTQ    & 28.25 & 47.61 & 40.37 & 24.43 & 52.25 \\
+        \cmidrule(l){2-7}
+        & INT8 PTQ        & 19.32 & 28.08 & 57.07 & 26.78 & 57.06 \\
+        & INT8+ADC PTQ    & 16.85 & 29.56 & 45.04 & 26.83 & 56.59 \\
+        \cmidrule(l){2-7}
+        & INT4 PTQ        & 17.83 & 28.58 & 50.72 & 23.68 & 55.96 \\
+        & INT4+ADC PTQ    & 26.66 & 45.62 & 40.03 & 24.41 & 53.43 \\
         \rowcolor{mygreen!12}
         & INT4+ADC+LoRA   & \best{14.03} & \best{23.20} & \best{49.96} & \best{25.72} & 53.67 \\
     \bottomrule

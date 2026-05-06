@@ -10,10 +10,10 @@
 | Model | Method | Wiki PPL | C4 PPL | HellaSwag | MMLU | WinoGrande |
 |-------|--------|:--------:|:------:|:---------:|:----:|:----------:|
 | Llama-3.2-1B | FP16             | **8.68**     | **13.13**    | **64.19** | **32.15** | **63.06** |
-|              | INT8 PTQ         | 18.96        | 27.27        | —         | —         | —         |
-|              | INT8+ADC PTQ     | 17.18        | 30.05        | 44.87     | 27.03     | 55.80     |
-|              | INT4 PTQ         | 18.06        | 29.05        | —         | —         | —         |
-|              | INT4+ADC PTQ     | 28.25        | 47.61        | 40.37     | 24.43     | 52.25     |
+|              | INT8 PTQ         | 19.32        | 28.08        | 57.07     | 26.78     | 57.06     |
+|              | INT8+ADC PTQ     | 16.85        | 29.56        | 45.04     | 26.83     | 56.59     |
+|              | INT4 PTQ         | 17.83        | 28.58        | 50.72     | 23.68     | 55.96     |
+|              | INT4+ADC PTQ     | 26.66        | 45.62        | 40.03     | 24.41     | 53.43     |
 |              | INT4+ADC+LoRA    | **14.03**    | **23.20**    | **49.96** | **25.72** | 53.67     |
 | Llama-3.2-3B | FP16             | **6.98**     | **10.58**    | **74.15** | **56.67** | **72.22** |
 |              | INT8 PTQ         | 10.37        | 17.01        | —         | —         | —         |
@@ -40,15 +40,22 @@
 
 **1B observations (now with bypass + accuracy):**
 - **INT4+ADC+LoRA wins on every metric except WinoGrande** vs INT8+ADC
-  PTQ: Wiki 14.03 vs 17.18, C4 23.20 vs 30.05, HellaSwag 49.96 vs 44.87,
-  MMLU 25.72 vs 27.03 (close), WinoGrande 53.67 vs 55.80. LoRA recovers
-  the PTQ → ADC gap (28.25 → 14.03 Wiki, 47.61 → 23.20 C4) and improves
-  HellaSwag by +9.6 points over INT4+ADC PTQ.
-- **Bypass / ADC gap is small for INT8** (18.96 → 17.18 Wiki, ADC actually
-  *better* by 1.8 PPL — within reproduction noise) and **large for INT4**
-  (18.06 → 28.25 Wiki, ADC ×1.56 worse). LoRA partially closes the INT4
+  PTQ: Wiki 14.03 vs 16.85, C4 23.20 vs 29.56, HellaSwag 49.96 vs 45.04,
+  MMLU 25.72 vs 26.83 (close), WinoGrande 53.67 vs 56.59. LoRA recovers
+  the PTQ → ADC gap (26.66 → 14.03 Wiki, 45.62 → 23.20 C4) and improves
+  HellaSwag by +9.9 points over INT4+ADC PTQ.
+- **Bypass / ADC gap is small for INT8** (19.32 → 16.85 Wiki, ADC actually
+  *better* by 2.5 PPL — within reproduction noise) and **large for INT4**
+  (17.83 → 26.66 Wiki, ADC ×1.50 worse). LoRA partially closes the INT4
   gap (18.61 / 14.03) — the LoRA "fixes" ADC distortion, not the INT
   rounding error itself.
+- **HellaSwag traces both quantization stages.** FP16 = 64.19. INT8
+  bypass = 57.07 (−7 from FP from INT rounding alone), INT8+ADC = 45.04
+  (−12 more from the ADC floor). INT4 bypass = 50.72 (−13 from FP),
+  INT4+ADC = 40.03 (−11 more from ADC). The ADC step costs ~10–12
+  HellaSwag points on top of integer rounding, regardless of bit-width
+  — consistent with the bypass→ADC PPL gap being driven by ADC
+  resolution rather than the INT layer itself.
 - MMLU and WinoGrande for INT4+LoRA are essentially at INT4 PTQ level
   (within noise). PPL recovery is much stronger than zero-/few-shot
   accuracy recovery — likely because the calibration set is text-only.
@@ -65,11 +72,8 @@ Stage B for more epochs.
 
 **Re-run plan (remaining work):**
 1. Investigate / re-run **3B INT8+ADC** (catastrophic).
-2. Re-run **1B INT4+ADC PTQ** — Wiki 28.25 is noticeably worse than the
-   thesis result (~27.5). Could be the smaller per-token amax behaviour
-   in the new pipeline; worth a sanity rerun on a different seed.
-3. Run remaining 3B configs (INT4 PTQ / INT4+ADC PTQ / INT4+LoRA).
-4. Run all 8B quantized configs. Re-run 8B FP to capture lm-eval.
+2. Run remaining 3B configs (INT4 PTQ / INT4+ADC PTQ / INT4+LoRA).
+3. Run all 8B quantized configs. Re-run 8B FP to capture lm-eval.
 
 ```bash
 SKIP_COMPLETED=1 bash ADC/llama/run_paper_comparison.sh

@@ -68,6 +68,8 @@
         \draw[garr] (r_d2)--(r_dots); \draw[garr] (r_dots)--(r_dN);
 
         \begin{pgfonlayer}{background}
+          \node[inner sep=7pt, draw=mygray!40, dashed, fill=mygray!5,
+                rounded corners=7pt, fit=(r_x)(r_prob)] {};
           \node[inner sep=5pt, draw=myorange!60, fill=myorange!8, rounded corners=5pt,
                 fit=(r_d0)] (rb0) {};
         \end{pgfonlayer}
@@ -159,6 +161,8 @@
         \draw[garr] (r_d2)--(r_dots); \draw[garr] (r_dots)--(r_dN);
 
         \begin{pgfonlayer}{background}
+          \node[inner sep=7pt, draw=mygray!40, dashed, fill=mygray!5,
+                rounded corners=7pt, fit=(r_x)(r_prob)] {};
           \node[inner sep=5pt, draw=mygreen!60, fill=mygreen!8, rounded corners=5pt,
                 fit=(r_d0)] (rd0_bg) {};
           \node[inner sep=5pt, draw=myorange!60, fill=myorange!8, rounded corners=5pt,
@@ -225,9 +229,10 @@
     \node (yh) at (8.2, 0) {$\hat y$};
     \draw[arr] (A)--(yh);
 
+    \coordinate (sbox_pad) at ([xshift=0.9cm]yh);
     \begin{pgfonlayer}{background}
       \node[inner sep=9pt, draw=mygray!50, fill=mygray!7, rounded corners=8pt,
-            fit=(w)(qw)(wb)(x)(qx)(xb)(T)(y)(A)(yh)] (sbox) {};
+            fit=(w)(qw)(wb)(x)(qx)(xb)(T)(y)(A)(yh)(sbox_pad)] (sbox) {};
     \end{pgfonlayer}
     \node[font=\scriptsize\bfseries, text=mygray!80,
           anchor=south west, xshift=4pt, yshift=2pt] at (sbox.north west) {Student};

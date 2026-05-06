@@ -24,14 +24,13 @@
       \vspace{0.6em}
       \begin{center}
       \begin{tikzpicture}[every node/.style={font=\tiny}, node distance=0.25cm,
-                         box/.style={draw, rounded corners=2pt, minimum width=1.6cm, minimum height=0.45cm, align=center}]
+                         box/.style={draw, rounded corners=2pt, minimum width=2.6cm, minimum height=0.45cm, align=center}]
         \node[box, fill=mygray!15] (t) {\textbf{Teacher} layer\\ FP, frozen};
         \node[box, fill=myorange!25, below=0.35cm of t] (s) {\textbf{Student} layer\\ quantised, $T$ trainable};
-        \node[right=0.4cm of t, font=\scriptsize] (y1) {$y^\star$};
-        \node[right=0.4cm of s, font=\scriptsize] (y2) {$\hat y$};
+        \node[right=0.4cm of s, font=\scriptsize] (y2) {$\hat y\phantom{^\star}$};
+        \node[font=\scriptsize] (y1) at (y2 |- t) {$y^\star\phantom{\hat{}}$};
         \draw[-{Latex}] (t.east) -- (y1);
         \draw[-{Latex}] (s.east) -- (y2);
-        \node[right=0.4cm of y1] (loss) {};
         \draw[decorate, decoration={brace, amplitude=3pt}] (y1.east) -- (y2.east) node[midway, right=3pt, font=\scriptsize] {$\|\cdot\|^2$};
       \end{tikzpicture}
       \end{center}
