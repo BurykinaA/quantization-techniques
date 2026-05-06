@@ -194,7 +194,7 @@ def calibrate_with_config(model, dataloader, device, *, add_diag, epochs):
     adc_config = {
         "bx": 4, "bw": 4, "ba": 8, "k": 16,
         "mvm_limit": 256,
-        "signed_activations": True,   # bipolar ADC (matches v2/v4 + paper_comparison default)
+        "signed_activations": True,   # symmetric quantisation: codes in [-7, 7]
     }
     apply_flatquant_to_model(
         model,
