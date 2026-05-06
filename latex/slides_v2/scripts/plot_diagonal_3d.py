@@ -116,6 +116,13 @@ def capture_post_kron_activation(model, tok, layer_idx, proj_name, text, device,
     captured = {}
 
     def hook(module, inp, out):
+        # The same KroneckerTransform is invoked both on activations
+        # (3D: batch×seq×hidden) and weights (2D, via train_forward with
+        # inv_t=True). Keep only the activation call.
+        if "output" in captured:
+            return
+        if out.dim() != 3:
+            return
         captured["output"] = out.detach().float().cpu()
 
     handle = target.register_forward_hook(hook)
@@ -127,6 +134,12 @@ def capture_post_kron_activation(model, tok, layer_idx, proj_name, text, device,
     finally:
         handle.remove()
 
+    if "output" not in captured:
+        raise RuntimeError(
+            f"Hook on {trans_attr} never saw a 3D activation — did the model "
+            f"actually run _trans_forward? Check that calibration completed and "
+            f"_ori_mode is False."
+        )
     return captured["output"][0].numpy()
 
 
