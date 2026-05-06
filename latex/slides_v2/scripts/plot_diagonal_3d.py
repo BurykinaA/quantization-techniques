@@ -70,16 +70,20 @@ class WikiTextLoader:
 
 # ── Activation capture ──────────────────────────────────────────────────────
 
-def capture_post_kron_activation(model, tok, layer_idx, proj_name, text, device, n_tokens):
-    """Capture input activations to layers[layer_idx].mlp.<proj_name>.
+def _trans_attr_for(proj_name):
+    """Map a projection name to the KroneckerTransform that produces its input."""
+    if proj_name in ("up_proj", "gate_proj"):
+        return "up_gate_trans"
+    if proj_name == "down_proj":
+        return "down_trans"
+    raise ValueError(proj_name)
 
-    When FlatQuantLlamaMLP wraps the MLP, gate_proj/up_proj receive activations
-    AFTER up_gate_trans is applied; down_proj receives activations after
-    down_trans.  So hooking the input of these projections gives the
-    post-Kronecker (and post-diag, if enabled) activation we want to plot.
-    """
-    layer = model.model.layers[layer_idx]
-    target = getattr(layer.mlp, proj_name)
+
+def capture_raw_activation(model, tok, layer_idx, proj_name, text, device, n_tokens):
+    """Capture INPUT to layers[layer_idx].mlp.<proj_name> on the original
+    (pre-FlatQuant) model. proj_name is a plain nn.Linear here, so a regular
+    forward hook fires."""
+    target = getattr(model.model.layers[layer_idx].mlp, proj_name)
 
     captured = {}
 
@@ -98,11 +102,32 @@ def capture_post_kron_activation(model, tok, layer_idx, proj_name, text, device,
     return captured["input"][0].numpy()
 
 
-def capture_raw_activation(model, tok, layer_idx, proj_name, text, device, n_tokens):
-    """Capture activations on the unwrapped, original model — pre-FlatQuant."""
-    return capture_post_kron_activation(
-        model, tok, layer_idx, proj_name, text, device, n_tokens,
-    )
+def capture_post_kron_activation(model, tok, layer_idx, proj_name, text, device, n_tokens):
+    """Capture the OUTPUT of the KroneckerTransform that feeds <proj_name>.
+
+    In FlatQuantLlamaMLP._trans_forward the projections are called via
+    ``train_forward(...)`` which bypasses nn.Module.__call__ — so a hook on
+    up_proj / down_proj never fires.  Hook the trans module instead: its
+    output is precisely the post-Kronecker (and post-diag, if enabled)
+    activation we want to plot."""
+    trans_attr = _trans_attr_for(proj_name)
+    target = getattr(model.model.layers[layer_idx].mlp, trans_attr)
+
+    captured = {}
+
+    def hook(module, inp, out):
+        captured["output"] = out.detach().float().cpu()
+
+    handle = target.register_forward_hook(hook)
+    try:
+        ids = tok(text, return_tensors="pt", truncation=True,
+                  max_length=n_tokens).input_ids.to(device)
+        with torch.no_grad():
+            model(ids)
+    finally:
+        handle.remove()
+
+    return captured["output"][0].numpy()
 
 
 # ── Plot ────────────────────────────────────────────────────────────────────
