@@ -2,7 +2,7 @@ PWD /Users/alina_burykina/git_repos/quantization-techniques/latex/slides_v2
 INPUT /usr/local/texlive/2026/texmf.cnf
 INPUT /usr/local/texlive/2026/texmf-dist/web2c/texmf.cnf
 INPUT /usr/local/texlive/2026/texmf-var/web2c/pdftex/pdflatex.fmt
-INPUT /Users/alina_burykina/git_repos/quantization-techniques/latex/slides_v2/main.tex
+INPUT main.tex
 OUTPUT main.log
 INPUT /usr/local/texlive/2026/texmf-dist/tex/latex/beamer/beamer.cls
 INPUT /usr/local/texlive/2026/texmf-dist/tex/latex/beamer/beamer.cls
@@ -670,12 +670,6 @@ INPUT ./sections/12_adc_lora.tex
 INPUT ./sections/12_adc_lora.tex
 INPUT sections/12_adc_lora.tex
 INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/jknappen/ec/tcss0700.tfm
-INPUT ./sections/13_ablations.tex
-INPUT ./sections/13_ablations.tex
-INPUT ./sections/13_ablations.tex
-INPUT ./sections/13_ablations.tex
-INPUT sections/13_ablations.tex
-INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/jknappen/ec/ecsi0700.tfm
 INPUT ./sections/14_final_results.tex
 INPUT ./sections/14_final_results.tex
 INPUT ./sections/14_final_results.tex
@@ -686,6 +680,12 @@ INPUT ./sections/15_takeaways.tex
 INPUT ./sections/15_takeaways.tex
 INPUT ./sections/15_takeaways.tex
 INPUT sections/15_takeaways.tex
+INPUT ./sections/13_ablations.tex
+INPUT ./sections/13_ablations.tex
+INPUT ./sections/13_ablations.tex
+INPUT ./sections/13_ablations.tex
+INPUT sections/13_ablations.tex
+INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/jknappen/ec/ecsi0700.tfm
 INPUT ./sections/A_backup.tex
 INPUT ./sections/A_backup.tex
 INPUT ./sections/A_backup.tex

@@ -9,14 +9,12 @@
     \toprule
     \textbf{Method} & \textbf{bits (w\,/\,a)} & $\bypass$ & $\adcppl{}$ \\
     \midrule
-    FP baseline                        & 16\,/\,16 & 8.68 & 8.68 \\
+    FP baseline                        & 16\,/\,16 & 8.68 & — \\
     \midrule
     \rowcolor{mybluedark!5}
     FlatQuant per-proj MSE             & 8\,/\,8   & \textbf{10.01} & 28.86 \\
     \rowcolor{mybluedark!5}
-    \;+ propagated calib (block)       & 8\,/\,8   & 11.00 & 14.41 \\
-    \rowcolor{mybluedark!5}
-    \;+ staged + diag (full pipeline)  & 8\,/\,8   & 19.32 & \best{16.85} \\
+    \;+ propagated calib (block)       & 8\,/\,8   & 11.00 & \best{14.41} \\
     \midrule
     \rowcolor{myorange!7}
     FlatQuant per-proj MSE             & 4\,/\,4   & 15.41 & 2354 \\

@@ -5,18 +5,9 @@
   \begin{enumerate}
     \setlength\itemsep{3.5em}
     \item \textbf{First adaptation of FlatQuant to analog ADC.}
-          Hardware floor quantisation (fixed $\delta$) integrated
-          into block-wise calibration.
     \item \textbf{Cross-block $\alpha$-mixed propagation is the
-          biggest PTQ lever.} On top of FlatQuant's block-wise
-          objective, halves INT8 ADC PPL ($28.86 \to 14.41$);
-          enables INT4 recovery.
-    \item \textbf{Selective diagonal placement.} MLP-first /
-          attn-second staged training; \texttt{down\_trans} is the
-          key driver inside MLP.
+          biggest PTQ lever.}
+    \item \textbf{Selective diagonal placement.}
     \item \textbf{Post-ADC LoRA breaks the PTQ plateau.}
-          $0.22\%$ extra params $\to$ INT4 (14.03) matches INT8
-          PTQ (16.85). Generalises to C4
-          ($45.6 \to 23.2$ ADC PPL, $-50\%$).
   \end{enumerate}
 \end{frame}
