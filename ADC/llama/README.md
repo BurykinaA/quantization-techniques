@@ -10,16 +10,16 @@
 | Model | Method | Wiki PPL | C4 PPL | HellaSwag | MMLU | WinoGrande |
 |-------|--------|:--------:|:------:|:---------:|:----:|:----------:|
 | Llama-3.2-1B | FP16             | **8.68**     | **13.13**    | **64.19** | **32.15** | **63.06** |
-|              | INT8 PTQ         | 18.96        | 27.27        | —         | —         | —         |
-|              | INT8+ADC PTQ     | 17.18        | 30.05        | 44.87     | 27.03     | 55.80     |
-|              | INT4 PTQ         | 18.06        | 29.05        | —         | —         | —         |
-|              | INT4+ADC PTQ     | 28.25        | 47.61        | 40.37     | 24.43     | 52.25     |
+|              | INT8 PTQ         | 19.32        | 28.08        | 57.07     | 26.78     | 57.06     |
+|              | INT8+ADC PTQ     | 16.85        | 29.56        | 45.04     | 26.83     | 56.59     |
+|              | INT4 PTQ         | 17.83        | 28.58        | 50.72     | 23.68     | 55.96     |
+|              | INT4+ADC PTQ     | 26.66        | 45.62        | 40.03     | 24.41     | 53.43     |
 |              | INT4+ADC+LoRA    | **14.03**    | **23.20**    | **49.96** | **25.72** | 53.67     |
 | Llama-3.2-3B | FP16             | **6.98**     | **10.58**    | **74.15** | **56.67** | **72.22** |
 |              | INT8 PTQ         | 10.37        | 17.01        | —         | —         | —         |
 |              | INT8+ADC PTQ     | ⚠ 157810     | ⚠ 136625     | 26.77     | 26.63     | 48.38     |
-|              | INT4 PTQ         | _pending_    | _pending_    | —         | —         | —         |
-|              | INT4+ADC PTQ     | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
+|              | INT4 PTQ         | 11.24        | 17.90        | 63.20     | 40.72     | 63.30     |
+|              | INT4+ADC PTQ     | ⚠ 889.08     | ⚠ 1055.90    | 30.70     | 23.88     | 51.54     |
 |              | INT4+ADC+LoRA    | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
 | Llama-3.1-8B | FP16             | **5.58**     | **8.93**     | _pending_ | _pending_ | _pending_ |
 |              | INT8 PTQ         | _pending_    | _pending_    | —         | —         | —         |
@@ -28,48 +28,68 @@
 |              | INT4+ADC PTQ     | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
 |              | INT4+ADC+LoRA    | _pending_    | _pending_    | _pending_ | _pending_ | _pending_ |
 
-**Status (2026-05-05, partial):**
+**Status (2026-05-09, partial):**
 - **Llama-3.2-1B — complete** (all 5 methods, both bypass and ADC PPL,
   full lm-eval triple).
-- **Llama-3.2-3B — partial.** FP16 done; INT8 PTQ bypass excellent (10.37
-  Wiki, 17.01 C4 — close to FP); **INT8+ADC PTQ catastrophic
-  (157810 / 136625 PPL on Wiki / C4)**. INT4 / LoRA still running.
-- **Llama-3.1-8B — only FP16 (PPL only).** Quantized configs not yet run.
-  The 8B FP entry in the JSON is from before `lm-eval` was installed on
-  the remote, so its accuracy columns are also pending re-eval.
+- **Llama-3.2-3B — mostly complete except LoRA.** FP, INT8 PTQ, INT8+ADC,
+  INT4 PTQ, INT4+ADC all done with lm-eval. **Both INT8+ADC and INT4+ADC
+  catastrophically diverge** (157 810 and 889 PPL respectively) while
+  their bypass paths are healthy (10.37 / 11.24). INT4+LoRA still
+  pending.
+- **Llama-3.1-8B — only FP16 (PPL only).** Quantized configs not yet
+  run. The 8B FP entry in the JSON is from before `lm-eval` was
+  installed on the remote, so its accuracy columns are also pending
+  re-eval.
 
 **1B observations (now with bypass + accuracy):**
 - **INT4+ADC+LoRA wins on every metric except WinoGrande** vs INT8+ADC
-  PTQ: Wiki 14.03 vs 17.18, C4 23.20 vs 30.05, HellaSwag 49.96 vs 44.87,
-  MMLU 25.72 vs 27.03 (close), WinoGrande 53.67 vs 55.80. LoRA recovers
-  the PTQ → ADC gap (28.25 → 14.03 Wiki, 47.61 → 23.20 C4) and improves
-  HellaSwag by +9.6 points over INT4+ADC PTQ.
-- **Bypass / ADC gap is small for INT8** (18.96 → 17.18 Wiki, ADC actually
-  *better* by 1.8 PPL — within reproduction noise) and **large for INT4**
-  (18.06 → 28.25 Wiki, ADC ×1.56 worse). LoRA partially closes the INT4
-  gap (18.61 / 14.03) — the LoRA "fixes" ADC distortion, not the INT
-  rounding error itself.
+  PTQ: Wiki 14.03 vs 16.85, C4 23.20 vs 29.56, HellaSwag 49.96 vs
+  45.04, MMLU 25.72 vs 26.83 (close), WinoGrande 53.67 vs 56.59. LoRA
+  recovers the PTQ → ADC gap (26.66 → 14.03 Wiki, 45.62 → 23.20 C4)
+  and improves HellaSwag by +9.9 points over INT4+ADC PTQ.
+- **Bypass / ADC gap is small for INT8** (19.32 → 16.85 Wiki, ADC
+  actually *better* by 2.5 PPL — within reproduction noise) and
+  **large for INT4** (17.83 → 26.66 Wiki, ADC ×1.50 worse). LoRA
+  partially closes the INT4 gap (18.61 / 14.03) — the LoRA "fixes"
+  ADC distortion, not the INT rounding error itself.
+- **HellaSwag traces both quantization stages.** FP16 = 64.19. INT8
+  bypass = 57.07 (−7 from FP from INT rounding alone), INT8+ADC = 45.04
+  (−12 more from the ADC floor). INT4 bypass = 50.72 (−13 from FP),
+  INT4+ADC = 40.03 (−11 more from ADC). The ADC step costs ~10–12
+  HellaSwag points on top of integer rounding, regardless of
+  bit-width.
 - MMLU and WinoGrande for INT4+LoRA are essentially at INT4 PTQ level
   (within noise). PPL recovery is much stronger than zero-/few-shot
   accuracy recovery — likely because the calibration set is text-only.
 
-**3B INT8+ADC catastrophe — needs investigation.**
-Bypass is healthy (10.37 / 17.01) but ADC produces ~10⁵ PPL.
-`dead_rate_mean = 0.17`, `reconstruction_rel = 0.0156` — both look
-*better* than 1B INT8+ADC. Most likely cause: with the smaller
-`fq_cali_bsz=4` (set down from 16 to fit 3B in memory), the Kronecker
-factors and diagonals underfit, and the resulting transforms shape the
-pre-ADC signal in a way that explodes through deeper layers.
-Worth trying: bump bsz back to 8 with `expandable_segments`, or train
-Stage B for more epochs.
+**3B observations (new — both ADC configs catastrophic):**
+- **INT4 bypass is excellent** — 11.24 Wiki / 17.90 C4 — close to FP
+  (6.98 / 10.58). HellaSwag bypass 63.20 (FP 74.15), MMLU 40.72 (FP
+  56.67). FlatQuant transforms work fine, the digital part is healthy.
+- **Both ADC paths blow up.** INT8+ADC = 157 810 / 136 625 PPL;
+  INT4+ADC = 889 / 1056 PPL. INT4 ADC is "less broken" than INT8 ADC
+  by two orders of magnitude — but still 80× the bypass. Both are far
+  from usable.
+- **The 3B catastrophe pattern is robust across bit-widths**, which
+  means the cause is *not* something INT-bit-specific. Most likely
+  candidates: (a) `fq_cali_bsz=4` (down from 16 for memory) — Kronecker
+  factors underfit, transforms shape pre-ADC signal poorly; (b)
+  α-mixed Stage B propagation amplifies the underfit pre-ADC noise
+  through deeper layers in 3B (28 layers vs 16 in 1B).
+- **HellaSwag on 3B INT4+ADC = 30.70** (vs FP 74.15) — the model is
+  still answering above random (25%), so it has not collapsed to
+  garbage; it is just heavily degraded. Same picture on 3B INT8+ADC
+  (HS=26.77, near random).
 
 **Re-run plan (remaining work):**
-1. Investigate / re-run **3B INT8+ADC** (catastrophic).
-2. Re-run **1B INT4+ADC PTQ** — Wiki 28.25 is noticeably worse than the
-   thesis result (~27.5). Could be the smaller per-token amax behaviour
-   in the new pipeline; worth a sanity rerun on a different seed.
-3. Run remaining 3B configs (INT4 PTQ / INT4+ADC PTQ / INT4+LoRA).
-4. Run all 8B quantized configs. Re-run 8B FP to capture lm-eval.
+1. **Diagnose 3B ADC catastrophe.** Two angles: (a) bump
+   `fq_cali_bsz` to 8 with `expandable_segments=True` and re-run both
+   3B ADC configs; (b) run with α=1 (full propagation, no clean FP
+   loss) to check if α-mix is the culprit on deeper models.
+2. Run **3B INT4+LoRA** — even on top of the catastrophic INT4+ADC
+   PTQ baseline (889 PPL), LoRA may pull it down significantly. Worth
+   trying as a stress test of the post-ADC LoRA approach.
+3. Run all **8B** quantized configs. Re-run 8B FP to capture lm-eval.
 
 ```bash
 SKIP_COMPLETED=1 bash ADC/llama/run_paper_comparison.sh
