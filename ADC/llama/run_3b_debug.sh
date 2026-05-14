@@ -142,15 +142,30 @@ run_config "3b_int4_bsz8" \
     "${COMMON_EVAL[@]}"
 
 # D. Same per-step batch as 1B (cali_bsz=16, accum=1). C halved ADC PPL
-#    (889 -> 528) by going 4 -> 8; this run tests if pushing all the way
-#    to 1B's per-step batch closes the rest of the gap.
-#    Risk: Stage B with bsz=16 on 3B was reported OOM in run_paper_comparison
-#    comments. expandable_segments is already enabled. If this OOMs, drop
-#    the next experiment to cali_bsz=12, grad_accum=1 (effective 12).
+#    (889 -> 528) by going 4 -> 8; this tests if pushing all the way to
+#    1B's per-step batch closes the rest of the gap.
+#    KNOWN OOM: confirmed Stage B dual-forward (alpha-mix) does not fit at
+#    bsz=16 on 3B even with expandable_segments. Kept here for documentation.
 run_config "3b_int4_bsz16" \
     "${BASE_INT4[@]}" \
     --fq_cali_bsz 16 \
     --fq_grad_accum_steps 1 \
+    --fq_stage_b_epochs 10 \
+    --fq_stage_b_prop_alpha 0.5 \
+    --fq_stage_b_diag_attn \
+    "${COMMON_EVAL[@]}"
+
+# E. Best per-step batch (8) + larger effective batch via grad_accum.
+#    C (bsz=8, accum=2, effective=16) -> 528 PPL. This run keeps the proven
+#    per-step bsz=8 but doubles effective batch to 32 via grad_accum=4.
+#    Two questions in one experiment:
+#      (1) Does grad_accum reduce the gradient noise that bsz=8 partly fixed?
+#      (2) Does combining per-step batch + grad_accum push below ~528 PPL?
+#    Memory cost is the same as C (per-step bsz=8), no OOM risk.
+run_config "3b_int4_bsz8_accum4" \
+    "${BASE_INT4[@]}" \
+    --fq_cali_bsz 8 \
+    --fq_grad_accum_steps 4 \
     --fq_stage_b_epochs 10 \
     --fq_stage_b_prop_alpha 0.5 \
     --fq_stage_b_diag_attn \
