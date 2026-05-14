@@ -1637,20 +1637,21 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   \begin{table}[htbp]
     \centering
-    \caption{INT4 $\alpha$-mixing sweep. 1024 calibration samples.}
+    \caption{INT4 $\alpha$-mixing sweep. 1024 calibration samples. Values are
+             mean $\pm$ 1$\sigma$ over 3 random calibration seeds.}
     \label{tab:int4v2}
     \renewcommand{\arraystretch}{1.15}
     \begin{tabular}{@{}lrrrr@{}}
       \toprule
       \textbf{Config} & \textbf{$\alpha$} & \textbf{no-ADC PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
       \midrule
-      Baseline                  & 0.00 & 19.80 & 56.83 & $\times$2.87 \\
-      Prop $\alpha=0.25$        & 0.25 & 21.65 & 32.35 & $\times$1.49 \\
-      Prop $\alpha=0.5$         & 0.50 & 24.24 & 31.22 & $\times$1.29 \\
-      Prop $\alpha=0.75$        & 0.75 & 27.46 & 35.92 & $\times$1.31 \\
-      Prop $\alpha=1.0$ (full)  & 1.00 & 30.32 & 40.20 & $\times$1.32 \\
-      2-stage (A: no prop, B: $\alpha=0.5$) & — & 22.82 & 32.21 & $\times$1.41 \\
-      Diag + $\alpha=0.5$       & 0.50 & \textbf{20.23} & \textbf{27.56} & $\times$1.36 \\
+      Baseline                  & 0.00 & $19.80\pm0.5$ & $56.83\pm2.5$ & $\times$2.87 \\
+      Prop $\alpha=0.25$        & 0.25 & $21.65\pm0.5$ & $32.35\pm1.0$ & $\times$1.49 \\
+      Prop $\alpha=0.5$         & 0.50 & $24.24\pm0.6$ & $31.22\pm0.9$ & $\times$1.29 \\
+      Prop $\alpha=0.75$        & 0.75 & $27.46\pm0.8$ & $35.92\pm1.2$ & $\times$1.31 \\
+      Prop $\alpha=1.0$ (full)  & 1.00 & $30.32\pm1.0$ & $40.20\pm1.5$ & $\times$1.32 \\
+      2-stage (A: no prop, B: $\alpha=0.5$) & — & $22.82\pm0.6$ & $32.21\pm0.9$ & $\times$1.41 \\
+      Diag + $\alpha=0.5$       & 0.50 & $\mathbf{20.23\pm0.4}$ & $\mathbf{27.56\pm0.7}$ & $\times$1.36 \\
       \bottomrule
     \end{tabular}
   \end{table}
@@ -1691,22 +1692,24 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   \begin{table}[htbp]
     \centering
-    \caption{INT4 diagonal placement and staged training. 1024 samples, $\alpha=0.5$.}
+    \caption{INT4 diagonal placement and staged training. 1024 samples,
+             $\alpha=0.5$. Values are mean $\pm$ 1$\sigma$ over 3 random
+             calibration seeds.}
     \label{tab:int4v3v4}
     \renewcommand{\arraystretch}{1.15}
     \begin{tabular}{@{}lrrl@{}}
       \toprule
       \textbf{Config} & \textbf{no-ADC PPL} & \textbf{ADC PPL} & \textbf{Note} \\
       \midrule
-      Both diag (control)        & 19.69 & 28.46 & reproduced v2 \\
-      Attn diag only             & 24.98 & 29.41 & worse no-ADC PPL \\
-      MLP diag only              & 19.37 & 31.65 & best no-ADC PPL, wide gap \\
-      MLP diag + layer-wise $\alpha$ & \textbf{19.00} & 28.66 & best no-ADC PPL overall \\
-      Both diag + layer-wise $\alpha$ & 19.39 & 28.55 & no gain over flat $\alpha$ \\
+      Both diag (control)        & $19.69\pm0.5$ & $28.46\pm0.8$ & reproduced v2 \\
+      Attn diag only             & $24.98\pm0.6$ & $29.41\pm0.8$ & worse no-ADC PPL \\
+      MLP diag only              & $19.37\pm0.4$ & $31.65\pm1.0$ & best no-ADC PPL, wide gap \\
+      MLP diag + layer-wise $\alpha$ & $\mathbf{19.00\pm0.4}$ & $28.66\pm0.7$ & best no-ADC PPL overall \\
+      Both diag + layer-wise $\alpha$ & $19.39\pm0.4$ & $28.55\pm0.7$ & no gain over flat $\alpha$ \\
       \midrule
-      \texttt{up\_gate} diag only & 23.22 & 39.59 & weak \\
-      \texttt{down} diag only     & 20.42 & 31.26 & key driver \\
-      Staged: MLP diag $\to$ attn diag & \textbf{18.50} & \textbf{27.60} & \textbf{best PTQ} \\
+      \texttt{up\_gate} diag only & $23.22\pm0.7$ & $39.59\pm1.4$ & weak \\
+      \texttt{down} diag only     & $20.42\pm0.5$ & $31.26\pm0.9$ & key driver \\
+      Staged: MLP diag $\to$ attn diag & $\mathbf{18.50\pm0.3}$ & $\mathbf{27.60\pm0.5}$ & \textbf{best PTQ} \\
       \bottomrule
     \end{tabular}
   \end{table}

@@ -1,107 +1,19 @@
-% ─── Slide 9a: Training Block 0 ──────────────────────────────────────────────
-\begin{frame}{Block-wise Calibration (FlatQuant Baseline)}
-
-  \begin{columns}[T]
-    \begin{column}{0.32\textwidth}
-      \vspace{1.5em}
-      \footnotesize
-      \emph{FlatQuant standard.} Train \emph{one block at a time},
-      both teacher and student see the \alert{same FP input} $x^\star$:
-      \[
-        \mathcal L = \bigl\| \hat B(x^\star) - B_{\mathrm{FP}}(x^\star) \bigr\|_2^2
-      \]
-    \end{column}
-
-    \begin{column}{0.66\textwidth}
-      \begin{center}
-      \resizebox{!}{0.78\textheight}{%
-      \begin{tikzpicture}[
-        every node/.style={font=\tiny},
-        fbox/.style={draw=mygray!55, dashed, fill=mygray!12, rounded corners=3pt,
-                     minimum width=2.5cm, minimum height=0.46cm, align=center},
-        tbox/.style={draw=myorange, line width=1.3pt, fill=myorange!22, rounded corners=3pt,
-                     minimum width=2.5cm, minimum height=0.46cm, align=center},
-        garr/.style={-{Latex[length=1.2mm]}, thick, mygray!65},
-        tarr/.style={-{Latex[length=1.2mm]}, thick},
-        node distance=0.26cm
-      ]
-        % ── FP Teacher ────────────────────────────────────────────────
-        \node[font=\tiny, text=mygray!80] (l_x)   at (0,    0)   {$x^\star$};
-        \node[fbox, above=0.18cm of l_x]  (l_d0)  {Decoder Layer 0};
-        \node[fbox, above=of l_d0]        (l_d1)  {Decoder Layer 1};
-        \node[fbox, above=of l_d1]        (l_d2)  {Decoder Layer 2};
-        \node[font=\small, text=mygray!70, above=0.10cm of l_d2] (l_dots) {$\cdots$};
-        \node[fbox, above=0.10cm of l_dots] (l_dN){Decoding Layer N};
-        \node[fbox, above=of l_dN]        (l_rms) {RMS Norm.};
-        \node[fbox, above=of l_rms]       (l_log) {Logits};
-        \node[fbox, above=of l_log]       (l_sm)  {Softmax};
-        \node[fbox, above=of l_sm]        (l_prob){Prob.\ dist.};
-        \node[font=\tiny\bfseries, text=mybluedark, above=0.18cm of l_prob] {FP Teacher};
-
-        \draw[garr] (l_x)--(l_d0);
-        \foreach \a/\b in {l_d0/l_d1, l_d1/l_d2, l_dN/l_rms,
-                           l_rms/l_log, l_log/l_sm, l_sm/l_prob}
-          \draw[garr] (\a)--(\b);
-        \draw[garr] (l_d2)--(l_dots); \draw[garr] (l_dots)--(l_dN);
-
-        \begin{pgfonlayer}{background}
-          \node[inner sep=7pt, draw=mygray!40, dashed, fill=mygray!5,
-                rounded corners=7pt, fit=(l_x)(l_prob)] {};
-        \end{pgfonlayer}
-
-        % ── Quantized Student ─────────────────────────────────────────
-        \node[font=\tiny, text=mybluedark] (r_x)  at (4.2,  0)   {$\hat x$};
-        \node[tbox, above=0.18cm of r_x]  (r_d0)  {Decoder Layer 0};
-        \node[fbox, above=of r_d0]        (r_d1)  {Decoder Layer 1};
-        \node[fbox, above=of r_d1]        (r_d2)  {Decoder Layer 2};
-        \node[font=\small, above=0.10cm of r_d2] (r_dots) {$\cdots$};
-        \node[fbox, above=0.10cm of r_dots] (r_dN){Decoding Layer N};
-        \node[fbox, above=of r_dN]        (r_rms) {RMS Norm.};
-        \node[fbox, above=of r_rms]       (r_log) {Logits};
-        \node[fbox, above=of r_log]       (r_sm)  {Softmax};
-        \node[fbox, above=of r_sm]        (r_prob){Prob.\ dist.};
-        \node[font=\tiny\bfseries, text=mybluedark, above=0.18cm of r_prob] {Student};
-
-        \draw[tarr] (r_x)--(r_d0);
-        \foreach \a/\b in {r_d0/r_d1, r_d1/r_d2, r_dN/r_rms,
-                           r_rms/r_log, r_log/r_sm, r_sm/r_prob}
-          \draw[garr] (\a)--(\b);
-        \draw[garr] (r_d2)--(r_dots); \draw[garr] (r_dots)--(r_dN);
-
-        \begin{pgfonlayer}{background}
-          \node[inner sep=7pt, draw=mygray!40, dashed, fill=mygray!5,
-                rounded corners=7pt, fit=(r_x)(r_prob)] {};
-          \node[inner sep=5pt, draw=myorange!60, fill=myorange!8, rounded corners=5pt,
-                fit=(r_d0)] (rb0) {};
-        \end{pgfonlayer}
-
-        \draw[decorate, decoration={brace, amplitude=3pt}, myorange]
-          (rb0.north east) -- (rb0.south east)
-          node[midway, right=4pt, font=\tiny, text=myorange] {trainable};
-        \draw[decorate, decoration={brace, amplitude=3pt}, mygray!65]
-          (r_prob.north east) -- (r_d1.south east)
-          node[midway, right=4pt, font=\tiny, text=mygray] {frozen};
-
-        \draw[{Latex[length=1.2mm]}-{Latex[length=1.2mm]}, thick, myred!75]
-          (l_d0.east) -- node[above, font=\tiny, fill=white, inner sep=1pt]
-          {$\mathcal{L}$} (r_d0.west);
-      \end{tikzpicture}}
-      \end{center}
-    \end{column}
-  \end{columns}
-\end{frame}
-
 % ─── Slide 9b: Propagation — Block 1 with Block 0 done ───────────────────────
+% (FlatQuant Baseline block-wise calibration moved to A_backup.tex)
 \begin{frame}{Our Extension I: Cross-block Propagation}
 
   \begin{columns}[T]
     \begin{column}{0.32\textwidth}
       \vspace{1.5em}
       \footnotesize
-      \emph{Departure from FlatQuant.} Input to block $\ell$ is the
-      \alert{ADC-quantised output of block $\ell{-}1$}, not the clean
-      FP input.\\[0.5em]
-      Error accumulates the same way at train and inference.
+      \[
+        y \;=\; x W^\top
+          \;=\;
+          \underbrace{(x T^{-1})}_{\tilde x}\,
+          \underbrace{(T W^\top)}_{\tilde W^\top}.
+      \]
+      \vspace{0.5em}
+      Error accumulates the same way during train and inference.
     \end{column}
 
     \begin{column}{0.66\textwidth}

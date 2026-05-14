@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.4.15)  13 MAY 2026 19:00
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.4.15)  14 MAY 2026 18:43
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
@@ -1331,33 +1331,33 @@ ptq_progression.pdf>]
 File: ../slides/figs/plot_alpha_sweep.pdf Graphic file (type pdf)
 <use ../slides/figs/plot_alpha_sweep.pdf>
 Package pdftex.def Info: ../slides/figs/plot_alpha_sweep.pdf  used on input lin
-e 1667.
+e 1668.
 (pdftex.def)             Requested size: 298.75264pt x 211.80374pt.
 <../slides/figs/plot_loss_landscape_alpha.pdf, id=759, 958.75641pt x 307.74048p
 t>
 File: ../slides/figs/plot_loss_landscape_alpha.pdf Graphic file (type pdf)
 <use ../slides/figs/plot_loss_landscape_alpha.pdf>
 Package pdftex.def Info: ../slides/figs/plot_loss_landscape_alpha.pdf  used on 
-input line 1677.
+input line 1678.
 (pdftex.def)             Requested size: 362.77525pt x 116.44014pt.
 
-Overfull \hbox (5.48384pt too wide) in paragraph at lines 1697--1712
+Overfull \hbox (14.66858pt too wide) in paragraph at lines 1700--1715
  [][] 
  []
 
-<../slides/figs/plot_diag_roles.pdf, id=761, 469.755pt x 289.08pt>
+[23 <../slides/figs/plot_alpha_sweep.pdf>] [24 <../slides/figs/plot_loss_landsc
+ape_alpha.pdf>]
+<../slides/figs/plot_diag_roles.pdf, id=863, 469.755pt x 289.08pt>
 File: ../slides/figs/plot_diag_roles.pdf Graphic file (type pdf)
 <use ../slides/figs/plot_diag_roles.pdf>
 Package pdftex.def Info: ../slides/figs/plot_diag_roles.pdf  used on input line
- 1723.
+ 1726.
 (pdftex.def)             Requested size: 264.60855pt x 162.83646pt.
-[23 <../slides/figs/plot_alpha_sweep.pdf>] [24 <../slides/figs/plot_loss_landsc
-ape_alpha.pdf>]
 <../slides/figs/plot_mlp_split_up_down.pdf, id=864, 397.485pt x 289.08pt>
 File: ../slides/figs/plot_mlp_split_up_down.pdf Graphic file (type pdf)
 <use ../slides/figs/plot_mlp_split_up_down.pdf>
 Package pdftex.def Info: ../slides/figs/plot_mlp_split_up_down.pdf  used on inp
-ut line 1734.
+ut line 1737.
 (pdftex.def)             Requested size: 264.60855pt x 192.44751pt.
  [25 <../slides/figs/plot_diag_roles.pdf> <../slides/figs/plot_mlp_split_up_dow
 n.pdf>]
@@ -1365,137 +1365,137 @@ n.pdf>]
 File: ../slides/figs/plot_lora_ablations_grid.pdf Graphic file (type pdf)
 <use ../slides/figs/plot_lora_ablations_grid.pdf>
 Package pdftex.def Info: ../slides/figs/plot_lora_ablations_grid.pdf  used on i
-nput line 1863.
+nput line 1866.
 (pdftex.def)             Requested size: 362.77525pt x 253.94016pt.
  [26] [27 <../slides/figs/plot_lora_ablations_grid.pdf>]
 <../slides/figs/plot_final_results_wiki_c4.pdf, id=1101, 578.16pt x 325.215pt>
 File: ../slides/figs/plot_final_results_wiki_c4.pdf Graphic file (type pdf)
 <use ../slides/figs/plot_final_results_wiki_c4.pdf>
 Package pdftex.def Info: ../slides/figs/plot_final_results_wiki_c4.pdf  used on
- input line 1905.
+ input line 1908.
 (pdftex.def)             Requested size: 298.75264pt x 168.04585pt.
 
-Underfull \hbox (badness 1205) in paragraph at lines 1911--1911
+Underfull \hbox (badness 1205) in paragraph at lines 1914--1914
 []\OT1/phv/m/n/10.95 Figure 11: |Fi-nal re-sults across con-fig-u-ra-tions on W
 ikiText-2 and C4.
  []
 
 [28 <../slides/figs/plot_final_results_wiki_c4.pdf>] [29]
 LaTeX Font Info:    Font shape `OT1/cmtt/bx/n' in size <10.95> not available
-(Font)              Font shape `OT1/cmtt/m/n' tried instead on input line 2041.
+(Font)              Font shape `OT1/cmtt/m/n' tried instead on input line 2044.
 
  [30] [31] [32]
 [33] [34]
-Overfull \hbox (17.27881pt too wide) in paragraph at lines 2323--2323
+Overfull \hbox (17.27881pt too wide) in paragraph at lines 2326--2326
 []\OT1/phv/m/n/10.95 Yelysei Bon-darenko, Ric-cardo Del Chiaro, and Markus Nage
 l. \  Low-Rank Quantization-
  []
 
 
-Overfull \hbox (2.59766pt too wide) in paragraph at lines 2323--2323
+Overfull \hbox (2.59766pt too wide) in paragraph at lines 2326--2326
 []\OT1/phv/m/n/10.95 Julian B[]uchel et al. \  Ana-log Foun-da-tion Mod-els". I
 n: \OT1/phv/m/sl/10.95 arXiv preprint arXiv:2505.09663
  []
 
 
-Overfull \hbox (23.14607pt too wide) in paragraph at lines 2323--2323
+Overfull \hbox (23.14607pt too wide) in paragraph at lines 2326--2326
 \OT1/phv/m/n/10.95 with Er-ror Cor-rec-tion through Low-Rank Adap-ta-tion". In:
  \OT1/phv/m/sl/10.95 arXiv preprint arXiv:2306.08162
  []
 
 
-Overfull \hbox (1.00615pt too wide) in paragraph at lines 2323--2323
+Overfull \hbox (1.00615pt too wide) in paragraph at lines 2326--2326
 []\OT1/phv/m/n/10.95 Mengzhao Chen et al. \  Ef-fi-cien-tQAT: Ef-fi-cient Quant
 ization-Aware Train-ing for Large
  []
 
 
-Overfull \hbox (1.11534pt too wide) in paragraph at lines 2323--2323
+Overfull \hbox (1.11534pt too wide) in paragraph at lines 2326--2326
 []\OT1/phv/m/n/10.95 Tim Dettmers et al. \  LLM.int8(): 8-bit Ma-trix Mul-ti-pl
 i-ca-tion for Trans-form-ers at Scale".
  []
 
 
-Overfull \hbox (32.8306pt too wide) in paragraph at lines 2323--2323
+Overfull \hbox (32.8306pt too wide) in paragraph at lines 2326--2326
 []\OT1/phv/m/n/10.95 Abhimanyu Dubey et al. \  The Llama 3 Herd of Mod-els". In
 : \OT1/phv/m/sl/10.95 arXiv preprint arXiv:2407.21783
  []
 
 
-Overfull \hbox (38.95244pt too wide) in paragraph at lines 2323--2323
+Overfull \hbox (38.95244pt too wide) in paragraph at lines 2326--2326
 []\OT1/phv/m/n/10.95 Steven K. Esser et al. \  Learned Step Size Quan-ti-za-tio
 n". In: \OT1/phv/m/sl/10.95 arXiv preprint arXiv:1902.08153
  []
 
 
-Overfull \hbox (13.46635pt too wide) in paragraph at lines 2323--2323
+Overfull \hbox (13.46635pt too wide) in paragraph at lines 2326--2326
 \OT1/phv/m/n/10.95 rate In-fer-ence with Ana-log In-Memory Com-put-ing". In: \O
 T1/phv/m/sl/10.95 arXiv preprint arXiv:2305.10459
  []
 
 [35]
-Overfull \hbox (7.36122pt too wide) in paragraph at lines 2323--2323
+Overfull \hbox (7.36122pt too wide) in paragraph at lines 2326--2326
 \OT1/phv/m/sl/10.95 na-tional Con-fer-ence on Ma-chine Learn-ing (ICML)\OT1/phv
 /m/n/10.95 . 2024. \OT1/phv/m/sc/10.95 url\OT1/phv/m/n/10.95 : [][]$\OT1/cmtt/m
 /n/10.95 https : / / openreview .
  []
 
 
-Overfull \hbox (0.17383pt too wide) in paragraph at lines 2323--2323
+Overfull \hbox (0.17383pt too wide) in paragraph at lines 2326--2326
 []\OT1/phv/m/n/10.95 Cheng Zhang et al. \  LQER: Low-Rank Quan-ti-za-tion Er-ro
 r Re-con-struc-tion for LLMs".
  []
 
 [36]
-Overfull \hbox (44.47696pt too wide) in paragraph at lines 2330--2342
+Overfull \hbox (44.47696pt too wide) in paragraph at lines 2333--2345
 \OT1/cmtt/m/n/10.95 / / github . com / BurykinaA / quantization-[]techniques$[]
 [] \OT1/phv/m/n/10.95 (com-mit \OT1/cmtt/m/n/10.95 5b41ef5\OT1/phv/m/n/10.95 ) 
 un-der \OT1/cmtt/m/n/10.95 ADC/llama/core/
  []
 
 
-Overfull \hbox (37.79205pt too wide) in paragraph at lines 2330--2342
+Overfull \hbox (37.79205pt too wide) in paragraph at lines 2333--2345
 \OT1/phv/m/n/10.95 Through-out these list-ings, \OT1/cmtt/m/n/10.95 s[]w[]vec \
 OT1/phv/m/n/10.95 de-notes the per-channel weight scale (shape \OT1/cmtt/m/n/10
 .95 [out[]features]\OT1/phv/m/n/10.95 )
  []
 
 
-Overfull \hbox (32.61035pt too wide) in paragraph at lines 2346--2354
+Overfull \hbox (32.61035pt too wide) in paragraph at lines 2349--2357
 \OT1/phv/m/n/10.95 Listing [][]1[][] shows the per-tile ADC for-ward pass from 
 \OT1/cmtt/m/n/10.95 QATLinearADC.forward \OT1/phv/m/n/10.95 (file \OT1/cmtt/m/n
 /10.95 adc[]layers.py\OT1/phv/m/n/10.95 ).
  []
 
 Package hyperref Info: bookmark level for unknown lstlisting defaults to 0 on i
-nput line 2355.
+nput line 2358.
 LaTeX Font Info:    Font shape `OT1/cmtt/bx/n' in size <9> not available
-(Font)              Font shape `OT1/cmtt/m/n' tried instead on input line 2356.
+(Font)              Font shape `OT1/cmtt/m/n' tried instead on input line 2359.
 
 [37
 
 ]
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 2426.
+(hyperref)                removing `math shift' on input line 2429.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `\alpha' on input line 2426.
+(hyperref)                removing `\alpha' on input line 2429.
 
 
 Package hyperref Warning: Token not allowed in a PDF string (Unicode):
-(hyperref)                removing `math shift' on input line 2426.
+(hyperref)                removing `math shift' on input line 2429.
 
 [38]
-Overfull \hbox (98.73814pt too wide) in paragraph at lines 2468--2476
+Overfull \hbox (98.73814pt too wide) in paragraph at lines 2471--2479
 \OT1/phv/m/n/10.95 Listing [][]5[][] shows the post-ADC resid-ual LoRA wrap-per
  (file \OT1/cmtt/m/n/10.95 adc[]lora.py\OT1/phv/m/n/10.95 , class \OT1/cmtt/m/n
 /10.95 ResidualLoRATiledLinearADC\OT1/phv/m/n/10.95 ).
  []
 
 
-Overfull \hbox (5.66273pt too wide) in paragraph at lines 2498--2503
+Overfull \hbox (5.66273pt too wide) in paragraph at lines 2501--2506
 []\OT1/phv/m/n/10.95 Pre-ADC place-ment is im-ple-mented by the sis-ter class \
 OT1/cmtt/m/n/10.95 PreADCLoRATiledLinearADC\OT1/phv/m/n/10.95 , which
  []
@@ -1505,6 +1505,10 @@ OT1/cmtt/m/n/10.95 PreADCLoRATiledLinearADC\OT1/phv/m/n/10.95 , which
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
  ***********
+
+
+LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.
+
 Package rerunfilecheck Info: File `main.out' has not changed.
 (rerunfilecheck)             Checksum: ED969AA4D631F8E0EAEED758DB5E7951;6203.
 Package logreq Info: Writing requests to 'main.run.xml'.
@@ -1538,7 +1542,7 @@ ve/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr/local/texlive
 e/2026/texmf-dist/fonts/type1/urw/helvetic/uhvb8a.pfb></usr/local/texlive/2026/
 texmf-dist/fonts/type1/urw/helvetic/uhvr8a.pfb></usr/local/texlive/2026/texmf-d
 ist/fonts/type1/urw/helvetic/uhvro8a.pfb>
-Output written on main.pdf (43 pages, 947418 bytes).
+Output written on main.pdf (43 pages, 948337 bytes).
 PDF statistics:
  1520 PDF objects out of 1728 (max. 8388607)
  925 compressed objects within 10 object streams

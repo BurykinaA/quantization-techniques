@@ -1,43 +1,4 @@
-% ─── Slide 10a: Staged training — motivation ────────────────────────────────
-\begin{frame}{Staged Training: Why Two Stages?}
-
-  \vfill
-  \begin{center}
-  \resizebox{0.95\linewidth}{!}{%
-  \begin{tikzpicture}[
-      every node/.style={font=\footnotesize},
-      goalbox/.style={draw=mygray!60, line width=0.7pt, rounded corners=4pt,
-                      fill=mygray!8, minimum width=5.4cm, minimum height=1.6cm,
-                      align=left, inner sep=8pt},
-      arr/.style={-{Latex[length=3mm]}, line width=1.0pt, mygray!70},
-    ]
-
-    % ── Two competing observations from ablations ──
-    \node[goalbox] (g1) at (-3.2, 1.6) {%
-      \textbf{\textcolor{mybluedark}{MLP wants it clean}}\\[0.2em]
-      {\scriptsize best \bypass{} with \texttt{diag\_mlp}, $\alpha{=}0$ ---}\\
-      {\scriptsize \alert{ADC suffers}.}%
-    };
-
-    \node[goalbox] (g2) at (3.2, 1.6) {%
-      \textbf{\textcolor{myorange}{Attention wants ADC noise}}\\[0.2em]
-      {\scriptsize best \adcppl{} with \texttt{diag\_attn}, $\alpha{\approx}0.5$ ---}\\
-      {\scriptsize \alert{no-ADC PPL suffers}.}%
-    };
-
-    % ── Conclusion (no box) ──
-    \node[align=center, font=\footnotesize] (c) at (0, -1.5) {%
-      \textbf{Train sequentially}\;---\;MLP first, then add attention.%
-    };
-
-    \draw[arr] (g1.south) -- (c.north -| g1.south);
-    \draw[arr] (g2.south) -- (c.north -| g2.south);
-
-  \end{tikzpicture}}
-  \end{center}
-  \vfill
-\end{frame}
-
+% ─── Slide 10a: "Why Two Stages?" motivation moved to A_backup.tex ───────────
 % ─── Slide 10b: Staged training — Llama-3.2 architecture view ────────────────
 \newif\ifStageB
 \newcommand{\stagedArchDiagram}{%

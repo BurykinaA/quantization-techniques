@@ -156,7 +156,12 @@ def downsample_channels(act, n_keep):
 
 
 def bar3d(ax, data, title, color_inlier="#4a78c0", color_outlier="#c0392b",
-          outlier_thresh=None, zmax=None):
+          outlier_thresh=None, zmax=None, colors=None):
+    """3D bar plot of |data| over (token, channel).
+
+    If `colors` is provided (length = data.size, flattened in (row, col)
+    order), it overrides the inlier/outlier rule.
+    """
     n_rows, n_cols = data.shape
     xs, ys = np.meshgrid(np.arange(n_cols), np.arange(n_rows))
     xs, ys = xs.flatten(), ys.flatten()
@@ -164,9 +169,10 @@ def bar3d(ax, data, title, color_inlier="#4a78c0", color_outlier="#c0392b",
     dx = np.ones_like(xs) * 0.9
     dy = np.ones_like(ys) * 0.9
     dz = np.abs(data).flatten()
-    if outlier_thresh is None:
-        outlier_thresh = np.inf
-    colors = np.where(dz > outlier_thresh, color_outlier, color_inlier)
+    if colors is None:
+        if outlier_thresh is None:
+            outlier_thresh = np.inf
+        colors = np.where(dz > outlier_thresh, color_outlier, color_inlier)
     ax.bar3d(xs, ys, zs, dx, dy, dz, color=colors, alpha=0.9, shade=True,
              edgecolor="none")
     if zmax is not None:
@@ -177,6 +183,41 @@ def bar3d(ax, data, title, color_inlier="#4a78c0", color_outlier="#c0392b",
     ax.set_title(title, pad=10)
     ax.view_init(elev=22, azim=-60)
     ax.grid(False)
+
+
+# ── ADC-effect color classification (per-token INT4 quantization) ──────────
+
+C_DEAD = "#c0392b"   # red:    integer code = 0  -> contributes nothing to y_int
+C_SAT  = "#f39c12"   # orange: |integer code| = q_x  -> outlier saturating the scale
+C_OK   = "#4a78c0"   # blue:   normal code, contributes proportionally
+
+def adc_colors_and_stats(data, q_x=7):
+    """For each bar in `data` (shape token, channel) decide what an ADC-aware
+    INT4 quantizer would do with it:
+
+      red    : per-token integer code rounds to 0  ->  value lost (dead-zone)
+      orange : per-token integer code saturates at +/- q_x  ->  hard outlier
+      blue   : value lands in a regular INT4 bin (1 <= |code| < q_x)
+
+    Per-token activation scale s_x = max(|x|) / q_x. Codes outside the
+    saturation/dead boundaries are the "well-quantized" majority that the
+    ADC subsequently bins normally.
+    """
+    abs_data = np.abs(data)
+    amax = abs_data.max(axis=1, keepdims=True)
+    amax = np.maximum(amax, 1e-8)
+    s_x = amax / q_x
+    code = np.round(data / s_x).astype(int)
+    abs_code = np.abs(code).flatten()
+
+    colors = np.full(abs_code.shape, C_OK)
+    colors[abs_code == 0]    = C_DEAD
+    colors[abs_code >= q_x]  = C_SAT
+
+    dead_rate = float((abs_code == 0).mean())
+    sat_rate  = float((abs_code >= q_x).mean())
+    ok_rate   = 1.0 - dead_rate - sat_rate
+    return colors, dead_rate, sat_rate, ok_rate
     for pane in (ax.xaxis.pane, ax.yaxis.pane, ax.zaxis.pane):
         pane.set_alpha(0.15)
 
@@ -291,23 +332,56 @@ def main():
     zmax = max(np.abs(a0).max(), np.abs(a1).max(), np.abs(a2).max()) * 1.05
     outlier_thresh = np.quantile(np.abs(a0), 0.99)
 
-    fig = plt.figure(figsize=(15, 4.6))
-    axes = [fig.add_subplot(1, 3, i + 1, projection="3d") for i in range(3)]
+    # ── ADC-effect classification for the bottom row ───────────────────────
+    colors_a0, dead0, sat0, _ = adc_colors_and_stats(a0)
+    colors_a1, dead1, sat1, _ = adc_colors_and_stats(a1)
+    colors_a2, dead2, sat2, _ = adc_colors_and_stats(a2)
 
-    bar3d(axes[0], a0, "Original activation\n(strong outliers)",
+    fig = plt.figure(figsize=(15, 9.4))
+    top_axes = [fig.add_subplot(2, 3, i + 1, projection="3d") for i in range(3)]
+    bot_axes = [fig.add_subplot(2, 3, i + 4, projection="3d") for i in range(3)]
+
+    # ── Top row: original outlier-vs-inlier coloring (unchanged) ──────────
+    bar3d(top_axes[0], a0, "Original activation\n(strong outliers)",
           outlier_thresh=outlier_thresh, zmax=zmax)
-    bar3d(axes[1], a1, "After Kronecker rotation only\n(outliers redistributed)",
+    bar3d(top_axes[1], a1, "After Kronecker rotation only\n(outliers redistributed)",
           outlier_thresh=outlier_thresh, zmax=zmax)
-    bar3d(axes[2], a2, "After Kronecker + diagonal\n(flat across channels)",
+    bar3d(top_axes[2], a2, "After Kronecker + diagonal\n(flat across channels)",
           outlier_thresh=outlier_thresh, zmax=zmax)
+
+    # ── Bottom row: same data, ADC-effect coloring ─────────────────────────
+    def fmt_title(name, dead, sat):
+        return (f"{name} — ADC view\n"
+                f"dead-zone {dead*100:.1f}% · saturated {sat*100:.1f}%")
+
+    bar3d(bot_axes[0], a0,
+          fmt_title("Original", dead0, sat0),
+          colors=colors_a0, zmax=zmax)
+    bar3d(bot_axes[1], a1,
+          fmt_title("Kronecker only", dead1, sat1),
+          colors=colors_a1, zmax=zmax)
+    bar3d(bot_axes[2], a2,
+          fmt_title("Kronecker + diag", dead2, sat2),
+          colors=colors_a2, zmax=zmax)
+
+    # ── Legend for ADC color coding (below bottom row) ────────────────────
+    import matplotlib.patches as mpatches
+    legend_handles = [
+        mpatches.Patch(color=C_DEAD, label="dead-zone (INT4 code = 0, lost)"),
+        mpatches.Patch(color=C_OK,   label="normal ADC bin"),
+        mpatches.Patch(color=C_SAT,  label="saturated (|code| = q$_x$, outlier)"),
+    ]
+    fig.legend(handles=legend_handles, loc="lower center",
+               ncol=3, frameon=False, fontsize=11,
+               bbox_to_anchor=(0.5, -0.01))
 
     fig.suptitle(
-        f"FlatQuant diagonal: what it adds on top of the Kronecker rotation  |  "
+        f"FlatQuant diagonal: activation shape (top) and ADC effect (bottom)  |  "
         f"Llama-3.2-1B layer {args.layer}.mlp.{args.proj} input  |  "
         f"{args.epochs} ep × {args.nsamples} samples",
-        y=1.02, fontsize=12,
+        y=1.00, fontsize=12,
     )
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.02, 1, 0.98])
 
     out = Path(args.out)
     if not out.is_absolute():
