@@ -141,6 +141,21 @@ run_config "3b_int4_bsz8" \
     --fq_stage_b_diag_attn \
     "${COMMON_EVAL[@]}"
 
+# D. Same per-step batch as 1B (cali_bsz=16, accum=1). C halved ADC PPL
+#    (889 -> 528) by going 4 -> 8; this run tests if pushing all the way
+#    to 1B's per-step batch closes the rest of the gap.
+#    Risk: Stage B with bsz=16 on 3B was reported OOM in run_paper_comparison
+#    comments. expandable_segments is already enabled. If this OOMs, drop
+#    the next experiment to cali_bsz=12, grad_accum=1 (effective 12).
+run_config "3b_int4_bsz16" \
+    "${BASE_INT4[@]}" \
+    --fq_cali_bsz 16 \
+    --fq_grad_accum_steps 1 \
+    --fq_stage_b_epochs 10 \
+    --fq_stage_b_prop_alpha 0.5 \
+    --fq_stage_b_diag_attn \
+    "${COMMON_EVAL[@]}"
+
 echo ""
 echo "=== All done. Results: $OUT/results.json ==="
 echo "=== Run log:           $OUT/run.log ==="
