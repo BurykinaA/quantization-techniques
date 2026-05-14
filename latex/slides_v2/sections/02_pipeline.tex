@@ -1,5 +1,5 @@
 % ─── Slide: Analog MVM Signal Path ───────────────────────────────────────────
-\begin{frame}{Analog MVM Signal Path}
+\begin{frame}{Math model of an optical linear layer}
 
   \vfill
   \begin{center}
@@ -26,7 +26,7 @@
     \draw[arr] (w)--(qw);   \draw[arr] (qw)--(wb);
     \draw[arr] (x)--(qx);   \draw[arr] (qx)--(xb);
 
-    \node[tile] (T) at (6.2, 0) {Analog IMC tile\\$y{=}\langle\hat w,\hat x\rangle$};
+    \node[tile] (T) at (6.2, 0) {Optical MVM\\$y{=}\langle\hat w,\hat x\rangle$};
     \draw[arr] (wb) -- (T.north west);
     \draw[arr] (xb) -- (T.south west);
 
@@ -43,6 +43,16 @@
   \end{tikzpicture}}
   \end{center}
   \vfill
+
+  \begin{tikzpicture}[remember picture, overlay]
+    \node[anchor=south west, inner sep=0pt]
+      at ([xshift=0.6cm, yshift=0.5cm]current page.south west) {%
+      {\scriptsize\color{mygray}\itshape
+        \begin{tabular}{@{}l@{}}
+          $^{*}$MVM — matrix-vector multiplication. \\
+          $^{*}$ADC — analog-to-digital converter.
+        \end{tabular}}};
+  \end{tikzpicture}
 
   \note{Показываю общую схему. Линейный слой проходит через два ключевых этапа: сначала квантизация весов и активаций, потом аналоговое умножение матриц, результат которого читается через АЦП.}
 

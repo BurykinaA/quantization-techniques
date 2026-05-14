@@ -67,8 +67,9 @@ CLIP_FP = CLIP_A * S_OUT                     # ≈ 64
 DELTA_FP = DELTA * S_OUT                     # ≈ 0.5
 
 
-def _style(ax, title):
-    ax.set_title(title, fontsize=11, color=DARK, pad=2)
+def _style(ax, title=None):
+    # All histograms on slides 3 and 4 are shown WITHOUT titles or labels.
+    # The pipeline diagram on the slide provides the context.
     ax.margins(x=0, y=0)
 
 
@@ -112,7 +113,7 @@ def plot_w_raw():
            color=BLUE_FILL, edgecolor=BLUE, linewidth=0.25,
            alpha=0.95, align="center")
     _mark_clip(ax, -1.0, 1.0)
-    _style(ax, r"$w$: raw weight (FP)")
+    _style(ax)
     fig.savefig(OUT / "dist_w.pdf")
     plt.close(fig)
 
@@ -142,7 +143,7 @@ def plot_w_hat():
            edgecolor=BLUE, linewidth=0.8, alpha=0.95, align="center")
     _mark_clip(ax, -1.0, 1.0)
 
-    _style(ax, r"$\hat w$: INT4 staircase (15 levels)")
+    _style(ax)
     fig.savefig(OUT / "dist_w_hat.pdf")
     plt.close(fig)
 
@@ -173,7 +174,7 @@ def plot_x_raw():
            color=BLUE_FILL, edgecolor=BLUE, linewidth=0.25,
            alpha=0.95, align="center")
     _mark_clip(ax, 0.0, 1.0)
-    _style(ax, r"$x$: raw activation (FP)")
+    _style(ax)
     fig.savefig(OUT / "dist_x.pdf")
     plt.close(fig)
 
@@ -207,7 +208,7 @@ def plot_x_hat():
            edgecolor=BLUE, linewidth=0.8, alpha=0.95, align="center")
     _mark_clip(ax, 0.0, 1.0)
 
-    _style(ax, r"$\hat x$: INT4 staircase (16 levels)")
+    _style(ax)
     fig.savefig(OUT / "dist_x_hat.pdf")
     plt.close(fig)
 
@@ -260,16 +261,7 @@ def plot_y():
     ax.axvline(-CLIP_A, color=RED, linestyle=(0, (4, 2)), linewidth=1.0)
     ax.axvline(+CLIP_A, color=RED, linestyle=(0, (4, 2)), linewidth=1.0)
 
-    ax.text(0.03, 0.95,
-            rf"$|y|\!\leq\!Mq_xq_w\!=\!{Y_MAX}$",
-            transform=ax.transAxes, fontsize=7.0, color=DARK,
-            ha="left", va="top")
-    ax.text(0.97, 0.95,
-            rf"clip: $\pm{int(CLIP_A)}$  (log $y$)",
-            transform=ax.transAxes, fontsize=7.0, color=RED,
-            ha="right", va="top")
-
-    _style(ax, r"$y=\sum_i\hat w_i\hat x_i$: tile output")
+    _style(ax)
     fig.savefig(OUT / "dist_y.pdf")
     plt.close(fig)
 
@@ -307,31 +299,7 @@ def plot_y_hat():
            color=BLUE_FILL, edgecolor=BLUE, linewidth=0.4,
            alpha=0.95, align="center", clip_on=True)
 
-    ax.annotate("", xy=(0, ymax * 0.99), xytext=(0, ymax * 0.55),
-                arrowprops=dict(arrowstyle="-|>", color=BLUE,
-                                lw=1.2, mutation_scale=8))
-    ax.text(DELTA * 0.4, ymax * 0.78,
-            rf"$\sim{peak_pct:.0f}\%$ in dead zone",
-            color=ORANGE, fontsize=6.5, ha="left", va="center")
-
-    ax.annotate("",
-                xy=(xlim * 0.99, ymax * 0.45),
-                xytext=(xlim * 0.74, ymax * 0.45),
-                arrowprops=dict(arrowstyle="->", color=RED, lw=0.9))
-    ax.annotate("",
-                xy=(-xlim * 0.99, ymax * 0.45),
-                xytext=(-xlim * 0.74, ymax * 0.45),
-                arrowprops=dict(arrowstyle="->", color=RED, lw=0.9))
-    ax.text(0.97, 0.40,
-            rf"clip $\pm{int(CLIP_A)}$",
-            transform=ax.transAxes, fontsize=6.5, color=RED,
-            ha="right", va="center")
-    ax.text(0.03, 0.40,
-            rf"$\pm{int(CLIP_A)}$ clip",
-            transform=ax.transAxes, fontsize=6.5, color=RED,
-            ha="left", va="center")
-
-    _style(ax, rf"$\hat y$: ADC out ($\delta{{=}}{DELTA:.1f}$, $k{{=}}{K}$)")
+    _style(ax)
     fig.savefig(OUT / "dist_y_hat.pdf")
     plt.close(fig)
 
@@ -370,32 +338,7 @@ def plot_y_deq():
            color=BLUE_FILL, edgecolor=BLUE, linewidth=0.4,
            alpha=0.95, align="center", clip_on=True)
 
-    ax.annotate("", xy=(0, ymax * 0.99), xytext=(0, ymax * 0.55),
-                arrowprops=dict(arrowstyle="-|>", color=BLUE,
-                                lw=1.2, mutation_scale=8))
-    ax.text(DELTA_FP * 0.4, ymax * 0.78,
-            rf"$\sim{peak_pct:.0f}\%$ at $0$",
-            color=ORANGE, fontsize=6.5, ha="left", va="center")
-
-    ax.annotate("",
-                xy=(xlim * 0.99, ymax * 0.45),
-                xytext=(xlim * 0.74, ymax * 0.45),
-                arrowprops=dict(arrowstyle="->", color=RED, lw=0.9))
-    ax.annotate("",
-                xy=(-xlim * 0.99, ymax * 0.45),
-                xytext=(-xlim * 0.74, ymax * 0.45),
-                arrowprops=dict(arrowstyle="->", color=RED, lw=0.9))
-    ax.text(0.97, 0.40,
-            rf"clip $\pm{CLIP_FP:.0f}$",
-            transform=ax.transAxes, fontsize=6.5, color=RED,
-            ha="right", va="center")
-    ax.text(0.03, 0.40,
-            rf"$\pm{CLIP_FP:.0f}$ clip",
-            transform=ax.transAxes, fontsize=6.5, color=RED,
-            ha="left", va="center")
-
-    _style(ax,
-           rf"$y_{{\mathrm{{deq}}}}\!=\!s_xs_w\,\hat y$ (FP, step ${DELTA_FP:.2f}$)")
+    _style(ax)
     fig.savefig(OUT / "dist_y_deq.pdf")
     plt.close(fig)
 

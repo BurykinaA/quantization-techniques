@@ -302,3 +302,45 @@
     \end{column}
   \end{columns}
 \end{frame}
+
+% ──────────────────────────────────────────────────────────────────────────────
+% Copy of slide 6 (07_flatquant.tex) — kept here in backup for Q&A reference.
+\begin{frame}{Backup: FlatQuant — Rotate, Flatten, Calibrate per Block}
+
+  \vfill
+  \begin{columns}[c]
+    \begin{column}{0.46\textwidth}
+      \footnotesize
+      \textbf{1. Linear invariance.}
+      \[
+        y \;=\; xW^\top \;=\; \underbrace{(xT^{-1})}_{\tilde x}\underbrace{(TW^\top)}_{\tilde W^\top}.
+      \]
+
+      \vspace{0.8em}
+      \textbf{2. Kronecker factorisation.}
+      \[
+        T \;=\; T_1 \otimes T_2,\quad T_1,T_2{\in}\mathbb{R}^{\sqrt d \times \sqrt d}
+      \]
+    \end{column}
+
+    \begin{column}{0.5\textwidth}
+      \footnotesize
+      \textbf{3. Teacher-student block-wise calibration.}
+
+      \vspace{0.6em}
+      \begin{center}
+      \begin{tikzpicture}[every node/.style={font=\tiny}, node distance=0.25cm,
+                         box/.style={draw, rounded corners=2pt, minimum width=2.6cm, minimum height=0.45cm, align=center}]
+        \node[box, fill=mygray!15] (t) {\textbf{Teacher} layer\\ FP, frozen};
+        \node[box, fill=myorange!25, below=0.35cm of t] (s) {\textbf{Student} layer\\ quantised, $T$ trainable};
+        \node[right=0.4cm of s, font=\scriptsize] (y2) {$\hat y\phantom{^\star}$};
+        \node[font=\scriptsize] (y1) at (y2 |- t) {$y^\star\phantom{\hat{}}$};
+        \draw[-{Latex}] (t.east) -- (y1);
+        \draw[-{Latex}] (s.east) -- (y2);
+        \draw[decorate, decoration={brace, amplitude=3pt}] (y1.east) -- (y2.east) node[midway, right=3pt, font=\scriptsize] {$\|\cdot\|^2$};
+      \end{tikzpicture}
+      \end{center}
+    \end{column}
+  \end{columns}
+  \vfill
+\end{frame}
