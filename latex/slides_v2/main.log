@@ -1,8 +1,8 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.4.15)  7 MAY 2026 12:44
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.4.15)  13 MAY 2026 19:05
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
-**main.tex
+**main
 (./main.tex
 LaTeX2e <2025-11-01>
 L3 programming layer <2026-01-19>
@@ -1763,7 +1763,7 @@ Here is how much of TeX's memory you used:
  72860 multiletter control sequences out of 15000+600000
  665654 words of font info for 119 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 128i,14n,123p,1907b,1270s stack positions out of 10000i,1000n,20000p,200000b,200000s
+ 128i,14n,123p,1903b,1270s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cmextra/cmex8
 .pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cmextra/cm
 ex9.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi
@@ -1815,7 +1815,7 @@ er/sfsx1440.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super
 /sfsx2488.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/s
 ftt0800.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sft
 t0900.pfb>
-Output written on main.pdf (34 pages, 5503284 bytes).
+Output written on main.pdf (34 pages, 5493511 bytes).
 PDF statistics:
  775 PDF objects out of 1000 (max. 8388607)
  404 compressed objects within 5 object streams

@@ -52,11 +52,11 @@ def plot_deadzone():
 
     b1 = ax1.bar(x - w/2, dead_rate, w, label="dead_rate (%)",
                  color=C_ADC, alpha=0.85, zorder=3)
-    b2 = ax2.bar(x + w/2, bypass_ppl, w, label="bypass PPL",
+    b2 = ax2.bar(x + w/2, bypass_ppl, w, label="no-ADC PPL",
                  color=C_BYPASS, alpha=0.85, zorder=3)
 
     ax1.set_ylabel("dead_rate (%)", color=C_ADC)
-    ax2.set_ylabel("bypass PPL (transform quality)", color=C_BYPASS)
+    ax2.set_ylabel("no-ADC PPL (transform quality)", color=C_BYPASS)
     ax1.set_xticks(x); ax1.set_xticklabels(labels)
     ax1.set_ylim(0, 100); ax2.set_ylim(0, 30)
 
@@ -69,7 +69,7 @@ def plot_deadzone():
                  f"{v:.2f}", ha="center", fontsize=9, color=C_BYPASS, fontweight="bold")
 
     handles = [mpatches.Patch(color=C_ADC, label="dead_rate (%)"),
-               mpatches.Patch(color=C_BYPASS, label="bypass PPL")]
+               mpatches.Patch(color=C_BYPASS, label="no-ADC PPL")]
     ax1.legend(handles=handles, loc="upper right")
     ax1.set_title("Dead zone collapse was a transform quality problem,\nnot a hardware constraint")
     fig.tight_layout()
@@ -90,11 +90,11 @@ def plot_int8():
     w = 0.35
 
     fig, ax = plt.subplots(figsize=(7, 4.2))
-    b1 = ax.bar(x - w/2, bypass, w, label="bypass PPL", color=C_BYPASS, alpha=0.85, zorder=3)
+    b1 = ax.bar(x - w/2, bypass, w, label="no-ADC PPL", color=C_BYPASS, alpha=0.85, zorder=3)
     b2 = ax.bar(x + w/2, adc,    w, label="ADC PPL",    color=C_ADC,    alpha=0.85, zorder=3)
 
     # FP baseline & best INT8 dashed lines
-    ax.axhline(10.5,  color=C_FP,   linestyle="--", linewidth=1.2, label="FP baseline ≈ 10.5")
+    ax.axhline(8.68,  color=C_FP,   linestyle="--", linewidth=1.2, label="bfloat16 baseline 8.68")
     ax.axhline(14.41, color=C_INT8, linestyle=":",  linewidth=1.2, label="Best INT8 PTQ 14.41")
 
     for bar, v in zip(b2, adc):
@@ -132,11 +132,11 @@ def plot_int4_progression():
     fig, ax = plt.subplots(figsize=(9, 4.5))
 
     ax.plot(steps, bypass, "o-", color=C_BYPASS, linewidth=2, markersize=7,
-            label="bypass PPL", zorder=4)
+            label="no-ADC PPL", zorder=4)
     ax.plot(steps, adc,    "s-", color=C_ADC,    linewidth=2, markersize=7,
             label="ADC PPL", zorder=4)
 
-    ax.axhline(10.5,  color=C_FP,   linestyle="--", linewidth=1.1, label="FP baseline ≈ 10.5")
+    ax.axhline(8.68,  color=C_FP,   linestyle="--", linewidth=1.1, label="bfloat16 baseline 8.68")
     ax.axhline(14.41, color=C_INT8, linestyle=":",  linewidth=1.1, label="Best INT8 PTQ 14.41")
 
     # annotate ADC PPL values
@@ -170,11 +170,11 @@ def plot_diag_roles():
     w = 0.35
 
     fig, ax = plt.subplots(figsize=(6.5, 4))
-    b1 = ax.bar(x - w/2, bypass, w, color=C_BYPASS, alpha=0.85, label="bypass PPL", zorder=3)
+    b1 = ax.bar(x - w/2, bypass, w, color=C_BYPASS, alpha=0.85, label="no-ADC PPL", zorder=3)
     b2 = ax.bar(x + w/2, adc,    w, color=C_ADC,    alpha=0.85, label="ADC PPL",    zorder=3)
 
     ax.axhline(14.41, color=C_INT8, linestyle=":", linewidth=1.2, label="INT8 best 14.41")
-    ax.axhline(10.5,  color=C_FP,   linestyle="--",linewidth=1.0, label="FP ≈ 10.5")
+    ax.axhline(8.68,  color=C_FP,   linestyle="--",linewidth=1.0, label="bfloat16 ≈ 8.68")
 
     for bar, v in zip(b1, bypass):
         ax.text(bar.get_x() + bar.get_width()/2, v + 0.2,
@@ -207,7 +207,7 @@ def plot_mlp_split():
     w = 0.35
 
     fig, ax = plt.subplots(figsize=(5.5, 4))
-    b1 = ax.bar(x - w/2, bypass, w, color=C_BYPASS, alpha=0.85, label="bypass PPL", zorder=3)
+    b1 = ax.bar(x - w/2, bypass, w, color=C_BYPASS, alpha=0.85, label="no-ADC PPL", zorder=3)
     b2 = ax.bar(x + w/2, adc,    w, color=C_ADC,    alpha=0.85, label="ADC PPL",    zorder=3)
 
     for bar, v in zip(b1, bypass):
@@ -244,7 +244,7 @@ def plot_ptq_plateau():
     # plateau band
     ax.axhspan(27.0, 28.8, color="#F2CC8F", alpha=0.45, zorder=1, label="PTQ plateau 27–28.8")
 
-    ax.axhline(10.5,  color=C_FP,   linestyle="--", linewidth=1.2, label="FP baseline ≈ 10.5")
+    ax.axhline(8.68,  color=C_FP,   linestyle="--", linewidth=1.2, label="bfloat16 baseline 8.68")
     ax.axhline(14.41, color=C_INT8, linestyle=":",  linewidth=1.2, label="INT8 prop+center 14.41")
 
     for bar, v in zip(bars, adc_best):
@@ -276,7 +276,7 @@ def plot_lora_ablations():
     clr     = [C_BYPASS, C_ADC, C_BYPASS, C_ADC]
     bars = ax.bar(groups, vals, color=clr, alpha=0.85, zorder=3, width=0.5)
     ax.axhline(14.41, color=C_INT8, linestyle=":", linewidth=1.1, label="INT8 best 14.41")
-    ax.axhline(10.5,  color=C_FP,   linestyle="--",linewidth=1.0, label="FP ≈ 10.5")
+    ax.axhline(8.68,  color=C_FP,   linestyle="--",linewidth=1.0, label="bfloat16 ≈ 8.68")
     for bar, v in zip(bars, vals):
         ax.text(bar.get_x() + bar.get_width()/2, v + 0.1, f"{v:.2f}",
                 ha="center", fontsize=8, fontweight="bold")
@@ -290,7 +290,7 @@ def plot_lora_ablations():
     ppl   = [15.90, 15.60, 15.57, 15.24]
     ax.plot(ranks, ppl, "o-", color=C_ADC, linewidth=2, markersize=8, zorder=4)
     ax.axhline(14.41, color=C_INT8, linestyle=":", linewidth=1.1, label="INT8 best 14.41")
-    ax.axhline(10.5,  color=C_FP,   linestyle="--",linewidth=1.0, label="FP ≈ 10.5")
+    ax.axhline(8.68,  color=C_FP,   linestyle="--",linewidth=1.0, label="bfloat16 ≈ 8.68")
     for x_, y_ in zip(ranks, ppl):
         ax.text(x_, y_ + 0.05, f"{y_:.2f}", ha="center", fontsize=8.5, fontweight="bold")
     ax.set_xlabel("LoRA rank r"); ax.set_ylabel("ADC PPL")
@@ -340,7 +340,7 @@ def plot_lora_ablations():
 # ════════════════════════════════════════════════════════════════════════════════
 def plot_final_results():
     methods  = ["INT8\nbaseline", "INT8\nprop+center", "INT4 staged\nPTQ", "INT4 +LoRA\n(r4_all_ce_kl)"]
-    wiki_adc = [28.86, 14.41, 27.60, 13.96]
+    wiki_adc = [28.86, 14.41, 27.60, 14.03]
     c4_adc   = [None,  None,  46.40, 23.30]
 
     x = np.arange(len(methods))
@@ -370,8 +370,8 @@ def plot_final_results():
         ax.text(bar.get_x() + bar.get_width()/2, v + 0.5,
                 f"{v:.2f}", ha="center", fontsize=8.5, color=C_BYPASS, fontweight="bold")
 
-    ax.axhline(10.5, color=C_FP,   linestyle="--", linewidth=1.2, label="FP baseline Wiki2 ≈ 10.5")
-    ax.axhline(20.0, color="black", linestyle="-.", linewidth=0.9, alpha=0.5, label="FP baseline C4 ≈ 20")
+    ax.axhline(8.68, color=C_FP,   linestyle="--", linewidth=1.2, label="bfloat16 Wiki2 baseline 8.68")
+    ax.axhline(13.13, color="black", linestyle="-.", linewidth=0.9, alpha=0.5, label="bfloat16 C4 baseline 13.13")
 
     # highlight winner
     ax.add_patch(plt.Rectangle(

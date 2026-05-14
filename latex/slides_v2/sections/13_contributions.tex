@@ -13,11 +13,11 @@
         \item \textbf{Staged PTQ closes the INT4 gap to $\times$1.4.}\\
               $\alpha$-mixed loss + MLP-first diagonal training.
 
-        \item \textbf{MLP drives bypass; attn drives ADC robustness.}\\
+        \item \textbf{MLP drives no-ADC PPL; attn drives ADC robustness.}\\
               Staged training combines both — insight, not just tuning.
 
         \item \textbf{Post-ADC LoRA breaks the PTQ plateau.}\\
-              INT4 ADC 13.96 $<$ INT8 PTQ 14.41.
+              INT4 ADC 14.03 $<$ INT8 PTQ 14.41.
               Generalises to C4 ($-50\%$ vs PTQ baseline).
       \end{enumerate}
 
@@ -50,7 +50,7 @@
         \node[state, fill=myblue!35]    (n5) at (0, 1*\ys)
           {INT4 PTQ \textbf{27.60}};
         \node[state, fill=mygreen!30]   (n6) at (0, 0)
-          {INT4+LoRA \textbf{13.96}};
+          {INT4+LoRA \textbf{14.03}};
 
         % arrows + labels
         \draw[arr] (n1) -- (n2)

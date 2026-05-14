@@ -4,7 +4,7 @@
     \begin{column}{0.50\textwidth}
       \begin{block}{Early baseline (branch \texttt{llama-flatquant-adc})}
         \begin{itemize}
-          \item $\bypass = 21.6$, $\adcppl = 28.99$
+          \item $\no-ADC = 21.6$, $\adcppl = 28.99$
           \item \texttt{dead\_rate} = \worse{81\%}
           \item PACT, penalties, L1 loss $\Rightarrow$ all failed
         \end{itemize}
@@ -13,7 +13,7 @@
       \vspace{0.15em}
       \begin{exampleblock}{Improved baseline (branch \texttt{pact})}
         \begin{itemize}
-          \item $\bypass = 10.0$, $\adcppl = 28.86$
+          \item $\no-ADC = 10.0$, $\adcppl = 28.86$
           \item \texttt{dead\_rate} = \better{10.3\%}
           \item \textbf{Hardware unchanged.} Only better FlatQuant training
             (\texttt{percentile} calibration vs.\ \texttt{absmax})

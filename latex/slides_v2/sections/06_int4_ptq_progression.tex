@@ -17,7 +17,7 @@
           mixed FP+quant loss + bounded diagonal.
 
         \item \textbf{Staged training (MLP $\to$ attn diag):}
-          $\adcppl = 27.60$, $\bypass = 18.50$ — cleanest bypass yet.
+          $\adcppl = 27.60$, $\no-ADC = 18.50$ — cleanest no-ADC yet.
       \end{enumerate}
 
       \vspace{0.15em}
@@ -34,7 +34,7 @@
       \else
         \figplaceholder[0.70\textheight]{Step plot (x = method index 1--6,
           log y-axis = PPL).
-          Two lines: bypass PPL (blue) and ADC PPL (orange).
+          Two lines: no-ADC PPL (blue) and ADC PPL (orange).
           Annotate each step with the key change.
           Show FP baseline as dashed line at 10.5 and INT8-prop+center at 14.41.
           Key numbers: 2355, 204, 40.6, 31.2, 27.56, 27.60.}

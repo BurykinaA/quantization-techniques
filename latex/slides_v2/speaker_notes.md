@@ -33,8 +33,6 @@ The second part is the analog-digital boundary. After the optical matrix multipl
 
 The key component here is the ADC: the analog-to-digital converter.
 
-So in this hardware setting, we have two quantisation stages. First, we quantise inputs and weights. Then, after the analog computation, the ADC quantises the output again.
-
 Now let’s look at these two parts more carefully.
 
 ---
@@ -195,22 +193,6 @@ We also tested the usual placement, before the ADC. It failed, because the corre
 
 For training, we use next-token cross-entropy plus a KL distillation loss from the frozen full-precision teacher.
 
----
-
-## Slide 12 — LoRA ablations and overhead
-
-We tested several design choices.
-
-First, rank. We tested ranks 1, 4, and 8. The result improves very quickly, and rank 4 is already enough. So we use rank 4.
-
-Second, loss. Adding KL distillation from the full-precision teacher brings it down to 14.
-
-Third, layer coverage. Early layers need more correction, because ADC error appears early and then propagates forward.
-
-Fourth, placement. As I mentioned, post-ADC placement is critical. Pre-ADC LoRA does not work in this setting.
-
-Fifth, projection coverage. Training only down_proj and o_proj already gives 14.3
-
 The overhead is small: 0.22 percent of the model, and about 45 minutes of training on one GPU.
 
 ---
@@ -219,11 +201,11 @@ The overhead is small: 0.22 percent of the model, and about 45 minutes of traini
 
 This slide shows the final comparison for Llama-3.2-1B. It includes perplexity on two datasets and three downstream tasks.
 
-The main result is the green row. INT4 with our post-ADC LoRA reaches 14.03 perplexity on WikiText-2 and 23.20 on C4.
+The main result is the green row. INT4 with our post-ADC LoRA reaches 14 perplexity on WikiText-2 and 23 on C4.
 
 The C4 result is important for generalisation. All calibration and LoRA training are done on WikiText-2. C4 is held out.
 
-The INT4 PTQ baseline on C4 is 46. With post-ADC LoRA, it drops to 23. So the correction is not only memorising the calibration set. It transfers to unseen data.
+The INT4 +ADC + PTQ baseline on C4 is 46. With post-ADC LoRA, it drops to 23. So the correction is not only memorising the calibration set. It transfers to unseen data.
 
 ---
 
@@ -272,3 +254,22 @@ Cross-entropy only optimises the next-token loss on the calibration text. KL dis
 ## FP teacher cost
 
 The teacher requires one forward pass per batch. The teacher logits are cached, and there is no gradient through the teacher.
+
+
+---
+
+## Slide 12 — LoRA ablations and overhead
+
+We tested several design choices.
+
+First, rank. We tested ranks 1, 4, and 8. The result improves very quickly, and rank 4 is already enough. So we use rank 4.
+
+Second, loss. Adding KL distillation from the full-precision teacher brings it down to 14.
+
+Third, layer coverage. Early layers need more correction, because ADC error appears early and then propagates forward.
+
+Fourth, placement. As I mentioned, post-ADC placement is critical. Pre-ADC LoRA does not work in this setting.
+
+Fifth, projection coverage. Training only down_proj and o_proj already gives 14.3
+
+The overhead is small: 0.22 percent of the model, and about 45 minutes of training on one GPU.

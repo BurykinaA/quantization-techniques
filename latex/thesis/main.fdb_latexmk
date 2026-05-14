@@ -1,23 +1,23 @@
 # Fdb version 4
-["biber main"] 1777734847.98485 "main.bcf" "main.bbl" "main" 1777746260.27227 0
-  "main.bcf" 1777746260.17506 114473 46dd0677a46a3b08e26c742828c59e96 "pdflatex"
-  "msc-sample.bib" 1777729580.14811 10821 24ecbc0c71350df4f4e02d7d4f608227 ""
+["biber main"] 1778685545.25992 "main.bcf" "main.bbl" "main" 1778686148.26002 0
+  "main.bcf" 1778686148.1614 114477 4a52f63f9fd869e1e5c894077075c1ec "pdflatex"
+  "msc-sample.bib" 1778685539.59243 10651 25c5ecf5385e32780e861cf436a78a3a ""
   (generated)
   "main.bbl"
   "main.blg"
   (rewritten before read)
-["pdflatex"] 1777746258.63151 "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" "main.pdf" "main" 1777746260.27255 0
-  "../slides/figs/dead_zone.png" 1777727018.89922 81524 3f8defafc06bcd44b3d6369992ba27a9 ""
-  "../slides/figs/plot_alpha_sweep.pdf" 1777727018.90376 12444 f5589886b9f21962b505fd9e135feecd ""
+["pdflatex"] 1778686146.59692 "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" "main.pdf" "main" 1778686148.26033 0
+  "../slides/figs/dead_zone.png" 1778682898.77046 81524 3f8defafc06bcd44b3d6369992ba27a9 ""
+  "../slides/figs/plot_alpha_sweep.pdf" 1778682898.77718 12444 f5589886b9f21962b505fd9e135feecd ""
   "../slides/figs/plot_diag_roles.pdf" 1777199706.26031 25762 f02a1712cc75bd3916b55ac9abf270b3 ""
   "../slides/figs/plot_final_results_wiki_c4.pdf" 1777199706.26101 24572 15427088e7fff6ea5e2f8cb89b7263de ""
   "../slides/figs/plot_int4_ptq_progression.pdf" 1777199706.26153 26554 60b8790a9a0d81894552ff7dbacff398 ""
   "../slides/figs/plot_int8_main_results.pdf" 1777199706.262 22376 0cc168bb167ef6e4339a52ad1fbbaa98 ""
   "../slides/figs/plot_lora_ablations_grid.pdf" 1777199706.26261 29937 228b3712d4200f3145c3002515e1ea50 ""
-  "../slides/figs/plot_loss_landscape_alpha.pdf" 1777727018.90504 77301 caae126a1f071418307adceca14fc7d6 ""
+  "../slides/figs/plot_loss_landscape_alpha.pdf" 1778682898.77839 77301 caae126a1f071418307adceca14fc7d6 ""
   "../slides/figs/plot_mlp_split_up_down.pdf" 1777199706.2631 20621 a6f50c5c0e0fe54da72484f3cf9f3794 ""
   "../slides/figs/plot_ptq_plateau.pdf" 1777199706.26366 24883 a98cbe1c49ac577f52766bc987c9f83b ""
-  "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" 1777746256.68629 110060 43d96e14d09684cbcc2f96013fbe0c80 ""
+  "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" 1778686144.62149 122052 4361741db395b8aff4b16b393be8730e ""
   "/usr/local/texlive/2026/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/local/texlive/2026/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/local/texlive/2026/texmf-dist/fonts/tfm/adobe/helvetic/phvb7t.tfm" 1136768653 2240 eb56c13537f4d8a0bd3fafc25572b1bd ""
@@ -185,13 +185,13 @@
   "/usr/local/texlive/2026/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1776250877 5573038 b99aad5e4898a9034e953632f940512b ""
   "/usr/local/texlive/2026/texmf-var/web2c/pdftex/pdflatex.fmt" 1776250794 3636778 8ed075554b0566b40fa854ffedcef8ab ""
   "/usr/local/texlive/2026/texmf.cnf" 1774209515 577 648cd9f92f9c0eac486f4c71c85cfbbe ""
-  "main.aux" 1777746260.16826 36602 257a331bdcf5f67b0351eabffffa24e1 "pdflatex"
-  "main.bbl" 1777734849.83065 71318 b9baab52c4d1a3364e9a201a89f56fe8 "biber main"
-  "main.out" 1777746260.17417 6645 064cdf3a2a4c84be696b0d9223241e66 "pdflatex"
-  "main.run.xml" 1777746260.17573 2305 67c73e5f90befbcba88ad9685714fe42 "pdflatex"
-  "main.tex" 1777746256.68629 110060 43d96e14d09684cbcc2f96013fbe0c80 ""
-  "main.toc" 1777746260.17582 8227 e84a25eb473b6615dc7f67bfd2d16bef "pdflatex"
-  "msc-logo.png" 1777727018.93714 10466 5858c652f72e0c409ddee778b9f23da6 ""
+  "main.aux" 1778686148.15381 37178 bff1c821399edef0aaf57dfea6850407 "pdflatex"
+  "main.bbl" 1778685547.01425 70029 b1f3fea18c17931c6b561ab9efdbb912 "biber main"
+  "main.out" 1778686148.16028 6203 bab7f1a531625f45cfba52c99972d5fa "pdflatex"
+  "main.run.xml" 1778686148.16206 2305 67c73e5f90befbcba88ad9685714fe42 "pdflatex"
+  "main.tex" 1778686144.62149 122052 4361741db395b8aff4b16b393be8730e ""
+  "main.toc" 1778686148.16214 8307 8fdfdc2eb8b880f08b7a74434cfbdb6e "pdflatex"
+  "msc-logo.png" 1778682898.88081 10466 5858c652f72e0c409ddee778b9f23da6 ""
   (generated)
   "main.aux"
   "main.bcf"

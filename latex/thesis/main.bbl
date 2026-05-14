@@ -146,61 +146,6 @@
       \field{title}{Low-Rank Quantization-Aware Training for LLMs}
       \field{year}{2024}
     \endentry
-    \entry{LQER2024}{article}{}{}
-      \name{author}{1}{}{%
-        {{hash=84c3c0c183a05ed51bbfcd8bf22e9948}{%
-           family={brevity},
-           familyi={b\bibinitperiod},
-           given={Authors},
-           giveni={A\bibinitperiod},
-           prefix={omitted\bibnamedelimb here\bibnamedelima for},
-           prefixi={o\bibinitperiod\bibinitdelim h\bibinitperiod\bibinitdelim f\bibinitperiod}}}%
-      }
-      \strng{namehash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{fullhash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{fullhashraw}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{bibnamehash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{authorbibnamehash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{authornamehash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{authorfullhash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{authorfullhashraw}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \field{extraname}{1}
-      \field{sortinit}{b}
-      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
-      \field{labelnamesource}{author}
-      \field{labeltitlesource}{title}
-      \field{journaltitle}{arXiv preprint arXiv:2402.02446}
-      \field{title}{LQER: Low-Rank Quantization Error Reconstruction for LLMs}
-      \field{year}{2024}
-    \endentry
-    \entry{RAOQ2024}{inproceedings}{}{}
-      \name{author}{1}{}{%
-        {{hash=84c3c0c183a05ed51bbfcd8bf22e9948}{%
-           family={brevity},
-           familyi={b\bibinitperiod},
-           given={Authors},
-           giveni={A\bibinitperiod},
-           prefix={omitted\bibnamedelimb here\bibnamedelima for},
-           prefixi={o\bibinitperiod\bibinitdelim h\bibinitperiod\bibinitdelim f\bibinitperiod}}}%
-      }
-      \strng{namehash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{fullhash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{fullhashraw}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{bibnamehash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{authorbibnamehash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{authornamehash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{authorfullhash}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \strng{authorfullhashraw}{84c3c0c183a05ed51bbfcd8bf22e9948}
-      \field{extraname}{2}
-      \field{sortinit}{b}
-      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
-      \field{labelnamesource}{author}
-      \field{labeltitlesource}{title}
-      \field{booktitle}{OpenReview / conference version}
-      \field{note}{Use your preferred OpenReview BibTeX entry}
-      \field{title}{Reshape and Adapt for Output Quantization (RAOQ)}
-      \field{year}{2024}
-    \endentry
     \entry{Buechel2025AnalogFoundation}{article}{}{}
       \name{author}{10}{}{%
         {{hash=59c2a98b832bd6eff61609221aa3e779}{%
@@ -360,7 +305,6 @@
       \strng{authornamehash}{8eb8d97f1a3ff71de3863eb038504292}
       \strng{authorfullhash}{2e95929def9fd01366981b35dc19fe00}
       \strng{authorfullhashraw}{2e95929def9fd01366981b35dc19fe00}
-      \field{extraname}{1}
       \field{sortinit}{C}
       \field{sortinithash}{4d103a86280481745c9c897c925753c0}
       \field{labelnamesource}{author}
@@ -368,82 +312,6 @@
       \field{journaltitle}{arXiv preprint arXiv:2407.11062}
       \field{title}{EfficientQAT: Efficient Quantization-Aware Training for Large Language Models}
       \field{year}{2024}
-    \endentry
-    \entry{flatquant}{article}{}{}
-      \name{author}{10}{}{%
-        {{hash=6ef5e83f2df66e076ce95e343216ee14}{%
-           family={Chen},
-           familyi={C\bibinitperiod},
-           given={Yuxuan},
-           giveni={Y\bibinitperiod}}}%
-        {{hash=1461bafc2ded6f35475b338eb4bdeb1b}{%
-           family={Ding},
-           familyi={D\bibinitperiod},
-           given={Haokun},
-           giveni={H\bibinitperiod}}}%
-        {{hash=2ae30fa8e348ef8dc9a521e98eb79545}{%
-           family={Zhang},
-           familyi={Z\bibinitperiod},
-           given={Xing},
-           giveni={X\bibinitperiod}}}%
-        {{hash=97e7c30065b75818b860edf8c2e98924}{%
-           family={Li},
-           familyi={L\bibinitperiod},
-           given={Zining},
-           giveni={Z\bibinitperiod}}}%
-        {{hash=6dc87d0ac3fb80d5b16bf78a6f1e3c2e}{%
-           family={Ding},
-           familyi={D\bibinitperiod},
-           given={Hao},
-           giveni={H\bibinitperiod}}}%
-        {{hash=21d0e6a3084ae2458a52270e064d6106}{%
-           family={Zhao},
-           familyi={Z\bibinitperiod},
-           given={Zhejian},
-           giveni={Z\bibinitperiod}}}%
-        {{hash=2c4227651158ffda09ff4cd4fb540f59}{%
-           family={Yang},
-           familyi={Y\bibinitperiod},
-           given={Zijian},
-           giveni={Z\bibinitperiod}}}%
-        {{hash=fd26325dae29e3600705e540a4bfdb77}{%
-           family={Zheng},
-           familyi={Z\bibinitperiod},
-           given={Zhuorui},
-           giveni={Z\bibinitperiod}}}%
-        {{hash=5b6d3aecbcbad7073fc720387eccf048}{%
-           family={Liu},
-           familyi={L\bibinitperiod},
-           given={Peijie},
-           giveni={P\bibinitperiod}}}%
-        {{hash=f6eb376a033a1064d9c89418390e2e16}{%
-           family={Mao},
-           familyi={M\bibinitperiod},
-           given={Yang},
-           giveni={Y\bibinitperiod}}}%
-      }
-      \strng{namehash}{6df7867741141bdec88cb9c3fb541baa}
-      \strng{fullhash}{611066507e3641445a93cbe4923e7a10}
-      \strng{fullhashraw}{611066507e3641445a93cbe4923e7a10}
-      \strng{bibnamehash}{6df7867741141bdec88cb9c3fb541baa}
-      \strng{authorbibnamehash}{6df7867741141bdec88cb9c3fb541baa}
-      \strng{authornamehash}{6df7867741141bdec88cb9c3fb541baa}
-      \strng{authorfullhash}{611066507e3641445a93cbe4923e7a10}
-      \strng{authorfullhashraw}{611066507e3641445a93cbe4923e7a10}
-      \field{extraname}{2}
-      \field{sortinit}{C}
-      \field{sortinithash}{4d103a86280481745c9c897c925753c0}
-      \field{labelnamesource}{author}
-      \field{labeltitlesource}{title}
-      \field{journaltitle}{arXiv preprint arXiv:2410.09426}
-      \field{title}{{FlatQuant}: Flatness Matters for {LLM} Quantization}
-      \field{year}{2024}
-      \verb{urlraw}
-      \verb https://arxiv.org/abs/2410.09426
-      \endverb
-      \verb{url}
-      \verb https://arxiv.org/abs/2410.09426
-      \endverb
     \endentry
     \entry{PACT2018}{article}{}{}
       \name{author}{6}{}{%
@@ -1462,6 +1330,105 @@
       \field{title}{OmniQuant: Omnidirectionally Calibrated Quantization for Large Language Models}
       \field{year}{2023}
     \endentry
+    \entry{Spall2022HybridOptical}{article}{}{}
+      \name{author}{3}{}{%
+        {{hash=6e621cf091c24131a5329102bc21f2ed}{%
+           family={Spall},
+           familyi={S\bibinitperiod},
+           given={James},
+           giveni={J\bibinitperiod}}}%
+        {{hash=c21b19565838175263459eb8a3a673e5}{%
+           family={Guo},
+           familyi={G\bibinitperiod},
+           given={Xianxin},
+           giveni={X\bibinitperiod}}}%
+        {{hash=f64d227b9d8ac4277d6e3dd3fa3451de}{%
+           family={Lvovsky},
+           familyi={L\bibinitperiod},
+           given={A.\bibnamedelimi I.},
+           giveni={A\bibinitperiod\bibinitdelim I\bibinitperiod}}}%
+      }
+      \strng{namehash}{5c2ee5a6a5bfec073ddf4ce9cdee98f0}
+      \strng{fullhash}{5c2ee5a6a5bfec073ddf4ce9cdee98f0}
+      \strng{fullhashraw}{5c2ee5a6a5bfec073ddf4ce9cdee98f0}
+      \strng{bibnamehash}{5c2ee5a6a5bfec073ddf4ce9cdee98f0}
+      \strng{authorbibnamehash}{5c2ee5a6a5bfec073ddf4ce9cdee98f0}
+      \strng{authornamehash}{5c2ee5a6a5bfec073ddf4ce9cdee98f0}
+      \strng{authorfullhash}{5c2ee5a6a5bfec073ddf4ce9cdee98f0}
+      \strng{authorfullhashraw}{5c2ee5a6a5bfec073ddf4ce9cdee98f0}
+      \field{sortinit}{S}
+      \field{sortinithash}{b164b07b29984b41daf1e85279fbc5ab}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{Optica}
+      \field{number}{7}
+      \field{title}{Hybrid Training of Optical Neural Networks}
+      \field{volume}{9}
+      \field{year}{2022}
+      \field{pages}{803\bibrangedash 811}
+      \range{pages}{9}
+      \verb{urlraw}
+      \verb https://arxiv.org/abs/2203.11207
+      \endverb
+      \verb{url}
+      \verb https://arxiv.org/abs/2203.11207
+      \endverb
+    \endentry
+    \entry{RAOQ2024}{inproceedings}{}{}
+      \name{author}{6}{}{%
+        {{hash=bda0000da75e02580911afc07de211a6}{%
+           family={Tang},
+           familyi={T\bibinitperiod},
+           given={Mingxue},
+           giveni={M\bibinitperiod}}}%
+        {{hash=2a1d9dd8c01580a3992c5b606c7b7c62}{%
+           family={Wei},
+           familyi={W\bibinitperiod},
+           given={Jiacheng},
+           giveni={J\bibinitperiod}}}%
+        {{hash=3b9d26ab8c9de8281fe59049ce5c980f}{%
+           family={Sharma},
+           familyi={S\bibinitperiod},
+           given={Hardik},
+           giveni={H\bibinitperiod}}}%
+        {{hash=a12e965159d871ac1ee3d21c3ab591ba}{%
+           family={Kim},
+           familyi={K\bibinitperiod},
+           given={Tushar},
+           giveni={T\bibinitperiod}}}%
+        {{hash=ecfcd63e3355514161783ebe821cd42d}{%
+           family={Wu},
+           familyi={W\bibinitperiod},
+           given={Carole-Jean},
+           giveni={C\bibinithyphendelim J\bibinitperiod}}}%
+        {{hash=e1ce26b15a886cbd409e6a8c2254dd49}{%
+           family={Krishna},
+           familyi={K\bibinitperiod},
+           given={Tushar},
+           giveni={T\bibinitperiod}}}%
+      }
+      \strng{namehash}{f8e3eb06ae3e11dc59b0201c1b7b7212}
+      \strng{fullhash}{dc5fee77a691f009a88ea0e927fdb4f9}
+      \strng{fullhashraw}{dc5fee77a691f009a88ea0e927fdb4f9}
+      \strng{bibnamehash}{f8e3eb06ae3e11dc59b0201c1b7b7212}
+      \strng{authorbibnamehash}{f8e3eb06ae3e11dc59b0201c1b7b7212}
+      \strng{authornamehash}{f8e3eb06ae3e11dc59b0201c1b7b7212}
+      \strng{authorfullhash}{dc5fee77a691f009a88ea0e927fdb4f9}
+      \strng{authorfullhashraw}{dc5fee77a691f009a88ea0e927fdb4f9}
+      \field{sortinit}{T}
+      \field{sortinithash}{9af77f0292593c26bde9a56e688eaee9}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{International Conference on Machine Learning (ICML)}
+      \field{title}{{RAOQ}: Reshape and Adapt for Output Quantization}
+      \field{year}{2024}
+      \verb{urlraw}
+      \verb https://openreview.net/forum?id=8mKXMnhnFW
+      \endverb
+      \verb{url}
+      \verb https://openreview.net/forum?id=8mKXMnhnFW
+      \endverb
+    \endentry
     \entry{OutlierSuppressionPlus2023}{article}{}{}
       \name{author}{7}{}{%
         {{hash=d3b06c67de70341af6b8ed18c144697b}{%
@@ -1731,6 +1698,56 @@
       \field{journaltitle}{arXiv preprint arXiv:2206.01861}
       \field{title}{ZeroQuant: Efficient and Affordable Post-Training Quantization for Large-Scale Transformers}
       \field{year}{2022}
+    \endentry
+    \entry{LQER2024}{article}{}{}
+      \name{author}{5}{}{%
+        {{hash=57f7f0240f141850db99567185d1a24c}{%
+           family={Zhang},
+           familyi={Z\bibinitperiod},
+           given={Cheng},
+           giveni={C\bibinitperiod}}}%
+        {{hash=a709ba78bc575ebaf4c4bb2bc36dfdce}{%
+           family={Wong},
+           familyi={W\bibinitperiod},
+           given={Jianyi},
+           giveni={J\bibinitperiod}}}%
+        {{hash=7567d32aa2edc75bd71e5efb7a141c04}{%
+           family={Xiao},
+           familyi={X\bibinitperiod},
+           given={Zhewen},
+           giveni={Z\bibinitperiod}}}%
+        {{hash=0a4b05940f151666dda89a5537ded684}{%
+           family={Constantinides},
+           familyi={C\bibinitperiod},
+           given={George\bibnamedelima A.},
+           giveni={G\bibinitperiod\bibinitdelim A\bibinitperiod}}}%
+        {{hash=b4cb29b56cf69bda399cea674bca84b9}{%
+           family={Zhao},
+           familyi={Z\bibinitperiod},
+           given={Yiren},
+           giveni={Y\bibinitperiod}}}%
+      }
+      \strng{namehash}{0d5ad0b09ef84b278454f4af16a82311}
+      \strng{fullhash}{431f4fab9e148ef90e9a6108b89effd6}
+      \strng{fullhashraw}{431f4fab9e148ef90e9a6108b89effd6}
+      \strng{bibnamehash}{0d5ad0b09ef84b278454f4af16a82311}
+      \strng{authorbibnamehash}{0d5ad0b09ef84b278454f4af16a82311}
+      \strng{authornamehash}{0d5ad0b09ef84b278454f4af16a82311}
+      \strng{authorfullhash}{431f4fab9e148ef90e9a6108b89effd6}
+      \strng{authorfullhashraw}{431f4fab9e148ef90e9a6108b89effd6}
+      \field{sortinit}{Z}
+      \field{sortinithash}{96892c0b0a36bb8557c40c49813d48b3}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{arXiv preprint arXiv:2402.02446}
+      \field{title}{{LQER}: Low-Rank Quantization Error Reconstruction for {LLM}s}
+      \field{year}{2024}
+      \verb{urlraw}
+      \verb https://arxiv.org/abs/2402.02446
+      \endverb
+      \verb{url}
+      \verb https://arxiv.org/abs/2402.02446
+      \endverb
     \endentry
   \enddatalist
 \endrefsection

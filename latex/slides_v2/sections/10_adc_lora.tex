@@ -19,7 +19,7 @@
       \vspace{0.15em}
       \begin{alertblock}{\textcolor{myred}{\textbf{Pre-ADC LoRA failed}}}
         \small\texttt{pre\_adc\_r4\_down\_o}:
-        bypass=123, ADC=105.\\
+        no-ADC=123, ADC=105.\\
         Gradients through $\texttt{rnd\_ste}(\mathbf{W}{+}\Delta\mathbf{W})$
         are too noisy from step~0.
       \end{alertblock}
@@ -31,7 +31,7 @@
         \begin{tabular}{lc}
           \toprule
           PTQ base & 27.60 \\
-          +\,LoRA (all\,7, r=4, CE+KL) & \best{13.96} \\
+          +\,LoRA (all\,7, r=4, CE+KL) & \best{14.03} \\
           \bottomrule
         \end{tabular}
       \end{center}
@@ -94,7 +94,7 @@
         \node[draw=myred, fill=myred!10, rounded corners=3pt,
               font=\tiny\bfseries, align=center, text=myred,
               above=0.35cm of adc] (fail)
-          {Pre-ADC LoRA:\\bypass=123, ADC=105\\FAILED};
+          {Pre-ADC LoRA:\\no-ADC=123, ADC=105\\FAILED};
         \draw[redarr] (fail.south) -- (adc.north);
 
       \end{tikzpicture}}%

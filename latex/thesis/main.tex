@@ -46,7 +46,9 @@
 \newtheorem{lemma}{Lemma}[section]
 \newtheorem{corollary}[lemma]{Corollary}
 \usepackage[pdftex]{graphicx}
-\graphicspath{{./}{../slides/figs/}}
+\graphicspath{{./}{../slides/figs/}{../slides_v2/figs/}}
+\usepackage{epstopdf}
+\usepackage{tikz}
 \usepackage[pdftex]{hyperref}
 \pdfadjustspacing=1
 
@@ -167,26 +169,34 @@
   \section*{Abstract}
   \addcontentsline{toc}{section}{Abstract}
 
-  This thesis investigates whether post-training quantization methods can
-  be adapted to deploy LLaMA-family models in in-memory computing systems
-  constrained by low-precision analog-to-digital converters (ADCs).
-  Although prior work such as SmoothQuant and FlatQuant reduces activation
-  and weight quantization error, ADC-constrained inference introduces an
-  additional output quantization bottleneck at the matrix-vector
-  multiplication stage. The work develops an ADC-aware evaluation
-  pipeline for transformer linear layers, studies the limitations of
-  standard post-training quantization in this setting, and explores
-  modifications of FlatQuant that explicitly account for ADC behavior.
-  The experimental part compares naive ADC quantization, baseline
-  FlatQuant, and ADC-aware variants across different tile sizes,
-  quantization precisions, and transform configurations. The main goal is
-  to identify which parts of the LLaMA architecture are most sensitive to
-  ADC constraints, whether post-training quantization alone is sufficient,
-  and under which conditions lightweight adaptation may be required. The
-  outcome of the thesis is intended to clarify the limits of
-  reconstruction-only quantization methods for analog inference and to
-  provide practical guidance for deploying large language models in IMC
-  environments.
+  This thesis studies post-training quantization for LLaMA-family models
+  deployed on analog in-memory computing accelerators in which every
+  tiled matrix-vector multiplication is followed by a
+  finite-resolution analog-to-digital converter (ADC). Unlike standard
+  digital PTQ, this setting introduces an additional output
+  quantization lattice whose step size is fixed by hardware. We
+  implement an ADC-aware simulation pipeline for Llama-3.2-1B and
+  evaluate FlatQuant-style transformations together with several
+  ADC-aware extensions: propagated calibration, an
+  $\alpha$-mixed clean-vs-ADC training objective, bounded diagonal
+  scaling, staged training, and a residual post-ADC LoRA correction.
+  In the bipolar W4A4 setting, naive ADC inference inflates WikiText-2
+  perplexity from $15.41$ in no-ADC mode to $2354.86$ with the ADC
+  enabled (a $\times 153$ gap relative to the bfloat16 baseline of
+  $8.68$). ADC-aware PTQ reduces this to ADC perplexity
+  $\approx 27.6$, but further PTQ improvements plateau because the ADC
+  output lattice is fixed. A rank-4 post-ADC residual LoRA branch,
+  trained with cross-entropy plus KL distillation against a
+  full-precision teacher, reduces WikiText-2 ADC perplexity to
+  $\mathbf{14.03}$ and C4 ADC perplexity from $46.40$ to
+  $\mathbf{23.30}$. In an unipolar (unsigned shift-subtract) ADC
+  setting, retraining FlatQuant against the unipolar step size
+  ($\delta_u \approx 14.1$) combined with per-layer $k$ search and
+  post-ADC LoRA reduces WikiText-2 perplexity from $39.00$ to
+  $\mathbf{14.56}$. These results show that transform-based PTQ is
+  necessary but not by itself sufficient under low-resolution ADC
+  constraints, and that lightweight digital output-side adaptation can
+  recover much of the remaining accuracy loss.
 
   \newpage
   \tableofcontents
@@ -230,8 +240,8 @@ This thesis studies the interaction between transformer quantization and
 ADC-constrained analog inference. In a conventional digital quantization
 setting, the main sources of error are weight and activation quantization.
 In an IMC accelerator there is an additional output quantization stage:
-the accumulated analog result is passed through the ADC, which rounds it
-to the nearest multiple of a fixed step size $\Delta$ and clips it to the
+the accumulated analog result is passed through the ADC, which
+floor-quantizes it to a fixed step size $\Delta$ and clips it to the
 ADC output range. The central difference from digital low-bit inference
 is that even if weights and activations are quantized well, the
 accumulated output can still be severely distorted by a coarse ADC
@@ -270,10 +280,10 @@ linear map exactly, which is attractive for ADC-constrained inference
 because flatter activation distributions make per-token scaling less
 dominated by a few outlier channels.
 
-Standard PTQ methods optimise for digital quantization and do not account
-for ADC output discretisation as a separate source of error. Even with
+Standard PTQ methods optimize for digital quantization and do not account
+for ADC output discretization as a separate source of error. Even with
 well-calibrated weights and activations, ADC-path perplexity remains
-substantially higher than bypass perplexity — the quality achievable
+substantially higher than no-ADC perplexity — the quality achievable
 with digital quantization alone. Closing this gap requires calibration
 that is explicitly sensitive to ADC noise and, ultimately, a lightweight
 correction stage applied after the ADC path.
@@ -287,7 +297,7 @@ This thesis makes the following contributions:
 
     \item \textbf{Diagnosis of ADC-specific failure modes.}
     The thesis separates ordinary weight/activation quantization error
-    from ADC output quantization error using bypass evaluation,
+    from ADC output quantization error using no-ADC evaluation,
     dead-rate, ADC bin usage, reconstruction error, and layer/projection
     ablations. This shows that dead zones can be caused by poor
     transforms, but that the remaining degradation can be dominated by
@@ -333,6 +343,45 @@ large neural networks because MVM is the dominant operation in both
 attention and MLP blocks. However, the result of the array is analog,
 whereas the next layer expects a digital tensor. Therefore, each analog
 MVM must be followed by analog-to-digital conversion.
+
+The same analog-to-digital bottleneck appears across very different
+physical substrates. Memristive and phase-change-memory crossbars
+encode weights as cell conductances and exploit Ohm's law plus
+Kirchhoff's current summation for the multiply--accumulate
+\cite{Xiao2021AnalogAccuracy,LeGallo2023AnalogNAS,Buechel2025AnalogFoundation};
+photonic systems instead encode weights and activations as light
+intensities or phases and perform the MVM through optical
+interference, reading the result with photodetectors
+\cite{Spall2022HybridOptical}. Despite the different physics, the
+common feature is that the analog accumulation is then sampled by a
+finite-resolution ADC before the next layer can consume it.
+Figure~\ref{fig:imc_optical_pipeline} illustrates this for the optical
+case: the analog signal carrying the MVM result is converted to a
+digital code through a photodetector front-end followed by an ADC,
+after which it re-enters the digital data path.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}
+    \node[anchor=south west, inner sep=0] (img)
+      {\includegraphics[width=0.95\linewidth]{Fig1b.pdf}};
+    \begin{scope}[x={(img.south east)}, y={(img.north west)}]
+      \fill[white] (0.013, 0.88) rectangle (0.055, 0.97);
+    \end{scope}
+  \end{tikzpicture}
+  \caption{Physical example of an analog matrix--vector multiplication
+    feeding an ADC. The figure, reproduced from Spall, Guo, and Lvovsky
+    \cite{Spall2022HybridOptical}, shows an optical neural-network
+    front-end: weights and activations are encoded into light fields,
+    the inner product is computed by optical interference, and the
+    analog accumulator output is read by a photodetector before being
+    sampled by an ADC. The same analog-input--ADC-output structure
+    underlies electronic in-memory computing crossbars; the
+    mathematical model in
+    Eqs.~\eqref{eq:adc_quantizer}--\eqref{eq:adc_delta_background}
+    abstracts both.}
+  \label{fig:imc_optical_pipeline}
+\end{figure}
 
 A simplified ADC-constrained inference pipeline can be written as
 \begin{align}
@@ -780,7 +829,7 @@ where \(b_a\) is the ADC bit-width, \(k\) is the ADC parallelism factor, and \(q
 \begin{equation}
     \Delta_u
     =
-    \frac{M(2^{b_x}-1)(2^{b_w}-1)}{2^{b_a}k}.
+    \frac{M(2^{b_x}-1)(2^{b_w}-1)}{(2^{b_a}-1)\,k}.
 \end{equation}
 In both cases, the essential property is the same: the output lattice is fixed by hardware parameters and cannot be made finer by ordinary post-training calibration.
 
@@ -811,7 +860,7 @@ where \(B_\ell\) is the full-precision transformer block, \(\hat{B}^{\mathrm{ADC
 \end{equation}
 is the fixed hardware configuration.
 
-At the model level, the goal is to obtain an ADC-constrained model \(\hat{F}^{\mathrm{ADC}}\) whose quality remains close to the full-precision model \(F\) and to the corresponding digital quantized model with the ADC bypassed:
+At the model level, the goal is to obtain an ADC-constrained model \(\hat{F}^{\mathrm{ADC}}\) whose quality remains close to the full-precision model \(F\) and to the corresponding digital quantized model with the ADC disabled:
 \begin{equation}
     \min_{\phi, \psi}
     \;
@@ -835,7 +884,7 @@ This thesis is guided by the following research questions.
     \item[RQ1.]
     \textbf{How much quality degradation is caused specifically by ADC output quantization in LLaMA-family models?}
 
-    This question separates ordinary digital quantization error from the additional degradation introduced by the ADC. The comparison is made between full-precision inference, quantized inference with the ADC bypassed, and quantized inference with the full ADC path enabled. The goal is to determine whether the ADC is a minor implementation detail or a dominant source of error under low-bit IMC inference.
+    This question separates ordinary digital quantization error from the additional degradation introduced by the ADC. The comparison is made between full-precision inference, quantized inference with the ADC disabled, and quantized inference with the full ADC path enabled. The goal is to determine whether the ADC is a minor implementation detail or a dominant source of error under low-bit IMC inference.
 
     \item[RQ2.]
     \textbf{To what extent can FlatQuant-style post-training transformations mitigate ADC-induced degradation?}
@@ -882,17 +931,17 @@ The primary model-level metric is perplexity. For each configuration, the thesis
 \begin{equation}
     \operatorname{PPL}_{\mathrm{FP}},
     \qquad
-    \operatorname{PPL}_{\mathrm{bypass}},
+    \operatorname{PPL}_{\mathrm{no\,ADC}},
     \qquad
     \operatorname{PPL}_{\mathrm{ADC}},
 \end{equation}
-where \(\operatorname{PPL}_{\mathrm{FP}}\) is the full-precision baseline, \(\operatorname{PPL}_{\mathrm{bypass}}\) measures quantized inference with the ADC disabled, and \(\operatorname{PPL}_{\mathrm{ADC}}\) measures the full ADC-constrained inference path. The difference between bypass and ADC perplexity isolates the degradation introduced by output quantization:
+where \(\operatorname{PPL}_{\mathrm{FP}}\) is the full-precision baseline, \(\operatorname{PPL}_{\mathrm{no\,ADC}}\) measures quantized inference with the ADC disabled, and \(\operatorname{PPL}_{\mathrm{ADC}}\) measures the full ADC-constrained inference path. The difference between no-ADC and ADC perplexity isolates the degradation introduced by output quantization:
 \begin{equation}
     \Delta_{\mathrm{ADC}}
     =
     \operatorname{PPL}_{\mathrm{ADC}}
     -
-    \operatorname{PPL}_{\mathrm{bypass}},
+    \operatorname{PPL}_{\mathrm{no\,ADC}},
 \end{equation}
 while the ratio
 \begin{equation}
@@ -901,12 +950,12 @@ while the ratio
     \frac{
         \operatorname{PPL}_{\mathrm{ADC}}
     }{
-        \operatorname{PPL}_{\mathrm{bypass}}
+        \operatorname{PPL}_{\mathrm{no\,ADC}}
     }
 \end{equation}
-measures the relative severity of the ADC bottleneck. A successful ADC-aware method should reduce both \(\operatorname{PPL}_{\mathrm{ADC}}\) and the bypass--ADC gap without severely degrading bypass quality.
+measures the relative severity of the ADC bottleneck. A successful ADC-aware method should reduce both \(\operatorname{PPL}_{\mathrm{ADC}}\) and the no-ADC-to-ADC gap without severely degrading no-ADC quality.
 
-In addition to perplexity, the thesis uses internal ADC-level metrics to diagnose why a configuration succeeds or fails. The dead-zone rate is defined as
+In addition to perplexity, the thesis uses internal ADC-level metrics to diagnose why a configuration succeeds or fails. The dead-zone rate is defined as the fraction of pre-ADC accumulated values whose post-ADC code is exactly zero,
 \begin{equation}
     r_{\mathrm{dead}}
     =
@@ -914,10 +963,11 @@ In addition to perplexity, the thesis uses internal ADC-level metrics to diagnos
     \sum_{i=1}^{N}
     \mathbf{1}
     \left[
-        |z_i| < \Delta
+        \left\lfloor z_i / \Delta \right\rfloor = 0
     \right],
+    \label{eq:dead_rate}
 \end{equation}
-where \(z_i\) denotes a pre-ADC accumulated value. A high dead-zone rate indicates that many analog outputs are too small to be represented by the ADC lattice. The clipping rate is defined as
+where \(z_i\) denotes a pre-ADC accumulated value. This is the floor-consistent definition: $\lfloor z_i / \Delta\rfloor = 0$ holds for $z_i \in [0,\Delta)$ in the bipolar ADC and for $z_i \in [0,\Delta)$ in the unipolar ADC. A high dead-zone rate indicates that many analog outputs are too small to register on the ADC lattice. The clipping rate is defined as
 \begin{equation}
     r_{\mathrm{clip}}
     =
@@ -971,34 +1021,36 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   \section{Proposed Method}\label{sec:method}
 
-  \subsection{Post-Training Quantisation}
+  \subsection{Post-Training Quantization}
 
   \subsubsection{Baseline: FlatQuant for LLaMA}
 
-  FlatQuant~\cite{flatquant} exploits the linear invariance of the
+  FlatQuant~\cite{FlatQuant2024} exploits the linear invariance of the
   matrix-vector product to redistribute the dynamic range of activations
-  before quantisation.
+  before quantization.
   For any invertible transform $T \in \mathbb{R}^{d \times d}$,
   \[
     y = xW^\top = \underbrace{(xT^{-1})}_{\tilde{x}}\,
                   \underbrace{(TW^\top)}_{\tilde{W}^\top}.
   \]
   Choosing $T$ to flatten the distribution of $\tilde{x}$ improves both
-  integer quantisation accuracy and ADC bin coverage.
+  integer quantization accuracy and ADC bin coverage.
   Computing a full $d \times d$ transform is prohibitive, so $T$ is
   Kronecker-factorised as $T = T_1 \otimes T_2$ with
-  $T_1, T_2 \in \mathbb{R}^{\sqrt{d} \times \sqrt{d}}$, reducing the
-  parameter count from $\mathcal{O}(d^2)$ to $\mathcal{O}(d)$.
+  $T_1 \in \mathbb{R}^{a \times a}$ and $T_2 \in \mathbb{R}^{b \times b}$
+  for $ab = d$, reducing the parameter count from $\mathcal{O}(d^2)$ to
+  $\mathcal{O}(d)$. For Llama-3.2-1B ($d = 2048$) we use $a = 32$,
+  $b = 64$.
 
   Calibration proceeds layer by layer in a teacher-student fashion.
   For each linear projection, a frozen floating-point (FP) teacher
   produces reference outputs $y^\star = L_{\mathrm{FP}}(x^\star)$, and the
-  quantised student $\hat{y} = \hat{L}_T(\hat{x})$ minimises the
+  quantized student $\hat{y} = \hat{L}_T(\hat{x})$ minimizes the
   mean-squared error $\|\hat{y} - y^\star\|^2$ over the Kronecker factors
-  only, with weights held at their quantised values.
+  only, with weights held at their quantized values.
   After calibration, $T$ is folded into the weights via
   reparameterisation; inference cost equals that of standard integer
-  quantisation.
+  quantization.
 
   We adapt FlatQuant to the LLaMA-3 architecture~\cite{llama3} by
   wrapping all seven linear projections in each decoder block: $q$, $k$,
@@ -1008,15 +1060,16 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   \subsubsection{ADC Hardware Model and Forward Simulation}
 
-  In an analog in-memory compute (AIMC) accelerator, quantised weights
+  In an analog in-memory compute (AIMC) accelerator, quantized weights
   $\hat{w} \in [-q_w, q_w]^M$ are stored on a crossbar tile of size $M$.
-  At inference, a quantised activation tile
+  At inference, a quantized activation tile
   $\hat{x} \in [-q_x, q_x]^M$ is presented, the crossbar accumulates
   their integer dot product
   $y_{\mathrm{int}} = \langle \hat{w}, \hat{x} \rangle$ in the analog
-  domain, and an ADC samples the result with a fixed step size $\delta$:
+  domain, and an ADC floor-quantizes the result with a fixed step
+  size $\delta$:
   \[
-    \hat{y} = \mathrm{clip}\!\left(
+    \hat{y} \;=\; \delta \cdot \mathrm{clip}\!\left(
       \left\lfloor \frac{y_{\mathrm{int}}}{\delta} \right\rfloor,\;
       -2^{b_a-1},\; 2^{b_a-1}{-}1\right).
   \]
@@ -1027,38 +1080,42 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   where $b_a$ is the ADC bit-width and $k$ is the number of ADC channels
   operated in parallel.
   Two failure modes follow directly.
-  The dead zone: if $|y_{\mathrm{int}}| < \delta$, the floor
-  operation maps the output to zero, discarding the signal entirely.
+  The dead zone is asymmetric under floor quantization: values in
+  $0 \le y_{\mathrm{int}} < \delta$ map to the zero code, whereas
+  small negative values $-\delta \le y_{\mathrm{int}} < 0$ map to the
+  $-1$ code rather than zero. We therefore measure the dead-rate
+  directly as the fraction of post-ADC codes equal to zero
+  (Eq.~\ref{eq:dead_rate}).
   Clipping: if $|y_{\mathrm{int}}| > \delta \cdot (2^{b_a-1}{-}1)$,
   the output saturates.
   For our target configuration ($b_w = b_x = 4$, $M = 256$, $b_a = 8$,
   $k = 16$) this gives $\delta \approx 6.12$, coarse enough that a
-  na\"{i}ve INT4 baseline shows a bypass-to-ADC perplexity gap of
+  na\"{i}ve INT4 baseline shows a no-ADC-to-ADC perplexity gap of
   $\times$153 (15.41 vs.\ 2354).
 
   \begin{figure}[htbp]
     \centering
     \includegraphics[width=0.7\linewidth]{dead_zone.png}
-    \caption{ADC dead-zone illustration. Inputs with
-      $|y_{\mathrm{int}}| < \delta$ are floored to zero, discarding the
-      analog signal entirely. The two failure modes (dead zone and
-      clipping) are determined by the fixed step $\delta$ and the
-      $b_a$-bit ADC range.}
+    \caption{ADC dead-zone illustration. Pre-ADC values in
+      $[0,\delta)$ floor to the zero code, discarding the analog signal
+      entirely. The two failure modes (dead zone and clipping) are
+      determined by the fixed step $\delta$ and the $b_a$-bit ADC
+      range.}
     \label{fig:dead_zone}
   \end{figure}
 
   \subsubsection{Limitations of Per-Layer Reconstruction}
 
-  Standard FlatQuant minimises per-projection MSE feeding each layer
+  Standard FlatQuant minimizes per-projection MSE feeding each layer
   its clean FP activations from the calibration set.
   Two gaps make this insufficient under ADC inference.
   First, the calibration objective is blind to the ADC step: a
-  projection optimised in isolation may produce pre-ADC signals that
-  fall inside the dead zone after re-quantisation of the next tile.
+  projection optimized in isolation may produce pre-ADC signals that
+  fall inside the dead zone after re-quantization of the next tile.
   Second, error accumulates across layers at inference but not during
   calibration — the input to layer $\ell$ at inference is the noisy,
   ADC-distorted output of layer $\ell{-}1$, not the clean FP tensor the
-  optimiser saw.
+  optimizer saw.
   These gaps motivate all three ADC-aware extensions described below.
 
   \subsubsection{Block-wise Calibration with Propagation and $\alpha$-Mixing}
@@ -1076,7 +1133,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   \paragraph{Propagation across blocks.}
   Blocks are calibrated sequentially from layer~0 to layer~$N{-}1$.
-  When training layer~$\ell$, its input is the ADC-quantised output
+  When training layer~$\ell$, its input is the ADC-quantized output
   produced by the already-trained layer~$\ell{-}1$, not a clean FP
   activation.
   Error thus accumulates during calibration in the same way it does at
@@ -1088,27 +1145,36 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   straight-through estimator must pass through multiple floor operations.
   We interpolate between the FP and ADC losses with a scalar
   $\alpha \in [0,1]$:
-  \[
+  \begin{equation}
     \mathcal{L}(\alpha) = (1-\alpha)\,\mathcal{L}_{\mathrm{FP}}
                         + \alpha\,\mathcal{L}_{\mathrm{ADC}},
-  \]
+    \label{eq:alpha_mix}
+  \end{equation}
   where $\mathcal{L}_{\mathrm{FP}}$ uses the clean FP input and
-  $\mathcal{L}_{\mathrm{ADC}}$ uses the quantised input from the previous
+  $\mathcal{L}_{\mathrm{ADC}}$ uses the quantized input from the previous
   block.
   $\alpha = 0$ recovers clean calibration; $\alpha = 1$ is full
   propagation.
-  An $\alpha$-sweep (Section~\ref{sec:results}) shows that $\alpha = 0.5$
-  minimises ADC perplexity: below 0.5 the loss under-weights the ADC
-  regime; above 0.5 gradient noise degrades transform quality.
-  At $\alpha = 0.5$, INT8 ADC perplexity drops from 28.86 to 14.41
-  with no additional parameters.
+  In the INT8 setting, full propagation ($\alpha = 1$) alone drops ADC
+  perplexity from $28.86$ to $14.55$, and adding a small bin-center
+  regularizer further reduces it to $14.41$; an $\alpha$-sweep is
+  unnecessary because the noise from full propagation is already
+  manageable. In the INT4 setting full propagation is too noisy: an
+  $\alpha$-sweep (Section~\ref{sec:results}) shows that $\alpha = 0.5$
+  gives the best trade-off — below 0.5 the loss under-weights the ADC
+  regime, above 0.5 gradient noise from the heavier quantization
+  degrades transform quality.
 
   \subsubsection{Trainable Per-Channel Diagonals}
+  \label{sec:diagonals}
 
   We first establish a formal bound showing that orthogonal Kronecker
   transforms cannot suppress per-channel outliers beyond a fixed
-  threshold, and that a diagonal factor is the precise missing degree
-  of freedom.
+  threshold. This motivates augmenting the transform with an
+  anisotropic component: a per-channel diagonal factor is the simplest
+  such augmentation that preserves the weight-activation invariance and
+  supplies the missing degree of freedom, although other
+  parameterizations could in principle achieve a similar effect.
 
   \begin{lemma}[Rotation-only outlier suppression bound]
     \label{lem:rotation-bound}
@@ -1166,10 +1232,12 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   ($m_{\mathrm{eff}} \approx 8$), the maximum suppression factor is
   $\sqrt{2048/8} = 16$; if the required suppression exceeds this,
   rotation-only calibration is provably insufficient.
-  The INT4 baseline confirms this empirically: the ADC
-  perplexity gap of $\times 153$ persists even after FlatQuant
-  rotation, whereas adding diagonal scaling reduces the dead-zone rate
-  from $80.9\%$ to $10.4\%$.
+  The INT4 baseline confirms this empirically: even after FlatQuant
+  rotation, the no-ADC-to-ADC perplexity gap remains at $\times 153$
+  (15.41 vs.\ 2354.86), and the dead-rate stays at $\sim 10\%$. Adding
+  diagonal scaling collapses the gap to $\times 1.4$ at the same
+  dead-rate, showing that the residual ADC error after rotation is
+  driven by coarse output quantization rather than by dead zones.
 
   \paragraph{Motivation and formulation.}
   A Kronecker rotation reshapes the covariance of an activation
@@ -1183,12 +1251,8 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   We absorb a trainable diagonal
   $D = \mathrm{diag}(d_1, \ldots, d_c)$, $d_i \in [10^{-4}, 10]$,
-  into the rotation:
-  \[
-    \tilde{T} = T \cdot D.
-  \]
-  The linear map is preserved by applying equal-and-opposite rescaling
-  to the weights:
+  into the rotation, $\tilde{T} = T \cdot D$. The linear map is
+  preserved by applying equal-and-opposite rescaling to the weights:
   \[
     y = \underbrace{(x\,D^{-1}T^{-1})}_{\tilde{x}}\,
         \underbrace{(T\,D\,W^\top)}_{\tilde{W}^\top}.
@@ -1198,9 +1262,12 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   folded into $\tilde{W}$ at deployment, adding no inference overhead.
   Crucially, because $D$ is not orthogonal, it breaks the
   $\ell^2$-energy invariance assumed in Lemma~\ref{lem:rotation-bound}:
-  setting $d_j < 1$ directly reduces $\|xD\|_2$ in outlier channel $j$
-  before the scale is computed, achieving suppression factors that
-  no rotation can match.
+  picking $d_j > 1$ amplifies row $j$ of $\tilde{W}$ (where it is
+  absorbed cleanly by per-channel weight scaling) and equivalently
+  shrinks channel $j$ of the rotated activation $\tilde{x}$ by a
+  factor $1/d_j$. For an outlier activation channel this is exactly
+  the per-channel rebalancing that per-token activation scaling
+  cannot perform.
 
   \paragraph{Placement in attention and MLP blocks.}
   We place separate diagonal matrices before the attention sub-layer
@@ -1208,7 +1275,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   before $o$) and before the FFN sub-layer (\texttt{diag\_mlp}, shared
   by \texttt{gate}/\texttt{up}, plus a second before \texttt{down}).
   An ablation (Section~\ref{sec:results}) shows that both placements
-  are necessary: \texttt{diag\_mlp} drives the bypass-perplexity
+  are necessary: \texttt{diag\_mlp} drives the no-ADC perplexity
   improvement while \texttt{diag\_attn} closes the ADC gap; either
   alone leaves significant perplexity on the table.
 
@@ -1216,8 +1283,8 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   Training all Kronecker factors and diagonals jointly from scratch
   with $\alpha = 0.5$ is unstable: attention gradients dominate early
-  optimisation before MLP transforms have converged, yielding a poor
-  initialisation for both sub-systems.
+  optimization before MLP transforms have converged, yielding a poor
+  initialization for both sub-systems.
 
   We split calibration into two stages.
   Stage~A (30 epochs, learning rate $\eta$) trains only the MLP
@@ -1229,10 +1296,13 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   attention Kronecker factors $T_q, T_k, T_v, T_o$ and attention
   diagonals $D^{(\mathrm{a})}$, and switches to $\alpha = 0.5$.
   The MLP warm start prevents gradient interference from attention.
-  This procedure achieves the best INT4 results among all pure-PTQ
-  configurations: bypass perplexity~18.50, ADC perplexity~27.60.
+  Among configurations that reach the pure-PTQ INT4 plateau
+  (ADC perplexity~$\approx 27.6$), this procedure attains the best
+  no-ADC perplexity (18.50), indicating a better-conditioned underlying
+  transform than the joint Diag~+~$\alpha{=}0.5$ baseline at
+  ADC~PPL~27.56.
 
-  \subsection{Quantisation-Aware Adaptation via Post-ADC Residual LoRA}
+  \subsection{Quantization-Aware Adaptation via Post-ADC Residual LoRA}
 
   PTQ methods reach a floor around 27.5--28.5 ADC perplexity for INT4
   regardless of calibration strategy.
@@ -1242,7 +1312,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   eliminate.
   We complement PTQ with a lightweight adaptation step that learns to
   correct ADC distortion after it has occurred, in the digital
-  domain, without modifying the frozen quantised model.
+  domain, without modifying the frozen quantized model.
 
   \begin{figure}[htbp]
     \centering
@@ -1263,54 +1333,87 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   add a parallel low-rank branch that reads the full-precision input
   $x_{\mathrm{fp}}$ and adds its output to the ADC result:
   \[
-    y = \underbrace{\mathrm{ADC}_{\mathrm{frozen}}(\hat{x})}_{\text{quantised path}}
+    y = \underbrace{\mathrm{ADC}_{\mathrm{frozen}}(\hat{x})}_{\text{quantized path}}
       + \underbrace{\frac{\alpha_r}{r}\,B\!\left(A\!\left(x_{\mathrm{fp}}\right)\right)}_{\text{residual correction, rank }r},
   \]
   where $A \in \mathbb{R}^{r \times d}$ and $B \in \mathbb{R}^{d \times r}$
   are LoRA~\cite{lora} factors stored and computed in \texttt{float32},
-  and $\alpha_r / r$ is the standard LoRA scaling.
-  All base model parameters — weights, Kronecker factors, diagonals, and
-  ADC step sizes — remain frozen throughout.
-  For Llama-3.2-1B ($d = 2048$, 16 decoder blocks, 7 projections each),
-  rank-4 adapters add $\sim$1.8M parameters (0.15\% of the total model).
+  and $\alpha_r / r$ is the standard LoRA scaling. We use
+  $\alpha_r = 8$ and $r = 4$ (scaling factor $2.0$). All base model
+  parameters — weights, Kronecker factors, diagonals, and ADC step
+  sizes — remain frozen throughout. Table~\ref{tab:lora_overhead}
+  reports the parameter overhead of rank-4 adapters covering all seven
+  projections across the 16 decoder blocks; the count is small relative
+  to the base model.
+
+  \begin{table}[htbp]
+    \centering
+    \caption{Post-ADC LoRA overhead for Llama-3.2-1B
+             ($d_{\mathrm{model}}=2048$, $d_{\mathrm{ffn}}=8192$,
+             $d_{\mathrm{kv}}=512$, 16 layers).}
+    \label{tab:lora_overhead}
+    \renewcommand{\arraystretch}{1.15}
+    \begin{tabular}{@{}lrrrr@{}}
+      \toprule
+      \textbf{Target} & \textbf{rank} & \textbf{added params} & \textbf{\% of model} & \textbf{extra MACs/token} \\
+      \midrule
+      all 7 projections                & 4 & $2.82$M & $0.228\%$ & $2.82$M \\
+      all 7 projections                & 8 & $5.64$M & $0.456\%$ & $5.64$M \\
+      \texttt{down} + \texttt{o\_proj} & 4 & $0.92$M & $0.074\%$ & $0.92$M \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  \paragraph{Honest positioning of the correction.}
+  The base ADC path remains frozen and IMC-compatible — every weight,
+  rotation, and diagonal can still be folded into the analog crossbar.
+  The residual branch is a lightweight \emph{digital} correction: it
+  reads the full-precision input and computes a $\mathrm{float32}$
+  low-rank matmul \emph{after} the ADC. It therefore adds parameters
+  and digital MACs and is not itself executed on the analog array. A
+  future hardware design would need to decide whether this correction
+  is computed digitally, approximated within the IMC tile, or applied
+  selectively only to the most ADC-sensitive projections; in this
+  thesis we evaluate it as a software-only adaptation stage on top of
+  the frozen IMC-compatible base model.
 
   \subsubsection{Training Objective}
 
-  The adapters are trained for 5 epochs with learning rate $10^{-4}$ on
-  the same 128-sample calibration set used for PTQ.
-  The loss combines cross-entropy on the model's predictions with a
-  knowledge-distillation term towards the FP teacher:
+  The adapters are trained for 5 epochs with learning rate $10^{-4}$
+  using AdamW, on the same 128-sample calibration set used for PTQ.
+  The loss combines cross-entropy on the next-token prediction with a
+  knowledge-distillation term toward the FP teacher:
   \[
     \mathcal{L}_{\mathrm{LoRA}} = \mathrm{CE}(\hat{p},\, y)
-    + \lambda\,\mathrm{KL}\!\left(\hat{p} \;\big\|\; p_{\mathrm{FP}}\right),
+    + \lambda\,\mathrm{KL}\!\left(\hat{p}_T \;\big\|\; p_{\mathrm{FP},T}\right),
   \]
-  with $\lambda = 1$.
-  The FP teacher forward pass is computed once per batch with no
-  gradient.
-  Ablations (Section~\ref{sec:results}) show that the KL term improves
-  ADC perplexity by $\sim$0.6 points over CE alone, and that rank $r = 4$
-  saturates the gain — rank~8 yields only marginal further improvement.
-  Restricting adapters to the last eight layers is significantly worse
-  than covering all sixteen, confirming that ADC distortion accumulates
-  across the full depth of the network.
+  with $\lambda = 0.5$ and temperature $T = 2.0$ on both teacher and
+  student logits. The FP teacher forward pass is computed once per
+  batch with no gradient. Ablations (Section~\ref{sec:results}) show
+  that the KL term improves ADC perplexity over CE alone, that rank
+  $r = 4$ saturates the gain, and that covering all 16 decoder blocks
+  is necessary because ADC distortion accumulates across depth.
 
   \subsubsection{Why Post-ADC Placement}
 
   Placing the LoRA correction before the ADC — modifying the
-  pre-ADC integer signal — fails catastrophically.
-  Any correction $\Delta = B A x$ is itself quantised by the fixed step
-  $\delta$ before reaching the output, so it cannot express
+  pre-ADC integer signal — fails to converge.
+  Any correction $\Delta = B A x$ is itself quantized by the fixed
+  step $\delta$ before reaching the output, so it cannot express
   sub-$\delta$ adjustments.
   Moreover, gradients through the floor operator are too noisy for
-  stable training from a cold start, and the coupled interaction with the
-  hard ADC clamp causes divergence.
+  stable training from a cold start, and the coupled interaction with
+  the hard ADC clamp causes the training run to diverge.
 
   Post-ADC placement avoids both problems: the correction is added in
   the digital domain after the ADC read, at full floating-point
   precision, with clean gradients from the CE+KL loss.
-  ADC perplexity drops from the PTQ plateau of 27.60 to 13.96 for INT4
-  on WikiText-2, surpassing the INT8 PTQ result (14.41), and generalises
-  to C4 (ADC perplexity 23.30 vs.\ PTQ baseline 46.40).
+  ADC perplexity drops from the PTQ plateau of $\approx 27.6$ to
+  $\mathbf{14.03}$ for INT4 on WikiText-2, surpassing the INT8 PTQ
+  result (14.41), and the same configuration improves C4 ADC
+  perplexity from the PTQ baseline of $46.40$ to $\mathbf{23.30}$,
+  confirming that the correction generalizes beyond the calibration
+  domain.
 
   \section{Experiments and Results}\label{sec:results}\label{sec:experimental_setup}
 
@@ -1338,7 +1441,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   Perplexity is measured on the WikiText-2 test set using a sliding
   window of context length 2048 and stride 1024.
   Selected configurations are additionally evaluated on C4~\cite{c4}
-  under the same protocol to verify out-of-domain generalisation.
+  under the same protocol to verify out-of-domain generalization.
 
   \paragraph{ADC hardware parameters.}
   Table~\ref{tab:hardware} lists the fixed hardware constants used
@@ -1373,7 +1476,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   \paragraph{FlatQuant calibration settings.}
   Transforms are trained for 30 epochs with learning rate $5 \times
-  10^{-3}$ using the AdamW optimiser.
+  10^{-3}$ using the AdamW optimizer.
   Stage~B of staged training uses 10 epochs at $5 \times 10^{-4}$.
   Static activation scales for Step~2 of the FlatQuant pipeline use the
   99.9th-percentile clipping strategy (\texttt{calibration\_method=percentile}).
@@ -1381,25 +1484,26 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   \subsection{Evaluation Metrics}
   \label{sec:metrics}
 
-  All experiments are characterised by the following metrics.
+  All experiments are characterized by the following metrics.
 
   \begin{itemize}
-    \item \textbf{PPL (bypass).}
+    \item \textbf{PPL (no ADC).}
       WikiText-2 perplexity with ADC disabled; only tiling and integer
-      quantisation are active.
+      quantization are active.
       Measures FlatQuant transform quality in isolation.
-      Lower is better; the FP baseline is $\approx 10.5$ (INT8 regime)
-      and $\approx 10.5$ / $\approx 14$ depending on bit-width.
+      Lower is better; the bfloat16 full-precision baseline is
+      $8.68$ on WikiText-2 and $13.13$ on C4 (see
+      Sec.~\ref{sec:eval_protocol}).
 
     \item \textbf{PPL (ADC).}
       WikiText-2 perplexity with the full ADC pipeline enabled.
-      This is the primary metric; the bypass--ADC gap measures the
+      This is the primary metric; the no-ADC-to-ADC gap measures the
       additional degradation introduced by finite-resolution ADC.
 
     \item \textbf{dead\_rate.}
       Fraction of output channels across all layers and calibration
-      tokens for which $|y_{\mathrm{int}}| < \delta$, i.e.\ the ADC
-      output is identically zero.
+      tokens for which $\lfloor y_{\mathrm{int}}/\delta \rfloor = 0$,
+      i.e.\ the ADC code is exactly zero.
       Measured on the calibration set; lower is better.
 
     \item \textbf{clip\_rate.}
@@ -1421,13 +1525,24 @@ For residual adaptation experiments, success is evaluated not only by perplexity
       Tracks layer-level signal fidelity independently of perplexity.
   \end{itemize}
 
+  \subsection{Evaluation Protocol}
+  \label{sec:eval_protocol}
+
+  All perplexity numbers reported in this thesis follow the same
+  protocol: sliding-window evaluation on the test split with context
+  length $2048$ and stride $1024$. The model is loaded in
+  \texttt{bfloat16}; we refer to this as the \emph{full-precision
+  baseline}. Under this protocol Llama-3.2-1B gives WikiText-2 PPL
+  $\mathbf{8.68}$ and C4 PPL $\mathbf{13.13}$. All subsequent tables
+  compare against these numbers.
+
   \subsection{Bipolar ADC: Ablation Results}
 
   All results below use the bipolar ADC with signed accumulation
   $y_{\mathrm{int}} \in [-M,+M]$ and the hardware constants from
-  Table~\ref{tab:hardware}.
-  FP reference: WikiText-2 PPL~10.5.
-  All tables report WikiText-2 perplexity unless stated otherwise.
+  Table~\ref{tab:hardware}. All tables report WikiText-2 perplexity
+  unless stated otherwise; the bfloat16 full-precision baseline is
+  $8.68$ (see Sec.~\ref{sec:eval_protocol}).
 
   \subsubsection{INT8: Effect of Calibration Objective}
 
@@ -1442,9 +1557,9 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \renewcommand{\arraystretch}{1.15}
     \begin{tabular}{@{}lrrl@{}}
       \toprule
-      \textbf{Configuration} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{dead\_rate} \\
+      \textbf{Configuration} & \textbf{no-ADC PPL} & \textbf{ADC PPL} & \textbf{dead\_rate} \\
       \midrule
-      FP baseline            & —     & 10.5  & — \\
+      bfloat16 baseline      & —     & \textbf{8.68}  & — \\
       Baseline ($\alpha=0$)  & 10.01 & 28.86 & 10.3\% \\
       Bin-center ($\lambda=0.1$) & 10.01 & 28.86 & 10.3\% \\
       Propagated ($\alpha=1$)    & 11.01 & \textbf{14.55} & 10.3\% \\
@@ -1471,7 +1586,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   \subsubsection{INT4: Sample Count and Propagation}
 
-  The INT4 baseline exhibits a bypass--ADC gap of $\times$153 (15.41 vs.\
+  The INT4 baseline exhibits a no-ADC-to-ADC gap of $\times$153 (15.41 vs.\
   2354.86), far wider than INT8.
   Table~\ref{tab:int4v1} shows that 128 calibration samples are
   insufficient for propagation, while 512 samples combined with
@@ -1484,7 +1599,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \renewcommand{\arraystretch}{1.15}
     \begin{tabular}{@{}lrrrl@{}}
       \toprule
-      \textbf{Config} & \textbf{Samples} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
+      \textbf{Config} & \textbf{Samples} & \textbf{no-ADC PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
       \midrule
       Baseline                  & 128  & 15.41 & 2354.86 & $\times$153 \\
       Propagated ($\alpha=1$)   & 128  & 40.28 & 203.89  & $\times$5.1 \\
@@ -1496,10 +1611,10 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \end{tabular}
   \end{table}
 
-  Hadamard initialisation provides no benefit over random initialisation at
+  Hadamard initialization provides no benefit over random initialization at
   the same sample count.
-  Decoupled training (transforms optimised for INT8, evaluated at INT4 ADC)
-  achieves the best bypass PPL (11.64) but a poor ADC gap ($\times$24) because
+  Decoupled training (transforms optimized for INT8, evaluated at INT4 ADC)
+  achieves the best no-ADC PPL (11.64) but a poor ADC gap ($\times$24) because
   the transforms are not calibrated to the INT4 $\delta$.
 
   \begin{figure}[htbp]
@@ -1509,7 +1624,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
       one failure mode: 128 samples (catastrophic, ADC PPL~2355);
       propagation $+$ 1024 samples (40.6); partial $\alpha=0.5$ mixing
       and bounded diagonals (27.56); staged training (27.60 with
-      cleanest bypass~18.50). FP baseline and INT8-prop+centre
+      cleanest no-ADC~18.50). FP baseline and INT8-prop+centre
       reference lines are shown.}
     \label{fig:int4_ptq_progression}
   \end{figure}
@@ -1527,7 +1642,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \renewcommand{\arraystretch}{1.15}
     \begin{tabular}{@{}lrrrr@{}}
       \toprule
-      \textbf{Config} & \textbf{$\alpha$} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
+      \textbf{Config} & \textbf{$\alpha$} & \textbf{no-ADC PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
       \midrule
       Baseline                  & 0.00 & 19.80 & 56.83 & $\times$2.87 \\
       Prop $\alpha=0.25$        & 0.25 & 21.65 & 32.35 & $\times$1.49 \\
@@ -1551,9 +1666,9 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \centering
     \includegraphics[width=0.7\linewidth]{plot_alpha_sweep.pdf}
     \caption{$\alpha$-mixing sweep at 1024 calibration samples. ADC
-      PPL is minimised at $\alpha = 0.5$; smaller values
+      PPL is minimized at $\alpha = 0.5$; smaller values
       under-weight the ADC regime, larger values amplify gradient
-      noise from the floor operator and degrade bypass PPL.}
+      noise from the floor operator and degrade no-ADC PPL.}
     \label{fig:alpha_sweep}
   \end{figure}
 
@@ -1561,7 +1676,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \centering
     \includegraphics[width=0.85\linewidth]{plot_loss_landscape_alpha.pdf}
     \caption{Loss-landscape visualisation around the converged
-      transforms for $\alpha \in \{0, 0.5, 1\}$ via filter-normalised
+      transforms for $\alpha \in \{0, 0.5, 1\}$ via filter-normalized
       random perturbations. The $\alpha = 0.5$ minimum is the widest
       and flattest, indicating that mixed FP/ADC calibration finds
       smoother solutions than either extreme.}
@@ -1581,12 +1696,12 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \renewcommand{\arraystretch}{1.15}
     \begin{tabular}{@{}lrrl@{}}
       \toprule
-      \textbf{Config} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{Note} \\
+      \textbf{Config} & \textbf{no-ADC PPL} & \textbf{ADC PPL} & \textbf{Note} \\
       \midrule
       Both diag (control)        & 19.69 & 28.46 & reproduced v2 \\
-      Attn diag only             & 24.98 & 29.41 & worse bypass \\
-      MLP diag only              & 19.37 & 31.65 & best bypass, wide gap \\
-      MLP diag + layer-wise $\alpha$ & \textbf{19.00} & 28.66 & best bypass overall \\
+      Attn diag only             & 24.98 & 29.41 & worse no-ADC PPL \\
+      MLP diag only              & 19.37 & 31.65 & best no-ADC PPL, wide gap \\
+      MLP diag + layer-wise $\alpha$ & \textbf{19.00} & 28.66 & best no-ADC PPL overall \\
       Both diag + layer-wise $\alpha$ & 19.39 & 28.55 & no gain over flat $\alpha$ \\
       \midrule
       \texttt{up\_gate} diag only & 23.22 & 39.59 & weak \\
@@ -1596,10 +1711,10 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \end{tabular}
   \end{table}
 
-  The \texttt{down\_proj} diagonal drives nearly all of the MLP bypass
+  The \texttt{down\_proj} diagonal drives nearly all of the MLP no-ADC PPL
   improvement; \texttt{up/gate} contributes little.
   Staged training (Stage~A: MLP diag, no prop; Stage~B: attn diag,
-  $\alpha=0.5$) achieves the best combined result — bypass 18.50 and
+  $\alpha=0.5$) achieves the best combined result — no-ADC 18.50 and
   ADC 27.60 — by avoiding gradient interference between the two
   sub-systems.
 
@@ -1607,8 +1722,8 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \centering
     \includegraphics[width=0.62\linewidth]{plot_diag_roles.pdf}
     \caption{Roles of the MLP and attention diagonals. The MLP
-      diagonal drives bypass-PPL improvements (transform quality);
-      the attention diagonal closes the bypass--ADC gap (robustness
+      diagonal drives no-ADC PPL improvements (transform quality);
+      the attention diagonal closes the no-ADC-to-ADC gap (robustness
       to ADC noise). Either alone leaves significant perplexity on
       the table; staged training combines both.}
     \label{fig:diag_roles}
@@ -1618,7 +1733,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \centering
     \includegraphics[width=0.62\linewidth]{plot_mlp_split_up_down.pdf}
     \caption{MLP-diagonal decomposition. \texttt{down\_proj}
-      contributes nearly all of the bypass improvement; the
+      contributes nearly all of the no-ADC PPL improvement; the
       \texttt{up}/\texttt{gate} diagonal contributes little, since
       \texttt{down\_proj} sits immediately before the next ADC
       accumulation and shapes the signal that is read.}
@@ -1637,7 +1752,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \renewcommand{\arraystretch}{1.15}
     \begin{tabular}{@{}llrrl@{}}
       \toprule
-      \textbf{Schedule} & \textbf{Mode} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
+      \textbf{Schedule} & \textbf{Mode} & \textbf{no-ADC PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
       \midrule
       Deterministic $\alpha=0.5$ & flat   & 24.24 & 31.22 & $\times$1.29 \\
       Bernoulli (p=0.5)          & flat   & 19.25 & 35.38 & $\times$1.84 \\
@@ -1649,7 +1764,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \end{tabular}
   \end{table}
 
-  Bernoulli switching yields the best bypass (16.94) but the worst ADC
+  Bernoulli switching yields the best no-ADC PPL (16.94) but the worst ADC
   gap — batches that use only the clean FP path provide no ADC signal to
   the attention transforms.
   Beta(2,2) samples near 0.5 each batch and closely matches deterministic
@@ -1664,12 +1779,12 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   \begin{table}[htbp]
     \centering
-    \caption{LoRA initial sweep (v6). Base PTQ: bypass~18.50, ADC~27.60.}
+    \caption{LoRA initial sweep (v6). Base PTQ: no-ADC~18.50, ADC~27.60.}
     \label{tab:lorav6}
     \renewcommand{\arraystretch}{1.15}
     \begin{tabular}{@{}llrrl@{}}
       \toprule
-      \textbf{Config} & \textbf{Targets} & \textbf{Bypass PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
+      \textbf{Config} & \textbf{Targets} & \textbf{no-ADC PPL} & \textbf{ADC PPL} & \textbf{Gap} \\
       \midrule
       No LoRA (base PTQ) & — & 18.50 & 27.60 & $\times$1.49 \\
       LoRA $r=4$, \texttt{down}     & 1 proj & 19.33 & 16.32 & $\times$0.84 \\
@@ -1680,10 +1795,10 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \end{tabular}
   \end{table}
 
-  Across all LoRA configurations ADC PPL falls below bypass PPL (gap $<1$),
+  Across all LoRA configurations ADC PPL falls below no-ADC PPL (gap $<1$),
   confirming that the adapter learns to specifically correct ADC noise.
   Adding \texttt{o\_proj} to \texttt{down\_proj} gives the best ADC PPL
-  (15.63); covering all 7 projections gives the best bypass (17.73) at
+  (15.63); covering all 7 projections gives the best no-ADC PPL (17.73) at
   the cost of a slightly wider gap.
 
   \subsubsection{Post-ADC Residual LoRA: Ablation Study}
@@ -1714,7 +1829,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
       \midrule
       \multirow{2}{*}{Loss}
         & CE only        & 14.60 \\
-        & CE + KL        & \textbf{13.96} \\
+        & CE + KL        & \textbf{14.03} \\
       \midrule
       \multirow{3}{*}{Layer coverage}
         & first 8 layers & 16.64 \\
@@ -1738,8 +1853,8 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   valuable when the adapter covers more projections.
   Earlier layers carry more accumulated ADC error: first-8 (16.64) beats
   last-8 (20.08).
-  Pre-ADC placement diverges catastrophically (ADC PPL~105.6) because the
-  correction is itself quantised by the fixed $\delta$.
+  Pre-ADC placement diverges (ADC PPL~105.6) because the
+  correction is itself quantized by the fixed $\delta$.
   The best single configuration is \textbf{all-7, CE+KL, $r=4$}: ADC
   PPL~14.03, beating the INT8 PTQ result (14.41).
 
@@ -1755,24 +1870,24 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \label{fig:lora_ablations}
   \end{figure}
 
-  \subsubsection{Post-ADC Residual LoRA: Generalisation to C4}
+  \subsubsection{Post-ADC Residual LoRA: Generalization to C4}
 
   Table~\ref{tab:lorav8} evaluates the top-3 configurations on both
   WikiText-2 and C4 to test out-of-domain transfer.
 
   \begin{table}[htbp]
     \centering
-    \caption{LoRA generalisation (v8). WikiText-2 and C4 perplexity.}
+    \caption{LoRA generalization (v8). WikiText-2 and C4 perplexity.}
     \label{tab:lorav8}
     \renewcommand{\arraystretch}{1.15}
     \begin{tabular}{@{}lrrrr@{}}
       \toprule
-      \textbf{Config} & \textbf{Wiki bypass} & \textbf{Wiki ADC} & \textbf{C4 bypass} & \textbf{C4 ADC} \\
+      \textbf{Config} & \textbf{Wiki no-ADC} & \textbf{Wiki ADC} & \textbf{C4 no-ADC} & \textbf{C4 ADC} \\
       \midrule
       PTQ (no LoRA)              & 18.49 & 27.26 & 29.41 & 46.40 \\
       $r=8$, \texttt{down+o}, CE & 18.51 & 15.47 & 30.48 & 29.39 \\
       $r=4$, \texttt{down+o}, CE+KL & 19.05 & 14.27 & 29.37 & 23.88 \\
-      $r=4$, all 7, CE+KL        & \textbf{18.70} & \textbf{13.96} & \textbf{29.10} & \textbf{23.30} \\
+      $r=4$, all 7, CE+KL        & \textbf{18.70} & \textbf{14.03} & \textbf{29.10} & \textbf{23.30} \\
       \bottomrule
     \end{tabular}
   \end{table}
@@ -1780,7 +1895,7 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   CE+KL configurations reduce C4 ADC PPL by 50\% relative to the PTQ
   baseline (46.40 $\to$ 23.30) despite being calibrated solely on
   WikiText-2.
-  CE-only ($r=8$, \texttt{down+o}) shows much weaker C4 generalisation
+  CE-only ($r=8$, \texttt{down+o}) shows much weaker C4 generalization
   (29.39 vs.\ 23.30), confirming that the KL teacher signal is the key
   ingredient for cross-domain transfer.
   All-7 CE+KL is the best overall checkpoint on both datasets.
@@ -1790,9 +1905,10 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \includegraphics[width=0.7\linewidth]{plot_final_results_wiki_c4.pdf}
     \caption{Final results across configurations on WikiText-2 and
       C4. INT4~$+$~LoRA (all-7, CE$+$KL, $r=4$) surpasses the best
-      INT8 PTQ on WikiText-2 (13.96 vs.\ 14.41) and reduces C4 ADC
-      PPL by 50\% relative to the INT4 PTQ baseline
-      (46.40~$\to$~23.30).}
+      INT8 PTQ on WikiText-2 (14.03 vs.\ 14.41) and halves the C4
+      ADC PPL relative to the INT4 PTQ baseline (46.40~$\to$~23.30).
+      INT8 C4 is not reported in this configuration; the C4
+      comparison is against the INT4 PTQ baseline.}
     \label{fig:final_results}
   \end{figure}
 
@@ -1839,17 +1955,20 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   four-quadrant splitting.
 
   \paragraph{Step 3 — ADC floor.}
-  The unipolar ADC step size is:
+  Because the unsigned codes span the range $[0, 2^{b_a}-1]$ rather
+  than the symmetric $[-2^{b_a-1}, 2^{b_a-1}-1]$ of the bipolar ADC,
+  the unipolar step size is:
   \[
-    \delta_u = \frac{M\,(2^{b_x}-1)\,(2^{b_w}-1)}{2^{b_a}\,k}
-             = \frac{256 \cdot 15 \cdot 15}{256 \cdot 16} = 14.0625
+    \delta_u = \frac{M\,(2^{b_x}-1)\,(2^{b_w}-1)}{(2^{b_a}-1)\,k}
+             = \frac{256 \cdot 15 \cdot 15}{255 \cdot 16} \approx 14.1
     \quad (k = 16),
   \]
-  and the quantised output is $\hat{y}^u = \lfloor y^u / \delta_u \rfloor \cdot \delta_u$.
-  Note that $\delta_u \approx 14.06$ is more than twice the bipolar
-  $\delta \approx 6.12$ at the same $k$, reflecting the fact that
-  the same $2^{b_a}$ bins now cover a range that is roughly $2\times$
-  wider in absolute terms.
+  and the quantized output is
+  $\hat{y}^u = \delta_u \cdot \mathrm{clip}\!\left(\lfloor y^u / \delta_u \rfloor,\,0,\,2^{b_a}-1\right)$.
+  Note that $\delta_u \approx 14.1$ is more than twice the bipolar
+  $\delta \approx 6.12$ at the same $k$, reflecting the fact that the
+  same number of ADC bins now covers a range roughly $2\times$ wider
+  in absolute terms.
 
   \paragraph{Step 4 — Digital correction (exact).}
   Expanding the unsigned product gives
@@ -1878,25 +1997,33 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   per-layer $k$ search that selects the ADC parallelism
   independently for each projection layer.
 
-  After FlatQuant calibration with a global $k$, the pre-ADC values
-  $y^u$ are captured on the calibration set for each layer.
-  The minimum $k$ that keeps the ADC range from saturating is found by:
+  After FlatQuant calibration with a global $k$, the pre-ADC
+  activations $y^u_\ell$ are captured on the calibration set for each
+  projection layer $\ell$. For each candidate $k \in \mathcal{K} = \{4,
+  8, 16, 32, 64\}$ we evaluate the ADC reconstruction MSE
   \[
-    R_\ell = \mathrm{quantile}_{0.999}(|y^u_\ell|), \qquad
-    k^*_\ell = \min\!\left\{ k \in \mathcal{K} : k \ge
-      \frac{M\,(2^{b_x}-1)(2^{b_w}-1)}{2\,R_\ell} \right\},
+    \mathrm{MSE}_\ell(k) \;=\; \mathbb{E}\!\left[
+      \bigl( Q^{(k)}_{\mathrm{ADC}}(y^u_\ell) - y^u_\ell \bigr)^2
+    \right],
   \]
-  where $\mathcal{K} = \{4, 8, 16, 32, 64\}$.
-  Layers with a narrow output distribution receive a small $k$ (coarser
-  $\delta$, fewer ADC reads); layers with wide distributions receive a
-  large $k$ (finer $\delta$, more reads).
-  The search is run in-place on the fixed PTQ checkpoint without
-  retraining FlatQuant transforms.
+  where $Q^{(k)}_{\mathrm{ADC}}$ uses $\delta_u(k)$ from
+  Sec.~\ref{sec:unipolar}, and select
+  \[
+    k^*_\ell \;=\; \arg\min_{k \in \mathcal{K}} \mathrm{MSE}_\ell(k).
+  \]
+  Because $\delta_u$ is inversely proportional to $k$, this procedure
+  selects the largest $k$ whose representable range still covers the
+  typical magnitude of $y^u_\ell$ without saturating. Layers with
+  \emph{narrow} output distributions therefore receive a \emph{large}
+  $k$ (finer $\delta_u$, range is not needed); layers with \emph{wide}
+  distributions receive a \emph{small} $k$ (coarser $\delta_u$ but
+  wider range, avoiding saturation). The search is run in place on
+  the fixed PTQ checkpoint without retraining FlatQuant transforms.
 
   \subsubsection{Calibration Objective for Unipolar ADC}
 
   FlatQuant transforms calibrated for the bipolar $\delta \approx 6.12$
-  are mismatched to the unipolar $\delta_u \approx 14.06$: the
+  are mismatched to the unipolar $\delta_u \approx 14.1$: the
   transforms shape the pre-ADC signal for a finer resolution that the
   hardware does not provide.
   In the unipolar series, FlatQuant is therefore retrained with
@@ -1907,11 +2034,11 @@ For residual adaptation experiments, success is evaluated not only by perplexity
 
   \subsubsection{Experiment Configurations}
 
-  The following six configurations are evaluated for
+  The following seven configurations are evaluated for
   Llama-3.2-1B on WikiText-2 and C4:
 
   \begin{itemize}
-    \item \textbf{\texttt{fp}} — full-precision FP16 baseline.
+    \item \textbf{\texttt{fp}} — bfloat16 full-precision baseline.
     \item \textbf{\texttt{int4\_no\_adc}} — INT4 FlatQuant with the ADC
       floor disabled; measures FlatQuant transform quality alone.
       Trained with the bipolar formula (calibration does not see ADC
@@ -1943,8 +2070,8 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   The original setting uses a signed ADC that reads
   $y_{\mathrm{int}} \in [-M, +M]$ directly.
   FlatQuant calibration uses $\delta \approx 6.12$ (bipolar formula).
-  This gives \texttt{best\_ptq} WikiText-2 PPL~26.78 and
-  \texttt{best\_lora} PPL~14.01 — the reference for the signed regime.
+  This gives \texttt{best\_ptq} WikiText-2 PPL~27.60 (staged) and
+  \texttt{best\_lora} PPL~14.03 — the reference for the signed regime.
 
   \paragraph{Four-quadrant unipolar.}
   An earlier attempt at unipolar hardware splits signed codes into
@@ -1972,21 +2099,21 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   Table~\ref{tab:unipolar} summarises the results.
   \texttt{best\_ptq\_k\_recal} is worse than
   \texttt{best\_ptq\_k}, indicating that retraining FlatQuant on fixed
-  per-layer $k$ values over-specialises the transforms and hurts
-  generalisation; in-place $k$ search after global-$k$ training is
+  per-layer $k$ values over-specializes the transforms and hurts
+  generalization; in-place $k$ search after global-$k$ training is
   preferable.
 
   \begin{table}[htbp]
     \centering
     \caption{Unipolar (unsigned) ADC results on Llama-3.2-1B.
-             $\delta_u = 14.0625$ at global $k = 16$.}
+             $\delta_u \approx 14.1$ at global $k = 16$.}
     \label{tab:unipolar}
     \renewcommand{\arraystretch}{1.15}
     \begin{tabular}{@{}llrr@{}}
       \toprule
       \textbf{Config} & \textbf{Description} & \textbf{Wiki PPL} & \textbf{C4 PPL} \\
       \midrule
-      \texttt{fp}                 & FP16, no quantisation              & \textbf{8.68}  & \textbf{13.13} \\
+      \texttt{fp}                 & bfloat16, no quantization          & \textbf{8.68}  & \textbf{13.13} \\
       \texttt{int4\_no\_adc}      & INT4 FQ, ADC disabled              & 12.56          & 20.13 \\
       \texttt{best\_ptq}          & INT4 FQ + unipolar ADC, $k{=}16$   & 39.00          & 67.78 \\
       \texttt{best\_ptq\_k}       & + per-layer $k$ search             & 21.64          & 33.79 \\
@@ -1997,60 +2124,199 @@ For residual adaptation experiments, success is evaluated not only by perplexity
     \end{tabular}
   \end{table}
 
-  \section{Discussion}
+  \section{Discussion}\label{sec:discussion}
 
   \subsection{Interpretation of Results}
 
-  \paragraph{Purpose.}
-  Move from raw results to explanation.
+  Three observations explain most of the empirical pattern in
+  Section~\ref{sec:results}.
 
-  \paragraph{What to include.}
-  Discuss why certain modifications work and others do not. Relate the
-  observed behavior back to the theory of ADC-constrained output
-  quantization and the internal statistics of LLaMA layers.
+  \paragraph{Why propagation helps in INT8.}
+  When activations and weights are quantized to 8 bits, the integer
+  dot product is already a near-faithful representation of its
+  full-precision counterpart, so the dominant error source is the ADC
+  output lattice itself. Calibrating each block against ADC-corrupted
+  upstream inputs lets the transform absorb the corrupted distribution
+  that the block will actually see at inference, which is why full
+  propagation alone drops WikiText-2 ADC perplexity from $28.86$ to
+  $14.55$, with a bin-center regularizer adding a marginal further
+  improvement to $14.41$.
+
+  \paragraph{Why $\alpha = 0.5$ beats $\alpha \in \{0,1\}$ on INT4.}
+  At INT4 the propagated input distribution is much noisier — both
+  weight and activation quantizers contribute substantial error on top
+  of the ADC. Calibrating against only this distribution ($\alpha = 1$)
+  over-specializes the transform to the worst case and degrades the
+  no-ADC quality of the transform itself. Calibrating only against
+  clean inputs ($\alpha = 0$) ignores the inference-time distribution
+  entirely. The $\alpha = 0.5$ mixture is the trade-off that preserves
+  a usable transform under both regimes; the empirical sweep confirms
+  this minimum at $\alpha = 0.5$.
+
+  \paragraph{Why diagonals help INT4 specifically.}
+  Lemma~\ref{lem:rotation-bound} shows that orthogonal Kronecker
+  rotations cannot reduce the worst-case channel of a vector below
+  $\|x\|_2/\sqrt{d}$, so for distributions with a few persistent
+  outlier channels the rotation alone is bounded away from the optimum.
+  A trainable per-channel diagonal supplies the missing anisotropic
+  degree of freedom: it transfers the magnitude of outlier channels to
+  the weight side, where per-channel weight scaling absorbs them
+  cleanly. This is consistent with the empirical observation that
+  diagonals reduce the no-ADC-to-ADC perplexity gap from $\times 153$
+  to $\times 1.4$ at unchanged dead-rate.
+
+  \paragraph{Why staged training is needed for diagonals + $\alpha = 0.5$.}
+  Joint training of MLP and attention diagonals under $\alpha = 0.5$
+  from a cold start is unstable: attention gradients dominate the early
+  iterations before the MLP-side transforms have aligned. Training the
+  MLP transforms first under $\alpha = 0$, then unfreezing attention
+  with $\alpha = 0.5$, gives a usable transform at both no-ADC and ADC
+  ends of the trade-off, with the lowest no-ADC perplexity ($18.50$)
+  among configurations at the $\approx 27.6$ ADC plateau.
+
+  \paragraph{Why post-ADC LoRA works.}
+  Once PTQ reaches the ADC-resolution plateau, the residual error
+  cannot be expressed by any pre-ADC linear transform, because such a
+  transform is itself quantized by the floor operator before reaching
+  the output and therefore cannot represent sub-$\delta$ corrections.
+  Placing a small low-rank correction \emph{after} the ADC adds
+  capacity precisely in the region the ADC has discarded, and the CE +
+  KL distillation loss gives stable gradients because they no longer
+  cross the floor.
 
   \subsection{Limits of PTQ Under ADC Constraints}
 
-  \paragraph{Purpose.}
-  State clearly where the chosen approach succeeds and where it fails.
+  Across all configurations explored in this thesis, pure transform-
+  based PTQ saturates around ADC perplexity $27$--$28$ in the bipolar
+  W4A4 setting and $39$ in the unipolar setting, regardless of
+  calibration objective. The reason is structural rather than
+  algorithmic: the ADC output lattice has a fixed step $\delta$ set by
+  hardware constants ($\delta \approx 6.12$ in our bipolar W4A4
+  configuration), so once a transform has redistributed signal energy
+  evenly across channels, the remaining quantization error is dictated
+  by the lattice itself. In the design space explored here, no
+  reconstruction-based PTQ objective broke through this floor; doing
+  so likely requires changing the effective hardware lattice (mixed
+  precision or per-layer ADC settings) or adding post-ADC adaptation.
+  The post-ADC LoRA stage is therefore not an additional optimization
+  of the transform, but a different kind of correction that operates
+  after the information loss has already occurred.
 
-  \paragraph{What to include.}
-  This subsection should answer whether reconstruction-based PTQ remains
-  sufficient or whether the problem fundamentally requires some degree of
-  model adaptation in the low-bit regime.
+  \subsection{Practical Implications for IMC Deployment}
 
-  \subsection{Practical Implications}
+  Several deployment-facing conclusions follow.
 
-  \paragraph{Purpose.}
-  Explain what the results mean beyond the specific experiments.
+  First, no-ADC perplexity is not a sufficient deployment metric.
+  Several configurations achieve a near-FP no-ADC score yet collapse
+  severely once the ADC is enabled; any deployment pipeline
+  must include an end-to-end ADC-on evaluation, not just a digital-
+  quantized check.
 
-  \paragraph{What to include.}
-  Discuss what your findings imply for IMC deployment, for the design of
-  ADC-aware quantization methods, and for future hardware-software
-  co-design of transformer inference systems.
+  Second, the residual stream and the projections that read it back
+  out — \texttt{o\_proj} and \texttt{down\_proj} — are the most
+  ADC-sensitive components, since they map a tile-quantized integer
+  accumulation back into the residual path and propagate the resulting
+  noise into the next block. Calibration and post-ADC correction
+  should prioritize these projections.
+
+  Third, per-layer $k$ (or, equivalently, mixed precision) is a
+  cheap lever: in the unipolar setting it reduces WikiText-2 ADC
+  perplexity by roughly $40$\% with no retraining, simply by choosing
+  the ADC parallelism factor whose representable range matches each
+  layer's pre-ADC distribution.
+
+  Fourth, ADC-aware co-design pays off. The thesis treats the ADC
+  step size as fixed; in a real co-design loop, $\delta$ and the
+  tile size $M$ are themselves degrees of freedom and should be tuned
+  jointly with the calibration objective.
 
   \subsection{Threats to Validity}
 
-  \paragraph{Purpose.}
-  Strengthen the scientific quality of the thesis.
+  Several caveats apply to the conclusions above.
 
-  \paragraph{What to include.}
-  Mention limitations such as reliance on simulation, restricted model
-  sizes, calibration dataset choice, and the gap between simplified
-  hardware assumptions and a real chip implementation.
+  \paragraph{Simulation, not silicon.} All results use a software
+  ADC simulator. Real analog crossbars exhibit device noise, IR drop,
+  conductance drift, write asymmetry, and temperature dependence,
+  none of which are modeled here. The simulator is conservative in
+  that it includes the dominant ADC failure modes (dead zone,
+  clipping) but optimistic in that it assumes a noise-free integer
+  accumulator.
+
+  \paragraph{One model, one calibration set.} All experiments use
+  Llama-3.2-1B with WikiText-2 calibration. Larger models in the
+  Llama family have different per-channel outlier statistics, and
+  out-of-domain calibration data may reshape the trade-off between
+  no-ADC and ADC perplexity.
+
+  \paragraph{Simplified ADC model.} The thesis assumes a uniform
+  floor quantizer with a single global step $\delta$ per tile. Real
+  ADCs may have non-uniform bin spacing, hysteresis, and non-zero
+  conversion latency.
+
+  \paragraph{Post-ADC LoRA carries digital overhead.}
+  As discussed in Sec.~\ref{sec:method}, the residual branch is a
+  digital correction; its compute and memory cost is small relative
+  to the model but not zero. Whether the correction can be absorbed
+  into the analog tile, run on a small digital co-processor, or
+  applied selectively to the most ADC-sensitive projections is a
+  hardware-design question outside the scope of this thesis.
 
   \section{Conclusion}\label{sec:conclusion}
 
-  \paragraph{Purpose.}
-  Provide a concise answer to the research questions and summarize the
-  thesis contributions.
+  This thesis asked whether reconstruction-based post-training
+  quantization is sufficient to deploy LLaMA-family models on analog
+  in-memory computing accelerators with finite-resolution ADCs. The
+  answer is qualified: PTQ is necessary but, on its own, hits a
+  hardware-defined floor in the low-bit regime, and the remaining gap
+  can only be closed by output-side adaptation.
 
-  \paragraph{What to include.}
-  Restate the original problem, summarize the method and experimental
-  findings, state the main conclusion about ADC-aware PTQ for
-  LLaMA-family models, and list a few concrete directions for future
-  work such as better output-aware objectives, mixed precision, or
-  lightweight adaptation.
+  \paragraph{Answers to the research questions.}
+
+  \textit{RQ1.} ADC output quantization is the dominant source of
+  degradation under W4A4 IMC inference: the no-ADC-to-ADC perplexity
+  gap reaches $\times 153$ on the naive baseline, far larger than any
+  digital W4A4 quantizer would produce by itself.
+
+  \textit{RQ2.} FlatQuant-style transformations, when augmented with
+  propagated calibration, $\alpha$-mixed objectives, bounded diagonal
+  scaling, and staged training, recover most of this large gap:
+  bipolar W4A4 ADC perplexity drops from $2354.86$ to $\approx 27.6$.
+
+  \textit{RQ3.} Reconstruction-only PTQ is not sufficient on its own:
+  pure transform-based calibration plateaus around $27$--$28$ ADC
+  perplexity in W4A4, and no further reconstruction objective is
+  observed to break through this floor.
+
+  \textit{RQ4.} ADC sensitivity is not uniform across projections. The
+  MLP \texttt{down\_proj} and the attention \texttt{o\_proj} —
+  projections that read back into the residual stream — are the
+  primary drivers of remaining ADC error, and calibration knobs that
+  target them yield the largest improvements.
+
+  \textit{RQ5.} A rank-4 residual correction placed \emph{after} the
+  ADC, trained with CE + KL distillation against an FP teacher,
+  reduces WikiText-2 W4A4 ADC perplexity from the PTQ plateau of
+  $\approx 27.6$ to $14.03$ and C4 perplexity from $46.40$ to
+  $23.30$. The same approach generalizes to the harder unipolar
+  shift-subtract ADC setting, where per-layer $k$ search and post-ADC
+  LoRA together reduce WikiText-2 perplexity from $39.00$ to $14.56$.
+
+  \paragraph{Closing thesis.}
+  ADC-aware PTQ is a necessary first step for analog IMC inference of
+  LLaMA-family models, but it plateaus at a hardware-imposed floor in
+  the low-bit regime. Lightweight digital post-ADC adaptation closes
+  the remaining gap and brings ADC perplexity within striking distance
+  of the higher-bit PTQ baseline, while keeping the analog inference
+  path frozen.
+
+  \paragraph{Directions for future work.}
+  Promising follow-ups include: joint hardware/software co-design of
+  $\delta$ and tile size; output-aware calibration objectives that
+  directly target sub-$\delta$ error rather than $\ell_2$ reconstruction;
+  mixed-precision and per-projection bit-width assignment; selective
+  post-ADC correction applied only to the most ADC-sensitive layers;
+  and scaling the entire pipeline to larger Llama-family checkpoints
+  with more realistic device-noise models.
 
   \newpage
   \printbibliography
@@ -2058,45 +2324,31 @@ For residual adaptation experiments, success is evaluated not only by perplexity
   \clearpage
   \appendix
 
-  \section{Detailed Experimental Configurations}
-
-  \paragraph{Suggested contents.}
-  Put complete hyperparameter tables here: number of calibration samples,
-  batch size, learning rates, transform settings, clipping settings,
-  hardware parameters, and final selected configurations for each run.
-
-  \section{Additional Figures and Tables}
-
-  \paragraph{Suggested contents.}
-  Add extended ablation tables, per-layer plots, extra sensitivity
-  analyses, and any visualizations that support the main text but are
-  too large to place in the core chapters.
-
-  \section{Code Organization and Reproducibility Notes}
-
-  \paragraph{Suggested contents.}
-  Briefly describe the repository structure, entry points for training
-  and evaluation, external dependencies, and the exact steps required to
-  reproduce the reported results.
-
   \section{Key Code Listings}
   \label{app:code}
 
   This appendix collects the four code components that implement the
-  method described in Sections~\ref{sec:method}. All listings are
+  method described in Sec.~\ref{sec:method}. All listings are
   simplified for readability — error handling, logging, and BitAug /
-  bypass switches are omitted; the full code is available in the
-  repository at \texttt{ADC/llama/core/}.
+  bypass switches are omitted; the complete reference implementation
+  is available at
+  \url{https://github.com/BurykinaA/quantization-techniques}
+  (commit \texttt{5b41ef5}) under \texttt{ADC/llama/core/} (full
+  pipeline, see Sec.~\ref{sec:method}) and \texttt{ADC/best/core/}
+  for the cleaned-up reproduction code. Throughout these listings,
+  \texttt{s\_w\_vec} denotes the per-channel weight scale (shape
+  \texttt{[out\_features]}) computed once at calibration time as
+  \texttt{s\_w\_vec[c]\,=\,max(|W[c, :]|)\,/\,q\_w}.
 
   \subsection{ADC Forward Pass}
   \label{app:code:adc}
 
   Listing~\ref{lst:qat_adc_forward} shows the per-tile ADC forward pass
   from \texttt{QATLinearADC.forward} (file
-  \texttt{adc\_layers.py}). It implements equations
-  (\ref{eq:adc_layer_gap}) and the dead-zone / clipping behaviour:
+  \texttt{adc\_layers.py}). It implements
+  Eq.~\eqref{eq:adc_layer_gap} and the dead-zone / clipping behavior:
   per-token activation scale, per-channel weight scale, integer MVM in
-  code domain, ADC \texttt{floor + clamp}, and dequantisation. The
+  code domain, ADC \texttt{floor + clamp}, and dequantization. The
   step size $\delta$ is fixed at construction from
   $(M, q_x, q_w, b_a, k)$.
 
@@ -2139,7 +2391,7 @@ def forward(self, x):
   Listing~\ref{lst:kron} shows the trainable Kronecker transform
   $T = T_1 \otimes T_2$ together with the optional per-channel
   diagonal $D$ (file \texttt{flat\_quant.py}, class
-  \texttt{KroneckerTransform}). Each Kronecker factor is parameterised
+  \texttt{KroneckerTransform}). Each Kronecker factor is parameterized
   as $U \,\mathrm{diag}(d) \, V^\top$ with $U, V$ kept orthogonal via
   PyTorch's \texttt{matrix\_exp} parametrisation, which preserves
   orthogonality under unconstrained gradient updates. The
@@ -2148,7 +2400,7 @@ def forward(self, x):
 
 \begin{lstlisting}[label={lst:kron},caption={Kronecker transform with optional diagonal scaling (\texttt{KroneckerTransform.forward}).}]
 def forward(self, x, inv_t=False):
-    # Optional per-channel diagonal D (Section 4.5)
+    # Optional per-channel diagonal D (Sec. \ref{sec:diagonals})
     if self.add_diag and self.use_diag:
         d = self.diag_scale.abs().clamp(min=1e-8)
         x = x / d if inv_t else x * d
@@ -2177,21 +2429,21 @@ def forward(self, x, inv_t=False):
   Listing~\ref{lst:alpha} shows the block-level reconstruction loss
   with the dual-forward $\alpha$-mixed objective from
   Section~\ref{sec:method}. The same block runs twice — once on the
-  clean FP teacher input $x^\star$ and once on the ADC-quantised
+  clean FP teacher input $x^\star$ and once on the ADC-quantized
   output $\hat{x}$ from the previous block — and the two losses are
   combined linearly.
 
 \begin{lstlisting}[label={lst:alpha},caption={Block-level $\alpha$-mixed reconstruction loss.}]
 # y_star: teacher block output on clean FP input  (no grad)
 # x_clean: clean FP activations
-# x_adc: ADC-quantised activations from previous block (propagation)
-y_fp  = block(x_clean)             # clean forward through quantised block
+# x_adc: ADC-quantized activations from previous block (propagation)
+y_fp  = block(x_clean)             # clean forward through quantized block
 y_adc = block(x_adc)               # propagated forward (sees real ADC noise)
 
 loss_fp  = F.mse_loss(y_fp,  y_star)
 loss_adc = F.mse_loss(y_adc, y_star)
 
-# Eq. (4.X):  L = (1 - alpha) * L_FP + alpha * L_ADC
+# Eq. \eqref{eq:alpha_mix}: L = (1 - alpha) * L_FP + alpha * L_ADC
 loss = (1.0 - alpha) * loss_fp + alpha * loss_adc
 \end{lstlisting}
 
@@ -2216,10 +2468,10 @@ train(epochs=10, lr=0.1 * eta, alpha=0.5)
   Listing~\ref{lst:lora} shows the post-ADC residual LoRA wrapper
   (file \texttt{adc\_lora.py}, class
   \texttt{ResidualLoRATiledLinearADC}). The frozen
-  \texttt{TiledLinearADC} produces the quantised path; a parallel
+  \texttt{TiledLinearADC} produces the quantized path; a parallel
   rank-$r$ branch reads the FP input and adds its
   \texttt{float32} output to the ADC result. \texttt{lora\_B} is
-  initialised to zero so the wrapped layer initially matches the
+  initialized to zero so the wrapped layer initially matches the
   frozen PTQ checkpoint exactly.
 
 \begin{lstlisting}[label={lst:lora},caption={Post-ADC residual LoRA wrapper (\texttt{ResidualLoRATiledLinearADC}).}]
@@ -2245,10 +2497,9 @@ class ResidualLoRATiledLinearADC(nn.Module):
 
   Pre-ADC placement is implemented by the sister class
   \texttt{PreADCLoRATiledLinearADC}, which adds the rank-$r$ update to
-  the weights of each tile \emph{before} integer quantisation and
+  the weights of each tile \emph{before} integer quantization and
   ADC. As shown in Section~\ref{sec:results}, this placement diverges
-  catastrophically (ADC PPL $\sim$105) and is included only as an
-  ablation.
+  (ADC PPL $\sim$105) and is included only as an ablation.
 
 \end{document}
 

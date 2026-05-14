@@ -104,7 +104,7 @@
 
 \begin{frame}[shrink=20]{Backup: Complete INT4 v2 Alpha-Sweep}
   \footnotesize
-  \textbf{Setup:} Llama-3.2-1B, w4a4, 1024 samples. Sweeping $\alpha$ in the mixed loss $\mathcal{L}(\alpha)=(1{-}\alpha)\mathcal{L}_{\rm FP}+\alpha\mathcal{L}_{\rm ADC}$. $\alpha{=}0$ = clean FP inputs only; $\alpha{=}1$ = ADC-noisy inputs only. Gap = ADC PPL / bypass PPL. Last two rows add diagonals and staged training on top of $\alpha{=}0.5$.
+  \textbf{Setup:} Llama-3.2-1B, w4a4, 1024 samples. Sweeping $\alpha$ in the mixed loss $\mathcal{L}(\alpha)=(1{-}\alpha)\mathcal{L}_{\rm FP}+\alpha\mathcal{L}_{\rm ADC}$. $\alpha{=}0$ = clean FP inputs only; $\alpha{=}1$ = ADC-noisy inputs only. Gap = ADC PPL / no-ADC PPL. Last two rows add diagonals and staged training on top of $\alpha{=}0.5$.
   \vspace{0.3em}
   \begin{center}
   \small
@@ -128,7 +128,7 @@
 
 \begin{frame}[shrink=20]{Backup: Complete v7 LoRA Ablation}
   \footnotesize
-  \textbf{Setup:} Post-ADC LoRA correction on frozen PTQ model (Llama-3.2-1B, w4a4, staged PTQ base: bypass=17.89, ADC=27.55). LoRA adapters trained with CE loss on wikitext2, optionally + KL divergence term. Ablating: target projections (\texttt{down+o} vs all 7), rank (1–8), loss (CE vs CE+KL), layer selection (first/last 8), and pre- vs post-ADC placement (pre-ADC fails catastrophically).
+  \textbf{Setup:} Post-ADC LoRA correction on frozen PTQ model (Llama-3.2-1B, w4a4, staged PTQ base: no-ADC=17.89, ADC=27.55). LoRA adapters trained with CE loss on wikitext2, optionally + KL divergence term. Ablating: target projections (\texttt{down+o} vs all 7), rank (1–8), loss (CE vs CE+KL), layer selection (first/last 8), and pre- vs post-ADC placement (pre-ADC fails catastrophically).
   \vspace{0.3em}
   \begin{center}
   \small
@@ -161,18 +161,18 @@
 
 \begin{frame}[shrink=20]{Backup: v8 Generalisation to C4}
   \footnotesize
-  \textbf{Setup:} Same PTQ base as v7, LoRA trained on wikitext2 only, evaluated on both wikitext2 and C4. Checks whether the best v7 config (\texttt{r4\_all\_ce\_kl}) generalises out-of-domain. Without LoRA, the base model has a large C4 ADC gap (46.40 vs bypass 29.41); LoRA closes it to 23.30 on C4 — confirming the correction is not overfitting to the training distribution.
+  \textbf{Setup:} Same PTQ base as v7, LoRA trained on wikitext2 only, evaluated on both wikitext2 and C4. Checks whether the best v7 config (\texttt{r4\_all\_ce\_kl}) generalises out-of-domain. Without LoRA, the base model has a large C4 ADC gap (46.40 vs no-ADC 29.41); LoRA closes it to 23.30 on C4 — confirming the correction is not overfitting to the training distribution.
   \vspace{0.3em}
   \begin{center}
   \small
   \begin{tabular}{llcccc}
     \toprule
-    Experiment & Targets & Wiki bypass & Wiki ADC & C4 bypass & C4 ADC \\
+    Experiment & Targets & Wiki no-ADC & Wiki ADC & C4 no-ADC & C4 ADC \\
     \midrule
     base (no LoRA)       & —      & 18.49 & 27.26 & 29.41 & 46.40 \\
     rank8\_down\_o (CE)  & down+o & 18.51 & 15.47 & 30.48 & 29.39 \\
     r4\_down\_o\_ce\_kl  & down+o & 19.05 & \better{14.27} & 29.37 & \better{23.88} \\
-    \textbf{r4\_all\_ce\_kl} & all 7 & 18.70 & \best{13.96} & 29.10 & \best{23.30} \\
+    \textbf{r4\_all\_ce\_kl} & all 7 & 18.70 & \best{14.03} & 29.10 & \best{23.30} \\
     \bottomrule
   \end{tabular}
   \end{center}
@@ -233,7 +233,7 @@
 
 \begin{frame}[shrink=20]{Backup: Stochastic Propagation (v5)}
   \footnotesize
-  \textbf{Setup:} Instead of a fixed $\alpha$, sample $\alpha_t$ each batch — either Bernoulli$(\{0,1\})$ or Beta$(2,2)$ (concentrated around 0.5). Bernoulli with staged training gives the best bypass PPL ever seen (16.94) but a bad ADC gap, because FP-only batches teach nothing about ADC noise. Beta$(2,2) \approx$ deterministic $\alpha{=}0.5$ in expectation and achieves the best ADC PPL (27.82).
+  \textbf{Setup:} Instead of a fixed $\alpha$, sample $\alpha_t$ each batch — either Bernoulli$(\{0,1\})$ or Beta$(2,2)$ (concentrated around 0.5). Bernoulli with staged training gives the best no-ADC PPL ever seen (16.94) but a bad ADC gap, because FP-only batches teach nothing about ADC noise. Beta$(2,2) \approx$ deterministic $\alpha{=}0.5$ in expectation and achieves the best ADC PPL (27.82).
   \vspace{0.3em}
   \begin{center}
   \small
@@ -250,7 +250,7 @@
   \end{tabular}
   \end{center}
   \vspace{0.15em}
-  Bernoulli gives best bypass but worst ADC gap (hard 0/1 switching provides
+  Bernoulli gives best no-ADC but worst ADC gap (hard 0/1 switching provides
   no ADC signal on FP batches). Beta(2,2) $\approx$ deterministic $\alpha$=0.5 in expectation.
 \end{frame}
 

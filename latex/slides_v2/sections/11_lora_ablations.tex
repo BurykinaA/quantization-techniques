@@ -13,12 +13,12 @@
       \begin{itemize}
         \item \texttt{first8}: 16.64 \quad \texttt{last8}: 20.08
         \item Early layers accumulate and \emph{propagate} errors downstream
-        \item All 16 layers (r=4, CE+KL): \best{13.96} — best result
+        \item All 16 layers (r=4, CE+KL): \best{14.03} — best result
       \end{itemize}
       \vspace{0.2em}
       \textbf{3. Post-ADC is the only stable placement}
       \begin{itemize}
-        \item Pre-ADC LoRA: bypass=123, ADC=105 — catastrophic failure
+        \item Pre-ADC LoRA: no-ADC=123, ADC=105 — catastrophic failure
         \item Gradients through $\texttt{round\_ste}$ are too noisy from step 0
         \item Post-ADC: stable from epoch 1
       \end{itemize}

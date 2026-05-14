@@ -17,7 +17,7 @@
         INT4 pure PTQ best & w4a4 & 27.56 & — \\
         INT4 staged PTQ   & w4a4 & 27.60 & 46.40 \\
         \midrule
-        \textbf{INT4 + LoRA} & \textbf{w4a4} & \best{13.96} & \best{23.30} \\
+        \textbf{INT4 + LoRA} & \textbf{w4a4} & \best{14.03} & \best{23.30} \\
         \bottomrule
       \end{tabular}
       \end{center}
@@ -26,7 +26,7 @@
       \begin{exampleblock}{Key messages}
         \begin{itemize}
           \item \textbf{INT4 + LoRA surpasses best INT8 PTQ on WikiText2}
-                (13.96 vs.\ 14.41)
+                (14.03 vs.\ 14.41)
           \item \textbf{Generalises to C4} ($-50\%$ vs.\ INT4 PTQ baseline):
                 correction is not overfit to calibration domain
           \item CE+KL with all 7 projections is the winning config

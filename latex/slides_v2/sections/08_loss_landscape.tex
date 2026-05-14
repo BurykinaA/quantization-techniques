@@ -7,10 +7,10 @@
         \mathcal{L} = (1{-}\alpha)\,\mathcal{L}_\mathrm{FP} \;+\; \alpha\,\mathcal{L}_\mathrm{ADC}
       \]
       \begin{itemize}
-        \item $\alpha{=}0$: clean FP loss only $\Rightarrow$ flat bypass, wide ADC gap
+        \item $\alpha{=}0$: clean FP loss only $\Rightarrow$ flat no-ADC, wide ADC gap
         \item $\alpha{=}1$: full ADC loss $\Rightarrow$ transforms over-specialise for noise,
-              bypass PPL degrades sharply
-        \item $\alpha{=}0.5$: smooth, wide minimum in both $\mathcal{L}_\mathrm{bypass}$
+              no-ADC PPL degrades sharply
+        \item $\alpha{=}0.5$: smooth, wide minimum in both $\mathcal{L}_\mathrm{no\,ADC}$
               and $\mathcal{L}_\mathrm{ADC}$
       \end{itemize}
 
@@ -37,7 +37,7 @@
         \figplaceholder[0.35\textheight]{3 panels (one per $\alpha$): 2D contour heatmap of
           ADC PPL as a function of perturbation $(a, b)$ around $\theta^*$.
           Color: low PPL = blue (flat/wide), high PPL = red (sharp).
-          Panel 1 ($\alpha{=}0$): narrow deep valley in bypass dim, flat in ADC dim.
+          Panel 1 ($\alpha{=}0$): narrow deep valley in no-ADC axis, flat in ADC dim.
           Panel 2 ($\alpha{=}0.5$): wide flat basin in both dims.
           Panel 3 ($\alpha{=}1$): very sharp minimum (overfit to ADC noise).
           See \texttt{experiments/loss\_landscape.md} for run instructions.}

@@ -303,6 +303,9 @@ INPUT /usr/local/texlive/2026/texmf-dist/fonts/vf/adobe/helvetic/phvb7t.vf
 INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/adobe/helvetic/phvb8r.tfm
 INPUT /usr/local/texlive/2026/texmf-dist/fonts/vf/adobe/helvetic/phvb7t.vf
 INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/adobe/helvetic/phvb8r.tfm
+INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/public/cm/cmbx10.tfm
+INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/public/cm/cmbx8.tfm
+INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/public/cm/cmbx6.tfm
 INPUT ./main.toc
 INPUT ./main.toc
 INPUT main.toc
@@ -311,9 +314,6 @@ OUTPUT main.toc
 INPUT /usr/local/texlive/2026/texmf-dist/fonts/vf/adobe/helvetic/phvb7t.vf
 INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/adobe/helvetic/phvb8r.tfm
 INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/public/cm/cmtt10.tfm
-INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/public/cm/cmbx10.tfm
-INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/public/cm/cmbx8.tfm
-INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/public/cm/cmbx6.tfm
 INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/adobe/helvetic/phvr7t.tfm
 INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/adobe/helvetic/phvr7t.tfm
 INPUT ../slides/figs/dead_zone.png

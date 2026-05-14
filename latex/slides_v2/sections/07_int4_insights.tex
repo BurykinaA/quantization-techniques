@@ -4,9 +4,9 @@
     \begin{column}{0.50\textwidth}
       \textbf{Finding (v3/v4 ablation):}
       \begin{itemize}
-        \item \textbf{MLP diag} $\to$ best \emph{bypass} PPL, but wide ADC gap\\
+        \item \textbf{MLP diag} $\to$ best \emph{no-ADC} PPL, but wide ADC gap\\
               (better transforms, less robust to ADC noise)
-        \item \textbf{Attn diag} $\to$ does \emph{not} improve bypass,\\
+        \item \textbf{Attn diag} $\to$ does \emph{not} improve no-ADC PPL,\\
               but \emph{closes} the ADC gap
         \item \textbf{Inside MLP diag:} \texttt{down\_trans} is the key driver,\\
               not \texttt{up\_gate\_trans}
@@ -27,8 +27,8 @@
         \includegraphics[width=0.95\linewidth]{figs/plot_diag_roles.pdf}
       \else
         \figplaceholder[0.38\textheight]{Grouped bars: \{MLP only, Attn only, Both, Staged\}.
-          Two bars per group: bypass PPL and ADC PPL.
-          Highlight: MLP drives bypass, attn drives ADC gap closure.}
+          Two bars per group: no-ADC PPL and ADC PPL.
+          Highlight: MLP drives no-ADC PPL, attn drives ADC gap closure.}
       \fi
 
       \vspace{0.15em}
@@ -37,7 +37,7 @@
         \includegraphics[width=0.95\linewidth]{figs/plot_mlp_split_up_down.pdf}
       \else
         \figplaceholder[0.30\textheight]{Grouped bars: \{diag up\_gate, diag down, diag both\}.
-          Show bypass and ADC PPL.
+          Show no-ADC and ADC PPL.
           Highlight: down\_trans $\gg$ up\_gate\_trans for ADC quality.}
       \fi
     \end{column}
