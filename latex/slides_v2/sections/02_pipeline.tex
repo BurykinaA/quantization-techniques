@@ -3,7 +3,7 @@
 
   \vfill
   \begin{center}
-  \resizebox{\linewidth}{!}{%
+  \resizebox{0.8\linewidth}{!}{%
   \begin{tikzpicture}[
       every node/.style={font=\small},
       q/.style={draw=mybluedark, rounded corners=3pt, fill=myblue!22,
@@ -15,6 +15,9 @@
                   align=center},
       arr/.style={-{Latex[length=2.5mm]}, thick, mybluedark}
     ]
+    % Reserve a constant bounding box so overlays don't shift the diagram
+    \useasboundingbox (-0.5, -3.4) rectangle (11.5, 3.4);
+
     \node (w)  at (0,   1.1) {$w$};
     \node[q] (qw) at (2.1,  1.1) {Digital\\quantiser};
     \node (wb) at (4.0,  1.1) {$\hat w$};
@@ -39,6 +42,21 @@
     \node (yb) at (11.0, 0) {$\hat y$};
     \draw[arr] (A)--(yb);
 
+    % ── Overlay parts (interactive build-up) ────────────────────────────
+    \only<2>{
+      \node[anchor=south] at (4.0,  1.6)
+        {\includegraphics[width=2cm]{figs/parts/weights.pdf}};
+      \node[anchor=north] at (4.0, -1.6)
+        {\includegraphics[width=2cm]{figs/parts/activations.pdf}};
+    }
+    \only<3>{
+      \node[anchor=south] at (6.2, 0.7)
+        {\includegraphics[width=2.4cm]{figs/parts/mvm.pdf}};
+    }
+    \only<4>{
+      \node[anchor=south] at (9.4, 0.55)
+        {\includegraphics[width=2cm]{figs/parts/adc.pdf}};
+    }
 
   \end{tikzpicture}}
   \end{center}
@@ -52,6 +70,9 @@
           $^{*}$MVM — matrix-vector multiplication. \\
           $^{*}$ADC — analog-to-digital converter.
         \end{tabular}}};
+    \node[anchor=south east, inner sep=0pt]
+      at ([xshift=-0.5cm, yshift=0.5cm]current page.south east) {%
+        \includegraphics[width=4.2cm,keepaspectratio]{figs/Fig1b.pdf}};
   \end{tikzpicture}
 
   \note{Показываю общую схему. Линейный слой проходит через два ключевых этапа: сначала квантизация весов и активаций, потом аналоговое умножение матриц, результат которого читается через АЦП.}

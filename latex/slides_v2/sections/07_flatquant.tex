@@ -3,14 +3,67 @@
 
   \vfill
   \begin{center}
-    \renewcommand{\arraystretch}{1.35}
-    \begin{tabular}{lcc}
-      \toprule
-      \textbf{Model} & \textbf{PPL no ADC} & \textbf{PPL with ADC} \\
-      \midrule
-      INT4 FlatQuant & 15.41 & \alert{2354} \\
-      \bottomrule
-    \end{tabular}
+  \resizebox{0.85\linewidth}{!}{%
+  \begin{tikzpicture}[
+      every node/.style={font=\scriptsize},
+      tile/.style={draw=mybluedark, rounded corners=2pt, fill=mybluedark!15,
+                   text=mybluedark, minimum width=2.0cm, minimum height=0.88cm,
+                   align=center},
+      adc/.style={draw=myorange, line width=1.5pt, rounded corners=2pt,
+                  fill=myorange!35, minimum width=1.3cm, minimum height=0.68cm,
+                  align=center},
+      arr/.style={-{Latex[length=1.3mm]}, thick},
+      annot/.style={-{Latex[length=1.6mm]}, thick, dashed, mygray!70},
+    ]
+    % ─── Pipeline (simplified, ADC-focus) ────────────────────────────────
+    \node[font=\Large] (wdots) at (3.0,  0.8) {$\cdots$};
+    \node (wb)                  at (3.6,  0.8) {$\hat w$};
+
+    \node[font=\Large] (xdots) at (3.0, -0.8) {$\cdots$};
+    \node (xb)                  at (3.6, -0.8) {$\hat x$};
+
+    \node[tile] (T) at (5.8, 0) {Optical MVM\\$y{=}\langle\hat w,\hat x\rangle$};
+    \draw[arr] (wb) -- (T.north west);
+    \draw[arr] (xb) -- (T.south west);
+
+    \node (y)  at (7.6, 0) {$y$};
+    \draw[arr] (T) -- (y);
+
+    \node[adc] (A) at (8.9, 0) {ADC\\$\lfloor y/\delta\rfloor$};
+    \draw[arr] (y)--(A);
+
+    \node (yb) at (10.3, 0) {$\hat y$};
+    \draw[arr] (A)--(yb);
+
+    \begin{pgfonlayer}{background}
+      \node[inner sep=9pt, draw=myorange, line width=1.5pt,
+            rounded corners=7pt, fill=myorange!5,
+            fit=(y)(A)(yb)] (Z2) {};
+    \end{pgfonlayer}
+
+    % ─── Table below the schema as a matrix so cells are addressable ─────
+    \matrix (tab) [
+        below=1.8cm of T,
+        matrix of nodes,
+        nodes={align=center, anchor=center, inner sep=4pt, font=\normalsize},
+        row 1/.style={nodes={font=\bfseries}},
+        row sep=2pt,
+        column sep=22pt,
+        ampersand replacement=\&
+      ] {
+        PPL no ADC \& PPL with ADC \\
+        15.41      \& |[text=myred]| \textbf{2354} \\
+      };
+
+    % ─── Dashed connectors: y → "PPL no ADC", ŷ → "PPL with ADC" ─────────
+    \draw[annot] (y.south)  to[out=-90, in=90] (tab-1-1.north);
+    \draw[annot] (yb.south) to[out=-90, in=90] (tab-1-2.north);
+  \end{tikzpicture}}
   \end{center}
   \vfill
+
+  \begin{center}
+    \footnotesize\itshape
+    Evaluating model perplexity for FlatQuant with 4-bit weights and activations.
+  \end{center}
 \end{frame}

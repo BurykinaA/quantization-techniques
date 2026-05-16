@@ -330,58 +330,47 @@ def main():
 
     # Common z-axis across panels for fair comparison
     zmax = max(np.abs(a0).max(), np.abs(a1).max(), np.abs(a2).max()) * 1.05
-    outlier_thresh = np.quantile(np.abs(a0), 0.99)
 
-    # ── ADC-effect classification for the bottom row ───────────────────────
+    # ── ADC-effect classification ──────────────────────────────────────────
     colors_a0, dead0, sat0, _ = adc_colors_and_stats(a0)
     colors_a1, dead1, sat1, _ = adc_colors_and_stats(a1)
     colors_a2, dead2, sat2, _ = adc_colors_and_stats(a2)
 
-    fig = plt.figure(figsize=(15, 9.4))
-    top_axes = [fig.add_subplot(2, 3, i + 1, projection="3d") for i in range(3)]
-    bot_axes = [fig.add_subplot(2, 3, i + 4, projection="3d") for i in range(3)]
+    fig = plt.figure(figsize=(15, 5.2))
+    axes = [fig.add_subplot(1, 3, i + 1, projection="3d") for i in range(3)]
 
-    # ── Top row: original outlier-vs-inlier coloring (unchanged) ──────────
-    bar3d(top_axes[0], a0, "Original activation\n(strong outliers)",
-          outlier_thresh=outlier_thresh, zmax=zmax)
-    bar3d(top_axes[1], a1, "After Kronecker rotation only\n(outliers redistributed)",
-          outlier_thresh=outlier_thresh, zmax=zmax)
-    bar3d(top_axes[2], a2, "After Kronecker + diagonal\n(flat across channels)",
-          outlier_thresh=outlier_thresh, zmax=zmax)
-
-    # ── Bottom row: same data, ADC-effect coloring ─────────────────────────
+    # ── Single row: ADC-effect coloring ───────────────────────────────────
     def fmt_title(name, dead, sat):
-        return (f"{name} — ADC view\n"
+        return (f"{name}\n"
                 f"dead-zone {dead*100:.1f}% · saturated {sat*100:.1f}%")
 
-    bar3d(bot_axes[0], a0,
-          fmt_title("Original", dead0, sat0),
+    bar3d(axes[0], a0,
+          fmt_title("Original activation", dead0, sat0),
           colors=colors_a0, zmax=zmax)
-    bar3d(bot_axes[1], a1,
-          fmt_title("Kronecker only", dead1, sat1),
+    bar3d(axes[1], a1,
+          fmt_title("After rotation transforms", dead1, sat1),
           colors=colors_a1, zmax=zmax)
-    bar3d(bot_axes[2], a2,
-          fmt_title("Kronecker + diag", dead2, sat2),
+    bar3d(axes[2], a2,
+          fmt_title("After rotations + diagonal", dead2, sat2),
           colors=colors_a2, zmax=zmax)
 
-    # ── Legend for ADC color coding (below bottom row) ────────────────────
+    # ── Legend for ADC color coding (below the row) ───────────────────────
     import matplotlib.patches as mpatches
     legend_handles = [
-        mpatches.Patch(color=C_DEAD, label="dead-zone (INT4 code = 0, lost)"),
+        mpatches.Patch(color=C_DEAD, label="values mapped to 0"),
         mpatches.Patch(color=C_OK,   label="normal ADC bin"),
-        mpatches.Patch(color=C_SAT,  label="saturated (|code| = q$_x$, outlier)"),
+        mpatches.Patch(color=C_SAT,  label="saturated clipped values"),
     ]
     fig.legend(handles=legend_handles, loc="lower center",
                ncol=3, frameon=False, fontsize=11,
-               bbox_to_anchor=(0.5, -0.01))
+               bbox_to_anchor=(0.5, -0.02))
 
     fig.suptitle(
-        f"FlatQuant diagonal: activation shape (top) and ADC effect (bottom)  |  "
-        f"Llama-3.2-1B layer {args.layer}.mlp.{args.proj} input  |  "
-        f"{args.epochs} ep × {args.nsamples} samples",
+        f"FlatQuant diagonal: ADC effect on the activation  |  "
+        f"Llama-3.2-1B layer {args.layer}.mlp.{args.proj} input",
         y=1.00, fontsize=12,
     )
-    plt.tight_layout(rect=[0, 0.02, 1, 0.98])
+    plt.tight_layout(rect=[0, 0.04, 1, 0.96])
 
     out = Path(args.out)
     if not out.is_absolute():

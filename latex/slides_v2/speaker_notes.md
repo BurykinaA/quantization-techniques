@@ -5,8 +5,6 @@
 
 Good morning. I’m Alina Burykina. Today I will talk about making large language models work on analog optical chips.
 
-The first step is to adapt post-training quantization (PTQ) to fixed Analog to Digital Converter (ADC) quantization. Second, when pure PTQ reaches its limit, adding a very small digital correction to improve the accuracy of ADC.
-
 ---
 
 ## Slide 1 — Motivation
@@ -15,8 +13,10 @@ Large language models are now used in many applications, but they are still expe
 
 This creates two practical problems. First, only very large organizations can serve the strongest models at scale. Second, it is still hard to run billion-parameter models on smaller devices.
 
+===
 One possible direction is analog optical computing. The idea is to perform the large linear operations not only with digital electronics, but directly with light.
 
+===
 This is not just a theoretical idea. There are experimental photonics labs that are actively building this kind of hardware. In our case, the project is connected to a collaboration with an optical hardware group at Oxford.
 
 So before discussing the quantization method, let’s look at what such an optical inference setup can look like.
@@ -37,9 +37,11 @@ At this boundary, the continuous physical signal has to be read as a finite digi
 
 To study this problem algorithmically, I use this simplified model of an optical linear layer which is widely accepted by other researchers. 
 
-First, the weights and activations are quantized digitally. Then the optical engine computes matrix “may-trix”-vector multiplication. 
+First, the weights and activations are quantized digitally for setting up the phusical system
 
-The output is then passed through the ADC. Mathematically, the ADC maps the value to discrete levels, using a step size delta. The step size represents the smallest change in signal intensity that the camera can distinguish. Any variations smaller than Δ are treated as the same digital value, while larger changes are assigned to different levels. So the layer has two different quantization stages. (может нужна какая-то поясняющая картинка)
+Then the optical engine computes matrix “may-trix”-vector multiplication using the laser. 
+
+The output is then passed through the ADC. Mathematically, the ADC maps the value to discrete levels, using a step size delta. The step size represents the smallest change in signal intensity that the camera can distinguish. Any variations smaller than Δ are treated as the same digital value, while larger changes are assigned to different levels. So the layer has two different quantization stages.
 
 Let's discusse those 2 quantizations.
 
@@ -47,13 +49,11 @@ Let's discusse those 2 quantizations.
 
 ## Slide 4 — Digital quantization
 
-The first one is standard digital quantization of weights and activations. This is already well studied, but LLMs make it difficult.
-
-LLM activations often contain strong outlier channels. Only a few channels may have very large values, but they can be important for the model. So we cannot just remove them.
-
-At the same time, if the scale is chosen to keep these outliers, the normal values lose resolution. This is the usual outlier problem in LLM quantization.
+The first one is standard digital quantization of weights and activations. This is already well studied, but LLMs make it more difficult, while activations contain strong outlier channels, which is hard to qunatize.
 
 In this work, I use low-bit quantization for weights and activations of linear layers, mainly INT4. 
+
+отдельно сфокусируй внимание что этот y - это вот обычная оптимизация квантизации
 
 ---
 
@@ -109,7 +109,7 @@ So my first extension is cross-block propagation. During calibration, I pass the
 
 The model weights stay frozen; only the PTQ transformations are trained.
 
-However, using only ADC-corrupted inputs was too still too noisy.
+However, using only ADC-corrupted inputs was still too noisy.
 ---
 
 ## Slide 8 — Our Extension I: alpha-mixed objective
@@ -164,6 +164,25 @@ The important message is not the exact schedule, but that MLP and attention have
 Staged training uses this difference.
 
 
+---
+
+## Slide 12 — Activation Shape vs ADC Effect
+This slide summarizes the intuition behind the PTQ branch.
+
+In LLMs, the problem is not only that values are low-bit. The problem is that activations are very uneven across channels.
+
+On the top left, the original activation has strong outliers.
+
+The transforms (T) spreads this energy across channels. The diagonal scaling then makes the channels more balanced.
+
+The bottom row shows why this matters for ADC quantization. Red means values that are rounded to zero and lost. Orange means saturation, the are clipped to the same munber. Blue means useful ADC levels.
+
+With the original activation, almost 29 percent of values are lost in the dead-zone. After the transformations, this drops to about 17 percent.
+
+So our PTQ modifications make the ADC see a better-shaped signal.
+(поправить конец)
+
+
 
 ---
 
@@ -210,4 +229,6 @@ The downstream tasks show that this is still not full-precision quality, but the
 The main contribution is the algorithmic adaptation around the chip’s fixed ADC and abalation that I have done.
 
 
-
+----
+добавить 
+модель была не адаптирована - стала работать 

@@ -56,7 +56,7 @@
 \newcommand{\myfirstname}{Alina}
 \newcommand{\mynumber}{00000000}
 \newcommand{\myname}{\myfirstname{} \mylastname{}}
-\newcommand{\mytitle}{ADC-Aware Quantization of LLaMA-Family Models for In-Memory Computing}
+\newcommand{\mytitle}{ADC-Aware Quantization of Large Language Models for In-Memory Computing}
 \newcommand{\mysupervisor}{Prof.~Dmitry Vetrov}
 
 \hypersetup{
@@ -169,34 +169,43 @@
   \section*{Abstract}
   \addcontentsline{toc}{section}{Abstract}
 
-  This thesis studies post-training quantization for LLaMA-family models
-  deployed on analog in-memory computing accelerators in which every
-  tiled matrix-vector multiplication is followed by a
-  finite-resolution analog-to-digital converter (ADC). Unlike standard
-  digital PTQ, this setting introduces an additional output
-  quantization lattice whose step size is fixed by hardware. We
-  implement an ADC-aware simulation pipeline for Llama-3.2-1B and
-  evaluate FlatQuant-style transformations together with several
-  ADC-aware extensions: propagated calibration, an
-  $\alpha$-mixed clean-vs-ADC training objective, bounded diagonal
-  scaling, staged training, and a residual post-ADC LoRA correction.
-  In the bipolar W4A4 setting, naive ADC inference inflates WikiText-2
-  perplexity from $15.41$ in no-ADC mode to $2354.86$ with the ADC
-  enabled (a $\times 153$ gap relative to the bfloat16 baseline of
-  $8.68$). ADC-aware PTQ reduces this to ADC perplexity
-  $\approx 27.6$, but further PTQ improvements plateau because the ADC
-  output lattice is fixed. A rank-4 post-ADC residual LoRA branch,
-  trained with cross-entropy plus KL distillation against a
-  full-precision teacher, reduces WikiText-2 ADC perplexity to
-  $\mathbf{14.03}$ and C4 ADC perplexity from $46.40$ to
-  $\mathbf{23.30}$. In an unipolar (unsigned shift-subtract) ADC
-  setting, retraining FlatQuant against the unipolar step size
-  ($\delta_u \approx 14.1$) combined with per-layer $k$ search and
-  post-ADC LoRA reduces WikiText-2 perplexity from $39.00$ to
-  $\mathbf{14.56}$. These results show that transform-based PTQ is
-  necessary but not by itself sufficient under low-resolution ADC
-  constraints, and that lightweight digital output-side adaptation can
-  recover much of the remaining accuracy loss.
+  Analog optical matrix-vector accelerators promise energy-efficient
+  inference for large language models (LLMs), but they expose a
+  failure mode absent from standard digital deployment: after each
+  analog accumulation, a finite-resolution analog-to-digital
+  converter (ADC) maps the output onto a hardware-fixed quantization
+  lattice. This post-accumulation quantizer is especially damaging
+  for large language models, whose channel-wise outliers make a
+  single ADC scale difficult to use. Previous hardware-aware
+  approaches commonly rely on retraining through the hardware model;
+  for billion-parameter large language models, such
+  quantization-aware training is often impractical because the
+  original training data and compute budget are unavailable.
+
+  This thesis instead investigates whether an already trained large
+  language model can be adapted in the post-training setting.
+  Building on FlatQuant, an ADC-aware post-training quantization
+  (PTQ) pipeline is introduced in which calibration is made to match
+  analog inference by propagating ADC-quantized activations across
+  blocks, mixing clean and ADC-aware objectives, and applying
+  bounded diagonal scaling with staged calibration. On Llama-3.2-1B
+  in the 4-bit weight and 4-bit activation (W4A4) setting, standard
+  FlatQuant remains usable when the ADC is disabled, with WikiText-2
+  perplexity $15.41$, but collapses when the ADC is enabled,
+  reaching $2354$. ADC-aware post-training quantization reduces this
+  to $26.66$, showing that transform-based calibration is necessary
+  but plateaus far from the bfloat16 baseline of $8.68$.
+
+  To close the remaining gap without full quantization-aware
+  training, a rank-4 digital residual branch is added after the ADC,
+  and only this low-rank correction is trained using cross-entropy
+  and teacher Kullback--Leibler distillation. This
+  $0.22\%$-parameter adaptation reduces WikiText-2/C4 ADC perplexity
+  from $26.66/45.62$ to $\mathbf{14.03}/\mathbf{23.20}$. These
+  results show that fixed low-resolution ADCs require algorithmic
+  adaptation beyond digital post-training quantization, and that
+  lightweight output-side digital correction can recover much of the
+  accuracy lost at the analog-digital boundary.
 
   \newpage
   \tableofcontents

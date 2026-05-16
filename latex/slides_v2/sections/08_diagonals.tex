@@ -24,7 +24,9 @@
       \renewcommand{\arraystretch}{1.25}
       \begin{tabular}{@{}l c c@{}}
         \toprule
-        \textbf{$\alpha$-mix base $+$} & \bypass & \adcppl{} \\
+        \textbf{$\alpha$-mix base $+$} &
+          \tikz[overlay,remember picture,baseline]{\coordinate(col_noadc);}\bypass &
+          \tikz[overlay,remember picture,baseline]{\coordinate(col_adc);}\adcppl{} \\
         \midrule
         — (no diag)              & $24.24{\pm}0.6$ & $31.22{\pm}0.9$ \\
         \texttt{diag\_mlp} only  & \best{$\mathbf{19.37}{\pm}0.4$} & $31.65{\pm}1.0$ \\
@@ -35,4 +37,51 @@
       \end{tabular}
     \end{column}
   \end{columns}
+
+  \vspace{0.3em}
+  \begin{center}
+  \resizebox{0.55\linewidth}{!}{%
+  \begin{tikzpicture}[remember picture,
+      every node/.style={font=\scriptsize},
+      tile/.style={draw=mybluedark, rounded corners=2pt, fill=mybluedark!15,
+                   text=mybluedark, minimum width=2.0cm, minimum height=0.88cm,
+                   align=center},
+      adc/.style={draw=myorange, line width=1.5pt, rounded corners=2pt,
+                  fill=myorange!35, minimum width=1.3cm, minimum height=0.68cm,
+                  align=center},
+      arr/.style={-{Latex[length=1.3mm]}, thick},
+    ]
+    \node[font=\Large] (wdots) at (3.0,  0.8) {$\cdots$};
+    \node (wb)                  at (3.6,  0.8) {$\hat w$};
+    \node[font=\Large] (xdots) at (3.0, -0.8) {$\cdots$};
+    \node (xb)                  at (3.6, -0.8) {$\hat x$};
+
+    \node[tile] (T) at (5.8, 0) {Optical MVM\\$y{=}\langle\hat w,\hat x\rangle$};
+    \draw[arr] (wb) -- (T.north west);
+    \draw[arr] (xb) -- (T.south west);
+
+    \node (y)  at (7.6, 0) {$y$};
+    \draw[arr] (T) -- (y);
+
+    \node[adc] (A) at (8.9, 0) {ADC\\$\lfloor y/\delta\rfloor$};
+    \draw[arr] (y)--(A);
+
+    \node (yb) at (10.3, 0) {$\hat y$};
+    \draw[arr] (A)--(yb);
+
+    \begin{pgfonlayer}{background}
+      \node[inner sep=9pt, draw=myorange, line width=1.5pt,
+            rounded corners=7pt, fill=myorange!5,
+            fit=(y)(A)(yb)] (Z2) {};
+    \end{pgfonlayer}
+  \end{tikzpicture}}
+  \end{center}
+
+  % ─── Cross-picture dashed connectors from schema y/ŷ to table column headers ──
+  \begin{tikzpicture}[overlay, remember picture]
+    \draw[-{Latex[length=1.5mm]}, thick, dashed, mygray!70]
+      (y.north)  to[out=90, in=-90] (col_noadc);
+    \draw[-{Latex[length=1.5mm]}, thick, dashed, mygray!70]
+      (yb.north) to[out=90, in=-90] (col_adc);
+  \end{tikzpicture}
 \end{frame}

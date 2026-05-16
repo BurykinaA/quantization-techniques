@@ -12,8 +12,16 @@
           \underbrace{(x T^{-1})}_{\tilde x}\,
           \underbrace{(T W^\top)}_{\tilde W^\top}.
       \]
-      \vspace{0.5em}
-      Error accumulates the same way during train and inference.
+      \vspace{0.4em}
+
+      \textbf{Previously:}\\
+      Each transformer block is calibrated independently
+      $\Rightarrow$ \alert{mismatch}.
+
+      \vspace{0.6em}
+
+      \textbf{Now:} error accumulates the same way
+      during train and inference.
     \end{column}
 
     \begin{column}{0.66\textwidth}
