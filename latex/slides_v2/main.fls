@@ -621,12 +621,6 @@ INPUT ./sections/07_flatquant.tex
 INPUT ./sections/07_flatquant.tex
 INPUT sections/07_flatquant.tex
 INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/jknappen/ec/ecsx0900.tfm
-INPUT ./sections/05_research_questions.tex
-INPUT ./sections/05_research_questions.tex
-INPUT ./sections/05_research_questions.tex
-INPUT ./sections/05_research_questions.tex
-INPUT sections/05_research_questions.tex
-INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/jknappen/ec/ecsx1000.tfm
 INPUT ./sections/09_block_propagation.tex
 INPUT ./sections/09_block_propagation.tex
 INPUT ./sections/09_block_propagation.tex
@@ -669,6 +663,12 @@ INPUT ./sections/10_staged_training.tex
 INPUT ./sections/10_staged_training.tex
 INPUT ./sections/10_staged_training.tex
 INPUT sections/10_staged_training.tex
+INPUT /usr/local/texlive/2026/texmf-dist/fonts/tfm/jknappen/ec/ecsx1000.tfm
+INPUT ./figs/plot_diag_3d_adc.pdf
+INPUT ./figs/plot_diag_3d_adc.pdf
+INPUT ./figs/plot_diag_3d_adc.pdf
+INPUT ./figs/plot_diag_3d_adc.pdf
+INPUT ./figs/plot_diag_3d_adc.pdf
 INPUT ./sections/11_ptq_results.tex
 INPUT ./sections/11_ptq_results.tex
 INPUT ./sections/11_ptq_results.tex
