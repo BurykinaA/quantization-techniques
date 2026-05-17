@@ -3,92 +3,87 @@
 \contentsline {section}{\numberline {1}Introduction}{1}{section.1}%
 \contentsline {section}{\numberline {2}Background and Related Work}{2}{section.2}%
 \contentsline {subsection}{\numberline {2.1}In-Memory Computing and ADC-Constrained Inference}{2}{subsection.2.1}%
-\contentsline {subsection}{\numberline {2.2}Quantization of Neural Networks}{4}{subsection.2.2}%
-\contentsline {subsection}{\numberline {2.3}Challenges of Quantizing Transformer Models}{5}{subsection.2.3}%
-\contentsline {subsection}{\numberline {2.4}Existing Methods}{6}{subsection.2.4}%
-\contentsline {paragraph}{Outlier-aware scaling and equivalent transformations.}{6}{section*.6}%
-\contentsline {paragraph}{Reconstruction-based PTQ for LLMs.}{7}{section*.7}%
-\contentsline {paragraph}{Rotation and geometry-based methods.}{7}{section*.8}%
-\contentsline {paragraph}{ADC-aware methods.}{7}{section*.9}%
-\contentsline {paragraph}{Lightweight post-quantization adaptation.}{7}{section*.10}%
-\contentsline {subsection}{\numberline {2.5}Research Gap}{8}{subsection.2.5}%
-\contentsline {section}{\numberline {3}Problem Statement and Research Questions}{9}{section.3}%
-\contentsline {subsection}{\numberline {3.1}Problem Definition}{9}{subsection.3.1}%
-\contentsline {subsection}{\numberline {3.2}Research Questions}{10}{subsection.3.2}%
-\contentsline {subsection}{\numberline {3.3}Scope and Assumptions}{11}{subsection.3.3}%
-\contentsline {subsection}{\numberline {3.4}Evaluation Criteria}{12}{subsection.3.4}%
-\contentsline {section}{\numberline {4}Proposed Method}{13}{section.4}%
-\contentsline {subsection}{\numberline {4.1}Post-Training Quantization}{13}{subsection.4.1}%
-\contentsline {subsubsection}{\numberline {4.1.1}Baseline: FlatQuant for LLaMA}{13}{subsubsection.4.1.1}%
-\contentsline {subsubsection}{\numberline {4.1.2}ADC Hardware Model and Forward Simulation}{14}{subsubsection.4.1.2}%
-\contentsline {subsubsection}{\numberline {4.1.3}Limitations of Per-Layer Reconstruction}{14}{subsubsection.4.1.3}%
-\contentsline {subsubsection}{\numberline {4.1.4}Block-wise Calibration with Propagation and $\alpha $-Mixing}{15}{subsubsection.4.1.4}%
-\contentsline {paragraph}{Block-level reconstruction.}{15}{section*.12}%
-\contentsline {paragraph}{Propagation across blocks.}{15}{section*.13}%
-\contentsline {paragraph}{$\alpha $-mixed objective.}{15}{section*.14}%
-\contentsline {subsubsection}{\numberline {4.1.5}Trainable Per-Channel Diagonals}{15}{subsubsection.4.1.5}%
-\contentsline {paragraph}{Implications for INT4 ADC.}{16}{section*.15}%
-\contentsline {paragraph}{Motivation and formulation.}{16}{section*.16}%
-\contentsline {paragraph}{Placement in attention and MLP blocks.}{17}{section*.17}%
-\contentsline {subsubsection}{\numberline {4.1.6}Staged Training}{17}{subsubsection.4.1.6}%
-\contentsline {subsection}{\numberline {4.2}Quantization-Aware Adaptation via Post-ADC Residual LoRA}{17}{subsection.4.2}%
-\contentsline {subsubsection}{\numberline {4.2.1}Architecture}{17}{subsubsection.4.2.1}%
-\contentsline {paragraph}{Honest positioning of the correction.}{18}{section*.20}%
-\contentsline {subsubsection}{\numberline {4.2.2}Training Objective}{19}{subsubsection.4.2.2}%
-\contentsline {subsubsection}{\numberline {4.2.3}Why Post-ADC Placement}{19}{subsubsection.4.2.3}%
-\contentsline {section}{\numberline {5}Experiments and Results}{19}{section.5}%
-\contentsline {subsection}{\numberline {5.1}Model, Data, and Hardware Setup}{19}{subsection.5.1}%
-\contentsline {paragraph}{Model.}{19}{section*.21}%
-\contentsline {paragraph}{Calibration data.}{19}{section*.22}%
-\contentsline {paragraph}{Evaluation.}{19}{section*.23}%
-\contentsline {paragraph}{ADC hardware parameters.}{20}{section*.24}%
-\contentsline {paragraph}{FlatQuant calibration settings.}{20}{section*.26}%
-\contentsline {subsection}{\numberline {5.2}Evaluation Metrics}{20}{subsection.5.2}%
-\contentsline {subsection}{\numberline {5.3}Evaluation Protocol}{21}{subsection.5.3}%
-\contentsline {subsection}{\numberline {5.4}Bipolar ADC: Ablation Results}{21}{subsection.5.4}%
-\contentsline {subsubsection}{\numberline {5.4.1}INT8: Effect of Calibration Objective}{21}{subsubsection.5.4.1}%
-\contentsline {subsubsection}{\numberline {5.4.2}INT4: Sample Count and Propagation}{21}{subsubsection.5.4.2}%
-\contentsline {subsubsection}{\numberline {5.4.3}INT4: $\alpha $-Mixing Sweep (1024 Samples)}{23}{subsubsection.5.4.3}%
-\contentsline {subsubsection}{\numberline {5.4.4}INT4: Diagonal Placement, MLP Decomposition, and Staged Training}{23}{subsubsection.5.4.4}%
-\contentsline {subsubsection}{\numberline {5.4.5}INT4: Stochastic Propagation}{25}{subsubsection.5.4.5}%
-\contentsline {subsubsection}{\numberline {5.4.6}Post-ADC Residual LoRA: Initial Sweep}{26}{subsubsection.5.4.6}%
-\contentsline {subsubsection}{\numberline {5.4.7}Post-ADC Residual LoRA: Ablation Study}{26}{subsubsection.5.4.7}%
-\contentsline {subsubsection}{\numberline {5.4.8}Post-ADC Residual LoRA: Generalization to C4}{26}{subsubsection.5.4.8}%
-\contentsline {subsection}{\numberline {5.5}Unsigned (Unipolar) ADC: A Second Hardware Setting}{28}{subsection.5.5}%
-\contentsline {subsubsection}{\numberline {5.5.1}Unsigned Shift-Subtract ADC Algorithm}{29}{subsubsection.5.5.1}%
-\contentsline {paragraph}{Step 1 — Shift to unsigned.}{29}{section*.43}%
-\contentsline {paragraph}{Step 2 — Hardware MVM.}{29}{section*.44}%
-\contentsline {paragraph}{Step 3 — ADC floor.}{29}{section*.45}%
-\contentsline {paragraph}{Step 4 — Digital correction (exact).}{29}{section*.46}%
-\contentsline {paragraph}{Step 5 — Dequantisation.}{29}{section*.47}%
-\contentsline {subsubsection}{\numberline {5.5.2}Per-Layer $k$ Search}{29}{subsubsection.5.5.2}%
-\contentsline {subsubsection}{\numberline {5.5.3}Calibration Objective for Unipolar ADC}{30}{subsubsection.5.5.3}%
-\contentsline {subsubsection}{\numberline {5.5.4}Experiment Configurations}{30}{subsubsection.5.5.4}%
-\contentsline {subsubsection}{\numberline {5.5.5}Experiment History and Hardware Setting Evolution}{30}{subsubsection.5.5.5}%
-\contentsline {paragraph}{Bipolar ADC (signed accumulation).}{30}{section*.48}%
-\contentsline {paragraph}{Four-quadrant unipolar.}{31}{section*.49}%
-\contentsline {paragraph}{Mismatched unsigned evaluation (historical).}{31}{section*.50}%
-\contentsline {paragraph}{Unipolar FQ — current.}{31}{section*.51}%
-\contentsline {section}{\numberline {6}Discussion}{31}{section.6}%
-\contentsline {subsection}{\numberline {6.1}Interpretation of Results}{31}{subsection.6.1}%
-\contentsline {paragraph}{Why propagation helps in INT8.}{31}{section*.53}%
-\contentsline {paragraph}{Why $\alpha = 0.5$ beats $\alpha \in \{0,1\}$ on INT4.}{32}{section*.54}%
-\contentsline {paragraph}{Why diagonals help INT4 specifically.}{32}{section*.55}%
-\contentsline {paragraph}{Why staged training is needed for diagonals + $\alpha = 0.5$.}{32}{section*.56}%
-\contentsline {paragraph}{Why post-ADC LoRA works.}{32}{section*.57}%
-\contentsline {subsection}{\numberline {6.2}Limits of PTQ Under ADC Constraints}{32}{subsection.6.2}%
-\contentsline {subsection}{\numberline {6.3}Practical Implications for IMC Deployment}{32}{subsection.6.3}%
-\contentsline {subsection}{\numberline {6.4}Threats to Validity}{33}{subsection.6.4}%
-\contentsline {paragraph}{Simulation, not silicon.}{33}{section*.58}%
-\contentsline {paragraph}{One model, one calibration set.}{33}{section*.59}%
-\contentsline {paragraph}{Simplified ADC model.}{33}{section*.60}%
-\contentsline {paragraph}{Post-ADC LoRA carries digital overhead.}{33}{section*.61}%
-\contentsline {section}{\numberline {7}Conclusion}{33}{section.7}%
-\contentsline {paragraph}{Answers to the research questions.}{34}{section*.62}%
-\contentsline {paragraph}{Closing thesis.}{34}{section*.63}%
-\contentsline {paragraph}{Directions for future work.}{34}{section*.64}%
-\contentsline {section}{\numberline {A}Key Code Listings}{37}{appendix.A}%
-\contentsline {subsection}{\numberline {A.1}ADC Forward Pass}{37}{subsection.A.1}%
-\contentsline {subsection}{\numberline {A.2}Kronecker Transform with Diagonal}{37}{subsection.A.2}%
-\contentsline {subsection}{\numberline {A.3}Block-Level Loss with $\alpha $-Mixing}{38}{subsection.A.3}%
-\contentsline {subsection}{\numberline {A.4}Post-ADC Residual LoRA}{39}{subsection.A.4}%
+\contentsline {subsection}{\numberline {2.2}Quantization of Neural Networks}{5}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Challenges of Quantizing Transformer Models}{6}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}Existing Methods}{8}{subsection.2.4}%
+\contentsline {subsection}{\numberline {2.5}Research Gap}{10}{subsection.2.5}%
+\contentsline {section}{\numberline {3}Problem Statement and Research Questions}{11}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Problem Definition}{11}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Research Questions}{12}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Scope and Assumptions}{13}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Evaluation Criteria}{14}{subsection.3.4}%
+\contentsline {section}{\numberline {4}Proposed Method}{16}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Post-Training Quantization}{16}{subsection.4.1}%
+\contentsline {subsubsection}{\numberline {4.1.1}Baseline: FlatQuant for LLaMA}{16}{subsubsection.4.1.1}%
+\contentsline {subsubsection}{\numberline {4.1.2}ADC Hardware Model and Forward Simulation}{16}{subsubsection.4.1.2}%
+\contentsline {subsubsection}{\numberline {4.1.3}Limitations of Per-Layer Reconstruction}{17}{subsubsection.4.1.3}%
+\contentsline {subsubsection}{\numberline {4.1.4}Block-wise Calibration with Propagation and $\alpha $-Mixing}{17}{subsubsection.4.1.4}%
+\contentsline {paragraph}{Block-level reconstruction.}{17}{section*.9}%
+\contentsline {paragraph}{Propagation across blocks.}{17}{section*.10}%
+\contentsline {paragraph}{$\alpha $-mixed objective.}{17}{section*.11}%
+\contentsline {subsubsection}{\numberline {4.1.5}Trainable Per-Channel Diagonals}{18}{subsubsection.4.1.5}%
+\contentsline {paragraph}{Implications for INT4 ADC.}{18}{section*.12}%
+\contentsline {paragraph}{Motivation and formulation.}{19}{section*.13}%
+\contentsline {paragraph}{Placement in attention and MLP blocks.}{19}{section*.14}%
+\contentsline {subsubsection}{\numberline {4.1.6}Staged Training}{19}{subsubsection.4.1.6}%
+\contentsline {subsection}{\numberline {4.2}Quantization-Aware Adaptation via Post-ADC Residual LoRA}{20}{subsection.4.2}%
+\contentsline {subsubsection}{\numberline {4.2.1}Architecture}{20}{subsubsection.4.2.1}%
+\contentsline {paragraph}{Honest positioning of the correction.}{20}{section*.17}%
+\contentsline {subsubsection}{\numberline {4.2.2}Training Objective}{21}{subsubsection.4.2.2}%
+\contentsline {subsubsection}{\numberline {4.2.3}Why Post-ADC Placement}{21}{subsubsection.4.2.3}%
+\contentsline {section}{\numberline {5}Experiments and Results}{21}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Model, Data, and Hardware Setup}{21}{subsection.5.1}%
+\contentsline {paragraph}{Model.}{21}{section*.18}%
+\contentsline {paragraph}{Calibration data.}{22}{section*.19}%
+\contentsline {paragraph}{Evaluation.}{22}{section*.20}%
+\contentsline {paragraph}{ADC hardware parameters.}{22}{section*.21}%
+\contentsline {paragraph}{FlatQuant calibration settings.}{22}{section*.23}%
+\contentsline {subsection}{\numberline {5.2}Evaluation Metrics}{22}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Evaluation Protocol}{23}{subsection.5.3}%
+\contentsline {subsection}{\numberline {5.4}Bipolar ADC: Ablation Results}{23}{subsection.5.4}%
+\contentsline {subsubsection}{\numberline {5.4.1}INT8: Effect of Calibration Objective}{23}{subsubsection.5.4.1}%
+\contentsline {subsubsection}{\numberline {5.4.2}INT4: Sample Count and Propagation}{24}{subsubsection.5.4.2}%
+\contentsline {subsubsection}{\numberline {5.4.3}INT4: $\alpha $-Mixing Sweep (1024 Samples)}{24}{subsubsection.5.4.3}%
+\contentsline {subsubsection}{\numberline {5.4.4}INT4: Diagonal Placement, MLP Decomposition, and Staged Training}{26}{subsubsection.5.4.4}%
+\contentsline {subsubsection}{\numberline {5.4.5}INT4: Stochastic Propagation}{28}{subsubsection.5.4.5}%
+\contentsline {subsubsection}{\numberline {5.4.6}Post-ADC Residual LoRA: Initial Sweep}{28}{subsubsection.5.4.6}%
+\contentsline {subsubsection}{\numberline {5.4.7}Post-ADC Residual LoRA: Ablation Study}{29}{subsubsection.5.4.7}%
+\contentsline {subsubsection}{\numberline {5.4.8}Post-ADC Residual LoRA: Generalization to C4}{30}{subsubsection.5.4.8}%
+\contentsline {subsection}{\numberline {5.5}Unsigned (Unipolar) ADC: A Second Hardware Setting}{30}{subsection.5.5}%
+\contentsline {subsubsection}{\numberline {5.5.1}Unsigned Shift-Subtract ADC Algorithm}{31}{subsubsection.5.5.1}%
+\contentsline {paragraph}{Step 1 — Shift to unsigned.}{31}{section*.40}%
+\contentsline {paragraph}{Step 2 — Hardware MVM.}{31}{section*.41}%
+\contentsline {paragraph}{Step 3 — ADC floor.}{31}{section*.42}%
+\contentsline {paragraph}{Step 4 — Digital correction (exact).}{32}{section*.43}%
+\contentsline {paragraph}{Step 5 — Dequantisation.}{32}{section*.44}%
+\contentsline {subsubsection}{\numberline {5.5.2}Per-Layer $k$ Search}{32}{subsubsection.5.5.2}%
+\contentsline {subsubsection}{\numberline {5.5.3}Calibration Objective for Unipolar ADC}{32}{subsubsection.5.5.3}%
+\contentsline {subsubsection}{\numberline {5.5.4}Experiment Configurations}{33}{subsubsection.5.5.4}%
+\contentsline {subsubsection}{\numberline {5.5.5}Experiment History and Hardware Setting Evolution}{33}{subsubsection.5.5.5}%
+\contentsline {paragraph}{Bipolar ADC (signed accumulation).}{33}{section*.45}%
+\contentsline {paragraph}{Four-quadrant unipolar.}{33}{section*.46}%
+\contentsline {paragraph}{Mismatched unsigned evaluation (historical).}{33}{section*.47}%
+\contentsline {paragraph}{Unipolar FQ — current.}{33}{section*.48}%
+\contentsline {section}{\numberline {6}Discussion}{34}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Interpretation of Results}{34}{subsection.6.1}%
+\contentsline {paragraph}{Why propagation helps in INT8.}{34}{section*.50}%
+\contentsline {paragraph}{Why $\alpha = 0.5$ beats $\alpha \in \{0,1\}$ on INT4.}{34}{section*.51}%
+\contentsline {paragraph}{Why diagonals help INT4 specifically.}{34}{section*.52}%
+\contentsline {paragraph}{Why staged training is needed for diagonals + $\alpha = 0.5$.}{35}{section*.53}%
+\contentsline {paragraph}{Why post-ADC LoRA works.}{35}{section*.54}%
+\contentsline {subsection}{\numberline {6.2}Limits of PTQ Under ADC Constraints}{35}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Practical Implications for IMC Deployment}{35}{subsection.6.3}%
+\contentsline {subsection}{\numberline {6.4}Threats to Validity}{36}{subsection.6.4}%
+\contentsline {paragraph}{Simulation, not silicon.}{36}{section*.55}%
+\contentsline {paragraph}{One model, one calibration set.}{36}{section*.56}%
+\contentsline {paragraph}{Simplified ADC model.}{36}{section*.57}%
+\contentsline {paragraph}{Post-ADC LoRA carries digital overhead.}{36}{section*.58}%
+\contentsline {section}{\numberline {7}Conclusion}{36}{section.7}%
+\contentsline {paragraph}{Answers to the research questions.}{36}{section*.59}%
+\contentsline {paragraph}{Closing thesis.}{37}{section*.60}%
+\contentsline {paragraph}{Directions for future work.}{37}{section*.61}%
+\contentsline {section}{\numberline {A}Key Code Listings}{40}{appendix.A}%
+\contentsline {subsection}{\numberline {A.1}ADC Forward Pass}{40}{subsection.A.1}%
+\contentsline {subsection}{\numberline {A.2}Kronecker Transform with Diagonal}{40}{subsection.A.2}%
+\contentsline {subsection}{\numberline {A.3}Block-Level Loss with $\alpha $-Mixing}{41}{subsection.A.3}%
+\contentsline {subsection}{\numberline {A.4}Post-ADC Residual LoRA}{42}{subsection.A.4}%

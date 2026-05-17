@@ -576,45 +576,6 @@
       \field{title}{Learned Step Size Quantization}
       \field{year}{2019}
     \endentry
-    \entry{GPTQ2022}{article}{}{}
-      \name{author}{4}{}{%
-        {{hash=ddda2fa01f869e2cbd2dcffd43c994fb}{%
-           family={Frantar},
-           familyi={F\bibinitperiod},
-           given={Elias},
-           giveni={E\bibinitperiod}}}%
-        {{hash=b75b3eec8eb6e5e8eb2b20a256848acb}{%
-           family={Ashkboos},
-           familyi={A\bibinitperiod},
-           given={Saleh},
-           giveni={S\bibinitperiod}}}%
-        {{hash=76ec76312292adb42427d46f3efb852b}{%
-           family={Hoefler},
-           familyi={H\bibinitperiod},
-           given={Torsten},
-           giveni={T\bibinitperiod}}}%
-        {{hash=f03360e92167899bed76b84077d1b13f}{%
-           family={Alistarh},
-           familyi={A\bibinitperiod},
-           given={Dan},
-           giveni={D\bibinitperiod}}}%
-      }
-      \strng{namehash}{eb9bf8088cf89c0278dfb9f1afa6e2f5}
-      \strng{fullhash}{da8c648876af0a6c19a3a1c3a2386914}
-      \strng{fullhashraw}{da8c648876af0a6c19a3a1c3a2386914}
-      \strng{bibnamehash}{eb9bf8088cf89c0278dfb9f1afa6e2f5}
-      \strng{authorbibnamehash}{eb9bf8088cf89c0278dfb9f1afa6e2f5}
-      \strng{authornamehash}{eb9bf8088cf89c0278dfb9f1afa6e2f5}
-      \strng{authorfullhash}{da8c648876af0a6c19a3a1c3a2386914}
-      \strng{authorfullhashraw}{da8c648876af0a6c19a3a1c3a2386914}
-      \field{sortinit}{F}
-      \field{sortinithash}{2638baaa20439f1b5a8f80c6c08a13b4}
-      \field{labelnamesource}{author}
-      \field{labeltitlesource}{title}
-      \field{journaltitle}{arXiv preprint arXiv:2210.17323}
-      \field{title}{GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers}
-      \field{year}{2022}
-    \endentry
     \entry{Gholami2021Survey}{article}{}{}
       \name{author}{6}{}{%
         {{hash=ff99b6be6f7ad0c9f311e5ddf91c01f7}{%

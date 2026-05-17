@@ -1,4 +1,4 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.4.15)  16 MAY 2026 23:49
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.4.15)  17 MAY 2026 10:51
 entering extended mode
  restricted \write18 enabled.
  file:line:error style messages enabled.
@@ -1206,21 +1206,21 @@ Package pgfplots notification 'compat/show suggested version=true': you might be
 LaTeX Info: Redefining \th on input line 93.
 (./main.nav) (./sections/00_title.tex [1
 
-{/usr/local/texlive/2026/texmf-var/fonts/map/pdftex/updmap/pdftex.map}{/usr/local/texlive/2026/texmf-dist/fonts/enc/dvips/cm-super/cm-super-t1.enc}]) (./sections/01_optical_motivation.tex [2
-
-]
-LaTeX Font Info:    Trying to load font information for U+msa on input line 47.
+{/usr/local/texlive/2026/texmf-var/fonts/map/pdftex/updmap/pdftex.map}{/usr/local/texlive/2026/texmf-dist/fonts/enc/dvips/cm-super/cm-super-t1.enc}]) (./sections/01_optical_motivation.tex
+LaTeX Font Info:    Trying to load font information for U+msa on input line 37.
  (/usr/local/texlive/2026/texmf-dist/tex/latex/amsfonts/umsa.fd
 File: umsa.fd 2013/01/14 v3.01 AMS symbols A
 )
-LaTeX Font Info:    Trying to load font information for U+msb on input line 47.
+LaTeX Font Info:    Trying to load font information for U+msb on input line 37.
  (/usr/local/texlive/2026/texmf-dist/tex/latex/amsfonts/umsb.fd
 File: umsb.fd 2013/01/14 v3.01 AMS symbols B
 )
-LaTeX Font Info:    Trying to load font information for OT1+mathkerncmss on input line 47.
+LaTeX Font Info:    Trying to load font information for OT1+mathkerncmss on input line 37.
  (/usr/local/texlive/2026/texmf-dist/tex/latex/sansmathaccent/ot1mathkerncmss.fd
 File: ot1mathkerncmss.fd 2020/01/31 Fontinst v1.933 font definitions for OT1/mathkerncmss.
-) [3
+) [2
+
+] [3
 
 ] [4
 
@@ -1419,25 +1419,34 @@ LaTeX Font Warning: Font shape `T1/cmss/b/n' undefined
 ] [20
 
 ]
-<figs/plot_diag_3d_adc.pdf, id=345, 995.44597pt x 650.13979pt>
+<figs/plot_diag_3d_adc.pdf, id=345, 1023.86887pt x 392.25345pt>
 File: figs/plot_diag_3d_adc.pdf Graphic file (type pdf)
 <use figs/plot_diag_3d_adc.pdf>
 Package pdftex.def Info: figs/plot_diag_3d_adc.pdf  used on input line 190.
-(pdftex.def)             Requested size: 304.74217pt x 199.0314pt.
+(pdftex.def)             Requested size: 398.33864pt x 152.60713pt.
  [21
 
  <./figs/plot_diag_3d_adc.pdf>]) (./sections/11_ptq_results.tex [22
 
 ]) (./sections/12_adc_lora.tex [23
 
-]) (./sections/14_final_results.tex [24
+]) (./sections/14_final_results.tex
+Overfull \hbox (33.6217pt too wide) in paragraph at lines 70--70
+ [] 
+ []
+
+
+Overfull \vbox (120.95926pt too high) detected at line 70
+ []
+
+[24
 
 ]) (./sections/15_takeaways.tex [25
 
 ]) (./sections/13_ablations.tex [26
 
 ]) (./sections/A_backup.tex
-<figs/plot_alpha_sweep.pdf, id=454, 294.70049pt x 208.92241pt>
+<figs/plot_alpha_sweep.pdf, id=436, 294.70049pt x 208.92241pt>
 File: figs/plot_alpha_sweep.pdf Graphic file (type pdf)
 <use figs/plot_alpha_sweep.pdf>
 Package pdftex.def Info: figs/plot_alpha_sweep.pdf  used on input line 7.
@@ -1451,7 +1460,7 @@ Overfull \vbox (29.06728pt too high) detected at line 7
  <./figs/plot_alpha_sweep.pdf>] [28
 
 ]
-<figs/dead_zone.png, id=498, 1492.57625pt x 592.2125pt>
+<figs/dead_zone.png, id=480, 1492.57625pt x 592.2125pt>
 File: figs/dead_zone.png Graphic file (type png)
 <use figs/dead_zone.png>
 Package pdftex.def Info: figs/dead_zone.png  used on input line 80.
@@ -1477,7 +1486,7 @@ Class beamer Warning: Frame text is shrunk by a factor of 22.31903 percent inste
 ] [36
 
 ]
-<figs/plot_diag_3d.pdf, id=542, 995.35284pt x 342.70435pt>
+<figs/plot_diag_3d.pdf, id=524, 995.35284pt x 342.70435pt>
 File: figs/plot_diag_3d.pdf Graphic file (type pdf)
 <use figs/plot_diag_3d.pdf>
 Package pdftex.def Info: figs/plot_diag_3d.pdf  used on input line 275.
@@ -1521,18 +1530,18 @@ Package rerunfilecheck Info: File `main.out' has not changed.
 (rerunfilecheck)             Checksum: 5BCEA9CF7D2D9AECE7CAC4018E9F6C5B;81.
  ) 
 Here is how much of TeX's memory you used:
- 45103 strings out of 467525
- 1095277 string characters out of 5418982
- 1599402 words of memory out of 5000000
- 73070 multiletter control sequences out of 15000+600000
+ 45130 strings out of 467525
+ 1095839 string characters out of 5418982
+ 1612486 words of memory out of 5000000
+ 73097 multiletter control sequences out of 15000+600000
  667599 words of font info for 127 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
  128i,17n,123p,1979b,1270s stack positions out of 10000i,1000n,20000p,200000b,200000s
 </usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cmextra/cmex8.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cmextra/cmex9.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi10.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi12.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi5.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi6.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi7.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi8.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi9.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmss12.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmss8.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmss9.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmssi8.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmssi9.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy10.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy5.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy6.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy9.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/symbols/msam5.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/amsfonts/symbols/msbm10.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfrm0500.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfrm0600.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfrm0700.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfrm0800.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfrm0900.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsi0500.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsi0700.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsi0800.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsi0900.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsi1440.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfss0500.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfss0600.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfss0700.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfss0800.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfss0900.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfss1000.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfss1200.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfss1440.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsx0500.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsx0700.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsx0800.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsx0900.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsx1000.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsx1200.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsx1440.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sfsx2488.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sftt0800.pfb></usr/local/texlive/2026/texmf-dist/fonts/type1/public/cm-super/sftt0900.pfb>
-Output written on main.pdf (44 pages, 16622902 bytes).
+Output written on main.pdf (44 pages, 11977864 bytes).
 PDF statistics:
- 876 PDF objects out of 1000 (max. 8388607)
- 509 compressed objects within 6 object streams
+ 858 PDF objects out of 1000 (max. 8388607)
+ 505 compressed objects within 6 object streams
  90 named destinations out of 1000 (max. 500000)
  126 words of extra memory for PDF output out of 10000 (max. 10000000)
 

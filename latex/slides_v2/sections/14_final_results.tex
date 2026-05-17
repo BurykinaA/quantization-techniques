@@ -1,26 +1,70 @@
 % ─── Slide 14: Final Results ─────────────────────────────────────────────────
-\begin{frame}[shrink=15]{Final Results: INT4+LoRA Beats INT8 PTQ}
+% Bars-in-cells: number on top, thin horizontal bar below.
+% #1 = normalized quality score in [0,1] (1 = best); #2 = number text.
+% For PPL columns the score is inverted (lower PPL → longer bar).
+\newcommand{\barcell}[2]{%
+  \begin{tabular}{@{}c@{}}
+    \strut #2\\[-2pt]
+    \tikz{%
+      \draw[mygray!30, line width=0.15pt] (0,0) rectangle (1.6, 0.08);
+      \fill[mybluedark!55, rounded corners=0.5pt] (0,0) rectangle (#1*1.6, 0.08);
+    }%
+  \end{tabular}%
+}
 
-  \vspace{-0.3em}
-  \footnotesize
+\begin{frame}{Final Results: INT4+LoRA Beats INT8 PTQ}
+
+  \vspace{0.4em}
   \begin{center}
-  \renewcommand{\arraystretch}{1.25}
+  \renewcommand{\arraystretch}{1.6}
+  \small
   \begin{tabular}{@{}l l c c c c c@{}}
     \toprule
-    \textbf{Model} & \textbf{Method} & \textbf{Wiki PPL} & \textbf{C4 PPL} & \textbf{HellaSwag} & \textbf{MMLU} & \textbf{WinoGrande} \\
+    \textbf{Model} & \textbf{Method} &
+      \textbf{Wiki PPL} & \textbf{C4 PPL} &
+      \textbf{HellaSwag} & \textbf{MMLU} & \textbf{WinoGrande} \\
     \midrule
-    \multirow{6}{*}{Llama-3.2-1B}
-        & FP16            & \textbf{8.68}  & \textbf{13.13} & \textbf{64.19} & \textbf{32.15} & \textbf{63.06} \\
-        \cmidrule(l){2-7}
-        & INT8 PTQ        & 19.32 & 28.08 & 57.07 & 26.78 & 57.06 \\
-        & INT8+ADC PTQ    & 16.85 & 29.56 & 45.04 & 26.83 & 56.59 \\
-        \cmidrule(l){2-7}
-        & INT4 PTQ        & 17.83 & 28.58 & 50.72 & 23.68 & 55.96 \\
-        & INT4+ADC PTQ    & 26.66 & 45.62 & 40.03 & 24.41 & 53.43 \\
-        \rowcolor{mygreen!12}
-        & INT4+ADC+LoRA   & \best{14.03} & \best{23.20} & \best{49.96} & \best{25.72} & 53.67 \\
+    \multirow{6}{*}{\textbf{Llama-3.2-1B}}
+      & FP16           & \barcell{1.00}{\textbf{8.68}}
+                       & \barcell{1.00}{\textbf{13.13}}
+                       & \barcell{1.00}{\textbf{64.19}}
+                       & \barcell{1.00}{\textbf{32.15}}
+                       & \barcell{1.00}{\textbf{63.06}} \\
+      \cmidrule(l){2-7}
+      & INT8 PTQ       & \barcell{0.41}{19.32}
+                       & \barcell{0.54}{28.08}
+                       & \barcell{0.71}{57.07}
+                       & \barcell{0.37}{26.78}
+                       & \barcell{0.38}{57.06} \\
+      & INT8+ADC PTQ   & \barcell{0.55}{16.85}
+                       & \barcell{0.49}{29.56}
+                       & \barcell{0.21}{45.04}
+                       & \barcell{0.37}{26.83}
+                       & \barcell{0.33}{56.59} \\
+      \cmidrule(l){2-7}
+      & INT4 PTQ       & \barcell{0.49}{17.83}
+                       & \barcell{0.52}{28.58}
+                       & \barcell{0.44}{50.72}
+                       & \barcell{0.09}{23.68}
+                       & \barcell{0.26}{55.96} \\
+      & INT4+ADC PTQ   & \barcell{0.00}{26.66}
+                       & \barcell{0.00}{45.62}
+                       & \barcell{0.00}{40.03}
+                       & \barcell{0.24}{24.41}
+                       & \barcell{0.02}{53.43} \\
+      & INT4+ADC+LoRA  & \barcell{0.70}{14.03}
+                       & \barcell{0.69}{23.20}
+                       & \barcell{0.41}{49.96}
+                       & \barcell{0.24}{25.72}
+                       & \barcell{0.03}{53.67} \\
     \bottomrule
   \end{tabular}
+  \end{center}
+
+  \vspace{0.4em}
+  \begin{center}\scriptsize
+  Longer bar = better. PPL columns are inverted so that lower perplexity
+  yields a longer bar.
   \end{center}
 
 \end{frame}

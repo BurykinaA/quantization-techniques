@@ -1,65 +1,25 @@
-% ─── Slide: Motivation ────────────────────────────────────────────────────────
+% ─── Slide: Motivation (interactive, 3 overlay steps) ────────────────────────
 \begin{frame}{Motivation}
 
   \vspace*{\fill}
   \begin{center}
-  {\Large\bfseries LLM inference is energetically expensive}
-  \end{center}
-  \vspace*{\fill}
-
-  \begin{tikzpicture}[remember picture, overlay]
-    \node[anchor=south west, inner sep=0pt]
-      at ([xshift=0.6cm, yshift=0.35cm]current page.south west) {%
-      {\tiny\color{mygray}%
-        \href{https://arxiv.org/abs/2308.05226}{Bandyopadhyay et al.,
-        \textit{Single chip photonic deep neural network with accelerated
-        training}, arXiv:2308.05226}}};
-  \end{tikzpicture}
-
-  \note{Я не утверждаю, что вся LLM будет оптической. Идея в том, что самая дорогая часть inference — линейная алгебра — может быть вынесена в оптический accelerator.}
-
-\end{frame}
-\begin{frame}{Motivation}
-
-  \vspace*{\fill}
-  \begin{center}
-  {\Large\bfseries LLM inference is energetically expensive}
+  \onslide<1->{%
+    {\Large\bfseries LLM inference is energetically expensive}
+  }
 
   \vspace{1.2em}
 
-  {\Large\bfseries Analog optical hardware is}
-  \,{\Large\bfseries\color{myorange}${\sim}10^{3}\times$}\,
-  {\Large\bfseries more energy-efficient for linear operations}
-  \end{center}
-  \vspace*{\fill}
-
-  \begin{tikzpicture}[remember picture, overlay]
-    \node[anchor=south west, inner sep=0pt]
-      at ([xshift=0.6cm, yshift=0.35cm]current page.south west) {%
-      {\tiny\color{mygray}%
-        \href{https://arxiv.org/abs/2308.05226}{Bandyopadhyay et al.,
-        \textit{Single chip photonic deep neural network with accelerated
-        training}, arXiv:2308.05226}}};
-  \end{tikzpicture}
-
-  \note{Я не утверждаю, что вся LLM будет оптической. Идея в том, что самая дорогая часть inference — линейная алгебра — может быть вынесена в оптический accelerator.}
-
-\end{frame}
-\begin{frame}{Motivation}
-
-  \vspace*{\fill}
-  \begin{center}
-  {\Large\bfseries LLM inference is energetically expensive}
+  \onslide<2->{%
+    {\Large\bfseries Analog optical hardware is}
+    \,{\Large\bfseries\color{myorange}${\sim}10^{3}\times$}\,
+    {\Large\bfseries more energy-efficient for linear operations}
+  }
 
   \vspace{1.2em}
 
-  {\Large\bfseries Analog optical hardware is}
-  \,{\Large\bfseries\color{myorange}${\sim}10^{3}\times$}\,
-  {\Large\bfseries more energy-efficient for linear operations}
-
-  \vspace{1.2em}
-
-  {\Large\bfseries Collaboration with an optical hardware group at Oxford}
+  \onslide<3->{%
+    {\Large\bfseries Collaboration with an optical hardware group at Oxford}
+  }
   \end{center}
   \vspace*{\fill}
 
