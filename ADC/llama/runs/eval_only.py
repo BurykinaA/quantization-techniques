@@ -214,8 +214,12 @@ def build_wrapped_model(args, device: torch.device) -> tuple[torch.nn.Module, An
 
 
 def load_checkpoint(model: torch.nn.Module, checkpoint_dir: str) -> tuple[list[str], list[str]]:
-    """Load saved HF state_dict into the wrapped model. strict=False so rotary
-    `inv_freq` buffers and similar are tolerated.  Returns (missing, unexpected)."""
+    """Load saved HF state_dict into the wrapped model.
+
+    Uses strict=False (rotary inv_freq buffers ok) and assign=True so that
+    parameters with shape mismatch (e.g. LearnableQuantizer.scale: [1]
+    uninitialized vs [out_features] calibrated) are replaced with the
+    checkpoint tensor instead of failing.  Returns (missing, unexpected)."""
     safetensors_path = os.path.join(checkpoint_dir, "model.safetensors")
     bin_path = os.path.join(checkpoint_dir, "pytorch_model.bin")
 
@@ -243,8 +247,54 @@ def load_checkpoint(model: torch.nn.Module, checkpoint_dir: str) -> tuple[list[s
                 f"No model.safetensors / pytorch_model.bin / index found in {checkpoint_dir}"
             )
 
-    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    # assign=True (PyTorch ≥ 2.1) bypasses in-place copy and assigns the
+    # checkpoint tensor directly to each parameter. This lets us load tensors
+    # whose shapes don't match the freshly-constructed module (typical for
+    # LearnableQuantizer.scale which starts as [1] and is resized to
+    # [out_features] only on calibration).
+    try:
+        missing, unexpected = model.load_state_dict(
+            state_dict, strict=False, assign=True
+        )
+    except TypeError:
+        # Older PyTorch without `assign` kwarg — fall back to manual shape resize.
+        logger.warning("[load] torch.load_state_dict has no `assign` kwarg; "
+                       "falling back to manual shape-tolerant load.")
+        missing, unexpected = _manual_shape_tolerant_load(model, state_dict)
     return list(missing), list(unexpected)
+
+
+def _manual_shape_tolerant_load(model: torch.nn.Module, state_dict: dict) -> tuple[list[str], list[str]]:
+    """Fallback for PyTorch < 2.1 that doesn't support assign=True."""
+    own = dict(model.state_dict())
+    missing: list[str] = []
+    unexpected: list[str] = []
+    with torch.no_grad():
+        for name, src in state_dict.items():
+            if name not in own:
+                unexpected.append(name)
+                continue
+            dst = own[name]
+            if dst.shape != src.shape:
+                # Replace parameter data with the source tensor (shape change).
+                # Find the parent module and reassign the parameter/buffer.
+                *parents, attr = name.split(".")
+                parent_mod = model
+                for p in parents:
+                    parent_mod = getattr(parent_mod, p)
+                target = getattr(parent_mod, attr)
+                if isinstance(target, torch.nn.Parameter):
+                    setattr(parent_mod, attr,
+                            torch.nn.Parameter(src.clone().to(target.device),
+                                                requires_grad=target.requires_grad))
+                else:
+                    setattr(parent_mod, attr, src.clone().to(target.device))
+            else:
+                dst.copy_(src)
+        for name in own:
+            if name not in state_dict:
+                missing.append(name)
+    return missing, unexpected
 
 
 # -----------------------------------------------------------------------------
