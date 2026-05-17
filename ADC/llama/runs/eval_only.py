@@ -63,13 +63,17 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from ADC.llama.core.adc_layers import LlamaADCConverter, TiledLinearADC
+from ADC.llama.core.adc_layers import TiledLinearADC
 from ADC.llama.core.adc_lora import apply_adc_lora
 from ADC.llama.core.flat_quant import (
     apply_flatquant_to_model,
     propagate_alpha_adc_to_tiled,
     reparameterize_model as fq_reparameterize_model,
 )
+# LlamaADCConverter is defined in the main calibration script, not in core.
+# Top-level of llama_smooth_quant_adc_ptq.py is import-safe (no side effects;
+# main() is guarded by `if __name__ == "__main__"`).
+from ADC.llama.runs.llama_smooth_quant_adc_ptq import LlamaADCConverter
 
 logging.basicConfig(
     level=logging.INFO,
