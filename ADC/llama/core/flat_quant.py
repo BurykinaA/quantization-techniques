@@ -541,6 +541,10 @@ class FlatQuantLinear(nn.Module):
         k: int  = cfg["k"]
         mvm_limit: int = cfg["mvm_limit"]
         signed: bool   = cfg.get("signed_activations", True)
+        # Tiled INT-only baseline: keep tiling + INT codes + integer MVM, but
+        # skip the floor_ste/clamp ADC step. Used to produce an "INT PTQ
+        # baseline" whose calibration path matches the tiled inference path.
+        bypass_floor: bool = cfg.get("bypass_floor_ste", False)
 
         # Quantization bounds (matching QATLinearADC)
         if signed:
@@ -627,7 +631,12 @@ class FlatQuantLinear(nn.Module):
             _dev_type = "cuda" if code_xi.is_cuda else "cpu"
             with torch.amp.autocast(device_type=_dev_type, enabled=False):
                 y_int = F.linear(code_xi.float(), code_wi.float())       # [B, out], float32
-            y_adc  = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
+            if bypass_floor:
+                # INT-only baseline: tiled integer MVM result is passed through
+                # without ADC discretisation. dequantise as usual below.
+                y_adc = y_int
+            else:
+                y_adc = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
 
             # Accumulate penalties (only when enabled)
             if self._penalty_enabled or self._band_enabled or self._penalty_lambda_center > 0:

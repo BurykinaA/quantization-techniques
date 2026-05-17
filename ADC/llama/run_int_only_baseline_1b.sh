@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
 # run_int_only_baseline_1b.sh
 #
-# Train two ADC-naive INT PTQ baselines for Llama-3.2-1B:
+# Train two TILED INT-only PTQ baselines for Llama-3.2-1B:
 #
-#   llama-3_2-1b_int8_ptq_noadc   — bw=bx=ba=8, k=4   (pure INT8 PTQ baseline)
-#   llama-3_2-1b_int4_ptq_noadc   — bw=bx=4, ba=8, k=16   (pure INT4 PTQ baseline)
+#   llama-3_2-1b_int8_ptq_noadcfloor   — bw=bx=ba=8, k=4  (pure INT8 PTQ baseline)
+#   llama-3_2-1b_int4_ptq_noadcfloor   — bw=bx=4, ba=8, k=16  (pure INT4 PTQ baseline)
 #
-# Key differences from run_paper_comparison.sh:
-#   --fq_no_adc_loss        FlatQuant trained on plain INT fake-quant loss (no
-#                           floor_ste / tiling / ADC penalties in the forward).
-#   --fq_stage_b_epochs 0   Stage B skipped — no ADC propagation in any stage.
+# Calibration uses the same tiled per-tile per-token integer-MVM forward as
+# inference, but SKIPS the floor_ste/clamp ADC discretisation step in the
+# loss (--fq_bypass_adc_floor). This isolates "INT quantization quality"
+# from "ADC distortion" while keeping the calibration / inference path
+# matched.
 #
-# These are the "true INT4/INT8 PTQ baselines" for the README table:
-#   INT8 PTQ        row     ← int8_ptq_noadc bypass-mode numbers
-#   INT4 PTQ        row     ← int4_ptq_noadc bypass-mode numbers
+# Why not just `--fq_no_adc_loss`?
+#   That flag sets adc_config=None which switches train_forward to a
+#   NON-tiled per-tensor INT path. Inference is tiled per-tile → catastrophic
+#   path mismatch. Empirically: bypass PPL = 213 / C4 = 285 for INT8 (vs FP
+#   8.68 / 13.13). DO NOT USE --fq_no_adc_loss for this baseline.
+#
+# These produce the "INT4 PTQ" / "INT8 PTQ" rows of the README table.
 #
 # Time: ~1 h calibration + ~1 h eval (8 tasks × 2 modes) per config → ~4 h total.
 
@@ -43,11 +48,12 @@ run_config() {
     fi
 }
 
-# Common FlatQuant args: ADC-naive, single-stage, MLP-only diag (same as Stage A
-# of run_paper_comparison.sh but with ADC simulation OFF in the loss).
+# Common FlatQuant args: tiled INT-only (no floor_ste in loss), single-stage,
+# MLP-only diag (same as Stage A of run_paper_comparison.sh but with the
+# ADC discretisation step OFF in the loss).
 FQ_NOADC=(
     --preprocess_method flat_quant
-    --fq_no_adc_loss                       # <-- the key flag
+    --fq_bypass_adc_floor                  # <-- the key flag (tiled, no floor)
     --fq_nsamples 1024
     --fq_cali_bsz 16 --fq_grad_accum_steps 1
     --fq_epochs 30
@@ -67,8 +73,8 @@ COMMON_EVAL=(
     --disable_visualizations
 )
 
-# 1. INT8 PTQ (ADC-naive baseline)
-run_config "llama-3_2-1b_int8_ptq_noadc" \
+# 1. INT8 PTQ (tiled INT-only baseline, no floor_ste in loss)
+run_config "llama-3_2-1b_int8_ptq_noadcfloor" \
     --model_name "meta-llama/Llama-3.2-1B" \
     --bx 8 --bw 8 --ba 8 --k 4 \
     --lora_rank 0 \
@@ -76,8 +82,8 @@ run_config "llama-3_2-1b_int8_ptq_noadc" \
     "${FQ_NOADC[@]}" \
     "${COMMON_EVAL[@]}"
 
-# 2. INT4 PTQ (ADC-naive baseline)
-run_config "llama-3_2-1b_int4_ptq_noadc" \
+# 2. INT4 PTQ (tiled INT-only baseline, no floor_ste in loss)
+run_config "llama-3_2-1b_int4_ptq_noadcfloor" \
     --model_name "meta-llama/Llama-3.2-1B" \
     --bx 4 --bw 4 --ba 8 --k 16 \
     --lora_rank 0 \

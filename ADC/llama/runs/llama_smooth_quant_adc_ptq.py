@@ -1910,7 +1910,16 @@ def main():
     parser.add_argument("--fq_no_adc_loss", action="store_true",
                         help="Disable ADC simulation in FlatQuant calibration loss "
                              "(adc_config=None → plain INT fake-quant in train_forward). "
-                             "Use for a 'pure INT PTQ baseline' uncoloured by ADC awareness.")
+                             "WARNING: produces catastrophic PPL — the non-tiled "
+                             "calibration path mismatches tiled inference. "
+                             "Use --fq_bypass_adc_floor instead for a proper "
+                             "tiled INT-only baseline.")
+    parser.add_argument("--fq_bypass_adc_floor", action="store_true",
+                        help="In FlatQuant calibration: keep tiling + INT quant + "
+                             "integer MVM but SKIP the floor_ste/clamp ADC step. "
+                             "Yields a true INT-only PTQ baseline with calibration "
+                             "path matching tiled inference (just without ADC "
+                             "discretisation).")
     parser.add_argument("--fq_prop_alpha", type=float, default=1.0,
                         help="Propagation mixing: 1.0=full quant (default), 0.5=dual-forward (FP+quant), 0.0=FP only")
     parser.add_argument("--fq_stage_b_epochs", type=int, default=0,
@@ -2471,6 +2480,7 @@ def main():
                     "k":  args.k,
                     "mvm_limit": args.mvm_limit,
                     "signed_activations": fq_signed,
+                    "bypass_floor_ste": args.fq_bypass_adc_floor,
                 }
                 logger.info(
                     f"FlatQuant ADC config: bx={fq_adc_config['bx']}, bw={fq_adc_config['bw']}, "
@@ -2479,6 +2489,13 @@ def main():
                     f"signed={fq_adc_config['signed_activations']}, "
                     f"delta≈{2.0 * min(args.mvm_limit, 256) * (127 if fq_signed else 255) * 127 / (2**args.ba * args.k):.1f}"
                 )
+                if args.fq_bypass_adc_floor:
+                    logger.info(
+                        "FlatQuant: floor_ste DISABLED in calibration loss "
+                        "(--fq_bypass_adc_floor). Tiling + INT quant + integer "
+                        "MVM kept; only the floor/clamp ADC discretisation is "
+                        "skipped → tiled INT-only baseline."
+                    )
             model = apply_flatquant_to_model(
                 model,
                 w_bits=args.fq_w_bits,
