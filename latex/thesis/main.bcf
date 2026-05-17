@@ -2461,11 +2461,16 @@
     <bcf:citekey order="51" intorder="2">LowRankCorrection2024</bcf:citekey>
     <bcf:citekey order="51" intorder="3">LRQAT2024</bcf:citekey>
     <bcf:citekey order="52" intorder="1">FlatQuant2024</bcf:citekey>
-    <bcf:citekey order="53" intorder="1">llama3</bcf:citekey>
+    <bcf:citekey order="53" intorder="1">Xiao2021AnalogAccuracy</bcf:citekey>
+    <bcf:citekey order="53" intorder="2">LeGallo2023AnalogNAS</bcf:citekey>
+    <bcf:citekey order="53" intorder="3">Buechel2025AnalogFoundation</bcf:citekey>
     <bcf:citekey order="54" intorder="1">lora</bcf:citekey>
     <bcf:citekey order="55" intorder="1">llama3</bcf:citekey>
     <bcf:citekey order="56" intorder="1">wikitext2</bcf:citekey>
     <bcf:citekey order="57" intorder="1">c4</bcf:citekey>
+    <bcf:citekey order="58" intorder="1">hellaswag</bcf:citekey>
+    <bcf:citekey order="59" intorder="1">mmlu</bcf:citekey>
+    <bcf:citekey order="60" intorder="1">winogrande</bcf:citekey>
   </bcf:section>
   <!-- SORTING TEMPLATES -->
   <bcf:sortingtemplate name="nty">
