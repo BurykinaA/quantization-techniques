@@ -1758,21 +1758,21 @@ measures the size of the added correction relative to the base model, where \(A_
   All perplexity numbers reported in this thesis follow the same
   protocol: sliding-window evaluation on the test split with context
   length $2048$ and stride $1024$. The model is loaded in
-  \texttt{bfloat16}; this is referred to as the \emph{full-precision
-  baseline}. Under this protocol Llama-3.2-1B gives WikiText-2 PPL
+  \texttt{bfloat16}; this is referred to as the full-precision
+  baseline. Under this protocol Llama-3.2-1B gives WikiText-2 PPL
   $8.68$ and C4 PPL $13.13$. All subsequent tables
   compare against these numbers.
 
   In addition to perplexity, the main results table reports zero-shot
-  accuracy on three standard downstream benchmarks. \emph{HellaSwag}
+  accuracy on three standard downstream benchmarks. HellaSwag
   is a four-way multiple-choice commonsense sentence-completion
   benchmark of $\approx 10\,$k validation items; the score is the
   fraction of items for which the model assigns the highest
   log-likelihood to the correct continuation~\cite{hellaswag}.
-  \emph{MMLU} is a four-way multiple-choice exam covering $57$
+  MMLU is a four-way multiple-choice exam covering $57$
   subjects (humanities, STEM, social sciences, and professional
   topics); the reported score is accuracy averaged uniformly over
-  all subjects~\cite{mmlu}. \emph{WinoGrande} is a two-way
+  all subjects~\cite{mmlu}. WinoGrande is a two-way
   coreference-resolution benchmark in which the model picks the
   referent that better completes a sentence pair; the score is
   accuracy on the validation split~\cite{winogrande}. All three

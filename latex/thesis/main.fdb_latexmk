@@ -1,12 +1,12 @@
 # Fdb version 4
-["biber main"] 1779057966.74445 "main.bcf" "main.bbl" "main" 1779058139.44893 0
-  "main.bcf" 1779058139.33511 115400 0b48c741f0450cc79f031a74f2c45ce3 "pdflatex"
+["biber main"] 1779057966.74445 "main.bcf" "main.bbl" "main" 1779058244.26496 0
+  "main.bcf" 1779058244.1482 115400 0b48c741f0450cc79f031a74f2c45ce3 "pdflatex"
   "msc-sample.bib" 1779057236.0537 12027 62cda8a2d7530b18a9d6e8fc3456029f ""
   (generated)
   "main.bbl"
   "main.blg"
   (rewritten before read)
-["pdflatex"] 1779058137.1963 "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" "main.pdf" "main" 1779058139.44922 0
+["pdflatex"] 1779058241.94903 "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" "main.pdf" "main" 1779058244.26525 0
   "../slides/figs/dead_zone.png" 1779043545.45599 81524 3f8defafc06bcd44b3d6369992ba27a9 ""
   "../slides/figs/plot_alpha_sweep.pdf" 1779043545.45876 12444 f5589886b9f21962b505fd9e135feecd ""
   "../slides/figs/plot_diag_roles.pdf" 1777199706.26031 25762 f02a1712cc75bd3916b55ac9abf270b3 ""
@@ -18,7 +18,7 @@
   "../slides/figs/plot_mlp_split_up_down.pdf" 1777199706.2631 20621 a6f50c5c0e0fe54da72484f3cf9f3794 ""
   "../slides_v2/figs/Fig1b.pdf" 1779043545.50912 382427 b3663f93362b2c10fa579c0b218a79ee ""
   "../slides_v2/figs/outliers_layer8.png" 1779043545.51639 316878 7217bb0f0cca5dcb02508583d999ad6d ""
-  "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" 1779058134.71749 138922 c12e25798e6ead430b20dec160ad01a7 ""
+  "/Users/alina_burykina/git_repos/quantization-techniques/latex/thesis/main.tex" 1779058241.73816 138894 bc63c7c53703911128b962a46188a39a ""
   "/usr/local/texlive/2026/texmf-dist/fonts/enc/dvips/base/8r.enc" 1165713224 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/local/texlive/2026/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/local/texlive/2026/texmf-dist/fonts/tfm/adobe/helvetic/phvb7t.tfm" 1136768653 2240 eb56c13537f4d8a0bd3fafc25572b1bd ""
@@ -253,12 +253,12 @@
   "/usr/local/texlive/2026/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1776250877 5573038 b99aad5e4898a9034e953632f940512b ""
   "/usr/local/texlive/2026/texmf-var/web2c/pdftex/pdflatex.fmt" 1776250794 3636778 8ed075554b0566b40fa854ffedcef8ab ""
   "/usr/local/texlive/2026/texmf.cnf" 1774209515 577 648cd9f92f9c0eac486f4c71c85cfbbe ""
-  "main.aux" 1779058139.32572 44887 2d5fddf8449d9bfe4dcbd6a0e43452e7 "pdflatex"
+  "main.aux" 1779058244.14007 44887 2d5fddf8449d9bfe4dcbd6a0e43452e7 "pdflatex"
   "main.bbl" 1779057968.57489 75908 066220b5c2c3b0c9c0df0b656359476b "biber main"
-  "main.out" 1779058139.33418 6173 26b8b4a189d8f6199ecf11c7ade6bfe2 "pdflatex"
-  "main.run.xml" 1779058139.33628 2305 67c73e5f90befbcba88ad9685714fe42 "pdflatex"
-  "main.tex" 1779058134.71749 138922 c12e25798e6ead430b20dec160ad01a7 ""
-  "main.toc" 1779058139.33635 7294 fe7162764dcd072208ec8b98ca7ff59c "pdflatex"
+  "main.out" 1779058244.14721 6173 26b8b4a189d8f6199ecf11c7ade6bfe2 "pdflatex"
+  "main.run.xml" 1779058244.14888 2305 67c73e5f90befbcba88ad9685714fe42 "pdflatex"
+  "main.tex" 1779058241.73816 138894 bc63c7c53703911128b962a46188a39a ""
+  "main.toc" 1779058244.14895 7294 fe7162764dcd072208ec8b98ca7ff59c "pdflatex"
   "msc-logo.png" 1779043545.6621 10466 5858c652f72e0c409ddee778b9f23da6 ""
   (generated)
   "main.aux"
