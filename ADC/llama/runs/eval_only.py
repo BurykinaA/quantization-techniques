@@ -247,54 +247,60 @@ def load_checkpoint(model: torch.nn.Module, checkpoint_dir: str) -> tuple[list[s
                 f"No model.safetensors / pytorch_model.bin / index found in {checkpoint_dir}"
             )
 
-    # assign=True (PyTorch ≥ 2.1) bypasses in-place copy and assigns the
-    # checkpoint tensor directly to each parameter. This lets us load tensors
-    # whose shapes don't match the freshly-constructed module (typical for
-    # LearnableQuantizer.scale which starts as [1] and is resized to
-    # [out_features] only on calibration).
-    try:
-        missing, unexpected = model.load_state_dict(
-            state_dict, strict=False, assign=True
-        )
-    except TypeError:
-        # Older PyTorch without `assign` kwarg — fall back to manual shape resize.
-        logger.warning("[load] torch.load_state_dict has no `assign` kwarg; "
-                       "falling back to manual shape-tolerant load.")
-        missing, unexpected = _manual_shape_tolerant_load(model, state_dict)
+    # Pre-resize any parameters whose shape differs from the checkpoint.
+    # In PyTorch ≤ 2.1, load_state_dict's shape check runs unconditionally
+    # (even with assign=True), so we must replace the parameter via setattr
+    # BEFORE calling load_state_dict.  Typical mismatch:
+    #   LearnableQuantizer.scale shape is [1] when freshly constructed and
+    #   [out_features] in the saved (calibrated) checkpoint.
+    n_resized = _pre_resize_mismatched_params(model, state_dict)
+    if n_resized > 0:
+        logger.info(f"[load] Pre-resized {n_resized} parameter(s) to match checkpoint shape")
+
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
     return list(missing), list(unexpected)
 
 
-def _manual_shape_tolerant_load(model: torch.nn.Module, state_dict: dict) -> tuple[list[str], list[str]]:
-    """Fallback for PyTorch < 2.1 that doesn't support assign=True."""
+def _pre_resize_mismatched_params(model: torch.nn.Module, state_dict: dict) -> int:
+    """For each (key, src) in state_dict whose shape ≠ the model's current
+    parameter/buffer shape, replace the module attribute with a fresh
+    nn.Parameter / Tensor of the correct shape.  Called BEFORE load_state_dict
+    so the subsequent shape check passes."""
     own = dict(model.state_dict())
-    missing: list[str] = []
-    unexpected: list[str] = []
-    with torch.no_grad():
-        for name, src in state_dict.items():
-            if name not in own:
-                unexpected.append(name)
-                continue
-            dst = own[name]
-            if dst.shape != src.shape:
-                # Replace parameter data with the source tensor (shape change).
-                # Find the parent module and reassign the parameter/buffer.
-                *parents, attr = name.split(".")
-                parent_mod = model
-                for p in parents:
-                    parent_mod = getattr(parent_mod, p)
-                target = getattr(parent_mod, attr)
-                if isinstance(target, torch.nn.Parameter):
-                    setattr(parent_mod, attr,
-                            torch.nn.Parameter(src.clone().to(target.device),
-                                                requires_grad=target.requires_grad))
-                else:
-                    setattr(parent_mod, attr, src.clone().to(target.device))
+    n_fixed = 0
+    for name, src in state_dict.items():
+        if name not in own:
+            continue
+        if own[name].shape == src.shape:
+            continue
+        # Walk to the parent module
+        parts = name.split(".")
+        parent = model
+        for p in parts[:-1]:
+            parent = getattr(parent, p)
+        attr = parts[-1]
+        target = getattr(parent, attr)
+        device = target.device
+        dtype = target.dtype
+        if isinstance(target, torch.nn.Parameter):
+            new = torch.nn.Parameter(
+                src.detach().to(device=device, dtype=dtype).clone(),
+                requires_grad=target.requires_grad,
+            )
+            setattr(parent, attr, new)
+        else:
+            # Plain buffer
+            new_buf = src.detach().to(device=device, dtype=dtype).clone()
+            # Replace via the buffer-aware path so the module remembers it
+            if attr in dict(parent.named_buffers(recurse=False)):
+                # Remove old and re-register with same persistence
+                persistent = attr not in getattr(parent, "_non_persistent_buffers_set", set())
+                delattr(parent, attr)
+                parent.register_buffer(attr, new_buf, persistent=persistent)
             else:
-                dst.copy_(src)
-        for name in own:
-            if name not in state_dict:
-                missing.append(name)
-    return missing, unexpected
+                setattr(parent, attr, new_buf)
+        n_fixed += 1
+    return n_fixed
 
 
 # -----------------------------------------------------------------------------
