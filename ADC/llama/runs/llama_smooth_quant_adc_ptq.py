@@ -2306,11 +2306,12 @@ def main():
         if args.results_json_path:
             import json as _json
             _record = {
-                "run_name":  getattr(args, "wandb_run_name", None) or args.output_dir,
-                "timestamp": __import__("datetime").datetime.now().isoformat(),
-                "status":    "success",
-                "config":    {"model": args.model_name, "bits": "fp16"},
-                "results":   {
+                "run_name":   getattr(args, "wandb_run_name", None) or args.output_dir,
+                "timestamp":  __import__("datetime").datetime.now().isoformat(),
+                "status":     "success",
+                "output_dir": os.path.abspath(args.output_dir),
+                "config":     {"model": args.model_name, "bits": "fp16"},
+                "results":    {
                     **{f"ppl_{ds}": float(_fp_metrics[ds]["perplexity"]) for ds in _fp_metrics},
                     **_fp_lm,
                 },
@@ -3202,6 +3203,7 @@ def main():
             "run_name":      getattr(args, "wandb_run_name", None) or args.output_dir,
             "timestamp":     __import__("datetime").datetime.now().isoformat(),
             "status":        "success",
+            "output_dir":    os.path.abspath(args.output_dir),
             "config": {
                 "bx":                    args.bx,
                 "bw":                    args.bw,

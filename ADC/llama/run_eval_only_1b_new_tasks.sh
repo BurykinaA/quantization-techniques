@@ -39,14 +39,32 @@ COMMON=(
     --fq_lwc --fq_lac --fq_add_diag
 )
 
-eval_config() {
-    local SUFFIX=$1; shift
-    local CKPT="$OUT/$SUFFIX"
+# ─── Hardcoded checkpoint paths ──────────────────────────────────────────────
+#
+# These are the EXACT checkpoints that produced the current PPL + 3-task
+# accuracy numbers in results.json (matched by timestamp 2026-05-04/05).
+# Hardcoded — not glob/latest — so eval_only re-scores the same models that
+# wrote the existing PPL/lm-eval entries, even if newer dated dirs appear
+# later in the same output folder.
+#
+# Mapping (results.json run_name  →  finish time  →  checkpoint dir):
+#   llama-3_2-1b_int8_ptq        2026-05-05T16:03    int8_ptq_20260505
+#   llama-3_2-1b_int4_ptq        2026-05-05T22:51    int4_ptq_20260505
+#   llama-3_2-1b_int4_lora       2026-05-04T10:04    int4_lora_20260504
+#
+CKPT_INT8_PTQ="$OUT/llama-3_2-1b_int8_ptq_20260505"
+CKPT_INT4_PTQ="$OUT/llama-3_2-1b_int4_ptq_20260505"
+CKPT_INT4_LORA="$OUT/llama-3_2-1b_int4_lora_20260504"
+
+eval_config_path() {
+    local SUFFIX=$1
+    local CKPT=$2; shift 2
     if [[ ! -d "$CKPT" ]]; then
-        echo ">>> [$SUFFIX] MISSING $CKPT — skipping" | tee -a "$OUT/eval_only.log"
+        echo ">>> [$SUFFIX] MISSING checkpoint dir $CKPT — skipping" | tee -a "$OUT/eval_only.log"
         return 0
     fi
     echo "" | tee -a "$OUT/eval_only.log"
+    echo ">>> [$SUFFIX] using checkpoint: $CKPT" | tee -a "$OUT/eval_only.log"
     echo ">>> [$SUFFIX] starting eval_only" | tee -a "$OUT/eval_only.log"
     if python "$RUNS" \
             --checkpoint_dir "$CKPT" \
@@ -79,18 +97,18 @@ eval_fp() {
 # 1. FP16 — base Llama-3.2-1B, no quantization, no checkpoint
 [[ "$DRY_RUN" == "1" ]] || eval_fp
 
-# 2. INT8 + ADC PTQ — saved ADC-aware checkpoint, ADC-mode lm-eval only
-eval_config llama-3_2-1b_int8_ptq \
+# 2. INT8 + ADC PTQ — hardcoded checkpoint, ADC-mode lm-eval only
+eval_config_path llama-3_2-1b_int8_ptq "$CKPT_INT8_PTQ" \
     --fq_w_bits 8 --fq_a_bits 8 \
     --bx 8 --bw 8 --ba 8 --k 4
 
-# 3. INT4 + ADC PTQ — saved ADC-aware checkpoint, ADC-mode lm-eval only
-eval_config llama-3_2-1b_int4_ptq \
+# 3. INT4 + ADC PTQ — hardcoded checkpoint, ADC-mode lm-eval only
+eval_config_path llama-3_2-1b_int4_ptq "$CKPT_INT4_PTQ" \
     --fq_w_bits 4 --fq_a_bits 4 \
     --bx 4 --bw 4 --ba 8 --k 16
 
-# 4. INT4 + ADC + LoRA — saved LoRA checkpoint, ADC-mode lm-eval only
-eval_config llama-3_2-1b_int4_lora \
+# 4. INT4 + ADC + LoRA — hardcoded checkpoint, ADC-mode lm-eval only
+eval_config_path llama-3_2-1b_int4_lora "$CKPT_INT4_LORA" \
     --fq_w_bits 4 --fq_a_bits 4 \
     --bx 4 --bw 4 --ba 8 --k 16 \
     --lora_rank 4 --lora_alpha 8 \

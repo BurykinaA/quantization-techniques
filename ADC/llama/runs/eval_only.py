@@ -262,8 +262,13 @@ def _set_bypass_adc(model: torch.nn.Module, bypass: bool) -> None:
 # -----------------------------------------------------------------------------
 
 def merge_into_results_json(results_json_path: str, run_name: str,
-                            new_metrics: dict) -> None:
-    """Update the entry matching run_name in-place; if not found, append."""
+                            new_metrics: dict, checkpoint_dir: str | None = None,
+                            mode: str = "checkpoint") -> None:
+    """Update the entry matching run_name in-place; if not found, append.
+
+    Records `checkpoint_dir` used to produce `new_metrics` under
+    `eval_only_history` so multiple eval_only passes can be traced.
+    """
     existing: list[dict] = []
     if os.path.exists(results_json_path):
         try:
@@ -273,26 +278,40 @@ def merge_into_results_json(results_json_path: str, run_name: str,
             logger.warning(f"[merge] {results_json_path} is corrupt, starting fresh list")
             existing = []
 
+    history_entry = {
+        "timestamp": datetime.now().isoformat(),
+        "mode": mode,                                          # "checkpoint" / "fp_only"
+        "checkpoint_dir": (os.path.abspath(checkpoint_dir)
+                           if checkpoint_dir else None),
+        "added_keys": sorted(new_metrics.keys()),
+    }
+
     found = False
     for entry in existing:
         if entry.get("run_name") == run_name:
             entry.setdefault("results", {}).update(new_metrics)
-            entry["timestamp_eval_only"] = datetime.now().isoformat()
+            entry["timestamp_eval_only"] = history_entry["timestamp"]
+            entry.setdefault("eval_only_history", []).append(history_entry)
             found = True
             break
     if not found:
         logger.warning(f"[merge] run_name {run_name!r} not in JSON — appending new entry")
         existing.append({
             "run_name": run_name,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": history_entry["timestamp"],
             "status": "eval_only",
+            "output_dir": history_entry["checkpoint_dir"],
             "results": new_metrics,
+            "eval_only_history": [history_entry],
         })
 
     os.makedirs(os.path.dirname(os.path.abspath(results_json_path)), exist_ok=True)
     with open(results_json_path, "w") as f:
         json.dump(existing, f, indent=2)
-    logger.info(f"[merge] Wrote {len(new_metrics)} new keys to {results_json_path}")
+    logger.info(
+        f"[merge] Wrote {len(new_metrics)} new keys to {results_json_path}"
+        f" (checkpoint_dir={checkpoint_dir or '<fp_only>'})"
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -439,8 +458,12 @@ def main() -> None:
         logger.warning("[eval_only] No lm-eval results produced — nothing to merge")
         return
 
-    # 10: merge into results.json
-    merge_into_results_json(args.results_json_path, args.run_name, adc_results)
+    # 10: merge into results.json — record which checkpoint produced these keys
+    merge_into_results_json(
+        args.results_json_path, args.run_name, adc_results,
+        checkpoint_dir=(args.checkpoint_dir if not args.fp_only else None),
+        mode=("fp_only" if args.fp_only else "checkpoint"),
+    )
 
 
 if __name__ == "__main__":
