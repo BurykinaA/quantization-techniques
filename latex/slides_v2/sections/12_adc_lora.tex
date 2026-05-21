@@ -55,7 +55,7 @@
     \begin{column}{0.48\textwidth}
       \vspace*{1.4cm}
       \footnotesize
-      \textbf{Loss: distill from FP teacher.}
+      \textbf{Loss: distill from full-precision teacher}
       \[
         \mathcal L_{\mathrm{LoRA}} \;=\; \mathrm{CE}(\hat p, y) \;+\; \lambda\,\mathrm{KL}\!\left(\hat p\,\Vert\, p_{\mathrm{FP}}\right)
       \]

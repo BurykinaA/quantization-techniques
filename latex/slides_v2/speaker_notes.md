@@ -15,7 +15,7 @@ Large language models are widely used, but inference remains expensive because o
 One possible solution is analog optical computing, where large linear operations are performed directly with light instead of digital electronics.
 
 ===
-This is not just a theoretical idea. Our project is connected to a collaboration with an optical hardware group at Oxford that is developing this type of photonic hardware. Before discussing the quantization method, let’s first look at what an optical inference setup might look like.
+This is not just a theoretical idea. Our project is connected to a collaboration with an optical hardware group at Oxford that is developing this type of photonic hardware. So, let’s first look at what an optical inference setup might look like.
 
 ---
 
@@ -35,7 +35,9 @@ Algorithmically, the simplified optical linear layer looks like this.
 First, weights and activations are digitally quantized before being sent to the optical system. Then the optical engine performs the matrix-vector multiplication.
 
 Up to this point, the problem is well-studied: it is typical quantization.
-The main complication is that LLM activations contain strong outlier channels, which make quantization difficult. As shown in the bottom-right histogram, values from the outlier tail exceed the clipping range and get saturated into the same maximum quantization level. Since these outlier channels often carry important model signal, this saturation introduces large errors in the MVM result and can severely degrade LLM quality.
+The main complication is that LLM activations contain strong outlier channels, which make quantization difficult. 
+
+As shown in the bottom-right histogram, the outlier tail goes beyond the clipping range and  gets saturated into the same maximum quantization level. Since these outlier channels often carry important model signal, this saturation introduces large errors in the MVM result and can severely(севирели) degrade LLM quality.
 
 After that, the analog output is passed through the ADC (Analog to digital converter) - our camera.
 
@@ -76,6 +78,7 @@ In the standard FlatQuant baseline, each transformer block is calibrated indepen
 At inference time, the input to a block is not clean anymore. It already contains quantization and ADC errors from previous blocks.
 
 So my first extension on top of the baseline is cross-block propagation. During calibration, I pass the ADC-quantized student output from one block to the next. This makes calibration look like real inference: the errors accumulate in the same way.
+
 ---
 
 ## Slide 8 — Our Extension I: alpha-mixed objective
@@ -121,7 +124,7 @@ The main message is that different parts of the transformer play different roles
 ---
 
 ## Slide 12 — Activation Shape vs ADC Effect
-This slide gives the intuition visually.
+This slide shows the different activation disctribultions after applying transformations.
 
 The original activation has strong spikes and uneven channel magnitudes. 
 
@@ -131,12 +134,14 @@ The diagonal scaling then makes the channels more balanced.
 
 This matters because the ADC has a fixed usable range. If the signal is badly shaped, many values either fall into the dead zone (red) or become saturated (yellow). After the transformations, the ADC sees a better-shaped signal.
 
+
+
 ---
 
 ## Slide 13 — PTQ results
 This table shows how far pure PTQ can go.
 
-Standard FlatQuant — calibrated independently and without ADC awareness — collapses with ADC, reaching a perplexity above 2000. 
+Standard FlatQuant — calibrated independently and without ADC awareness — collapses with ADC, it's perplexity is more than 2000. 
 
 With our full ADC-aware PTQ setup — which includes the cross-block propagation, mixed objective, and staged diagonals — this drops to 26.66.
 
@@ -155,7 +160,7 @@ This is important. If the correction is placed before the ADC, then the ADC quan
 
 So the analog path remains frozen and hardware-compatible, while the LoRA branch learns a small digital correction for the ADC-induced error.
 
-For training, I use next-token cross-entropy plus a KL distillation loss from the full-precision teacher.
+For training, I use next-token cross-entropy plus a KL (не кл а кей л) distillation loss from the full-precision teacher.
 
 ---
 

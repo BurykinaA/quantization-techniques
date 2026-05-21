@@ -1,9 +1,9 @@
 % ─── Slide 6: Standard PTQ fails because it does not see the ADC ─────────────
-\begin{frame}{Standard PTQ fails}
+\begin{frame}{Thesis goal}
 
   \begin{center}
     \footnotesize\itshape
-    Evaluating model perplexity for FlatQuant with 4-bit weights and activations.
+    Evaluating model perplexity (PPL) for FlatQuant with 4-bit weights and activations.
   \end{center}
 
   \begin{center}
@@ -66,9 +66,20 @@
   \end{center}
   \vfill
 
+  \vspace{-1.2em}
   \begin{center}
-    {\large\bfseries\color{myred}
-      PTQ alone is not enough: ADC readout noise causes model
-      collapse on analog optical hardware}
+  \begin{tikzpicture}
+    % colored left bar
+    % \node[anchor=west, fill=myorange, minimum width=6pt,
+    %       minimum height=1.4cm, inner sep=0] (bar) at (0,0) {};
+    % % main text panel
+    \node[anchor=west, draw=mybluedark!40, line width=0.6pt,
+          rounded corners=4pt, fill=mybluedark!4,
+          inner xsep=13pt, inner ysep=9pt,
+          text width=0.87 \linewidth, align=left]
+       {%
+        {\small\bfseries\color{myorange}\MakeUppercase{Thesis goal}}\\[0.35em]
+        {\large\bfseries Make Post Train Quantization (PTQ) work for optical chips}};
+  \end{tikzpicture}
   \end{center}
 \end{frame}

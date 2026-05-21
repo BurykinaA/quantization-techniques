@@ -81,7 +81,7 @@
     \begin{tikzpicture}[remember picture, overlay]
       \node[anchor=south west, inner sep=0pt]
         at ([xshift=0.6cm, yshift=0.5cm]current page.south west) {%
-        {\scriptsize\color{mygray}\itshape
+        {\scriptsize\color{black}\itshape
           \begin{tabular}{@{}l@{}}
             $^{*}$MVM — matrix-vector multiplication. \\
             $^{*}$ADC — analog-to-digital converter.
@@ -174,8 +174,8 @@
     \begin{column}{0.32\textwidth}
       {\large\bfseries\color{myred} Problems:}\\[0.6em]
       {\bfseries\color{myred}
-        \mbox{$\delta$ is fixed by the hardware}\\[0.5em]
-        QAT is not an option}
+        \mbox{1. $\delta$ is fixed by the hardware}\\[0.5em]
+        2. Quantization Aware Training (QAT) is not an option}
     \end{column}
     \begin{column}{0.66\textwidth}
       \resizebox{\linewidth}{!}{%
