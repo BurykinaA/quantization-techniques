@@ -28,83 +28,73 @@
       \begin{center}
       \resizebox{!}{0.78\textheight}{%
       \begin{tikzpicture}[
-        every node/.style={font=\tiny},
+        every node/.style={font=\scriptsize},
         fbox/.style={draw=mygray!55, dashed, fill=mygray!12, rounded corners=3pt,
-                     minimum width=2.5cm, minimum height=0.46cm, align=center},
-        tbox/.style={draw=myorange, line width=1.3pt, fill=myorange!22, rounded corners=3pt,
-                     minimum width=2.5cm, minimum height=0.46cm, align=center},
+                     minimum width=2.4cm, minimum height=0.75cm, align=center},
+        tbox/.style={draw=myorange, line width=1.0pt, fill=myorange!22, rounded corners=3pt,
+                     minimum width=2.4cm, minimum height=0.75cm, align=center},
         dbox/.style={draw=mygreen!65, fill=mygreen!18, rounded corners=3pt,
-                     minimum width=2.5cm, minimum height=0.46cm, align=center},
-        garr/.style={-{Latex[length=1.2mm]}, thick, mygray!65},
-        tarr/.style={-{Latex[length=1.2mm]}, thick},
-        node distance=0.26cm
+                     minimum width=2.4cm, minimum height=0.75cm, align=center},
+        adcbox/.style={draw=myorange, line width=1.0pt, rounded corners=2pt,
+                       fill=myorange!30, minimum width=1.0cm, minimum height=0.5cm, align=center},
+        garr/.style={-{Latex[length=1.3mm]}, thick, mygray!75},
+        msearr/.style={{Latex[length=1.4mm]}-{Latex[length=1.4mm]}, thick, myred!80}
       ]
-        % ── FP Teacher ────────────────────────────────────────────────
-        \node[font=\tiny, text=mygray!80] (l_x)   at (0,    0)   {$x^\star$};
-        \node[fbox, above=0.18cm of l_x]  (l_d0)  {Decoder Layer 0};
-        \node[fbox, above=of l_d0]        (l_d1)  {Decoder Layer 1};
-        \node[fbox, above=of l_d1]        (l_d2)  {Decoder Layer 2};
-        \node[font=\small, text=mygray!70, above=0.10cm of l_d2] (l_dots) {$\cdots$};
-        \node[fbox, above=0.10cm of l_dots] (l_dN){Decoding Layer N};
-        \node[fbox, above=of l_dN]        (l_rms) {RMS Norm.};
-        \node[fbox, above=of l_rms]       (l_log) {Logits};
-        \node[fbox, above=of l_log]       (l_sm)  {Softmax};
-        \node[fbox, above=of l_sm]        (l_prob){Prob.\ dist.};
-        \node[font=\tiny\bfseries, text=mybluedark, above=0.18cm of l_prob] {FP Teacher};
 
-        \draw[garr] (l_x)--(l_d0);
-        \foreach \a/\b in {l_d0/l_d1, l_d1/l_d2, l_dN/l_rms,
-                           l_rms/l_log, l_log/l_sm, l_sm/l_prob}
-          \draw[garr] (\a)--(\b);
-        \draw[garr] (l_d2)--(l_dots); \draw[garr] (l_dots)--(l_dN);
+        % ═══════════════════════════════════════════════════════════════
+        % TOP: PREVIOUSLY — both blocks see the same teacher (FP) input
+        % ═══════════════════════════════════════════════════════════════
+        \node[font=\small\bfseries, text=mybluedark]
+          at (3, 7.4) {Previously};
 
-        \begin{pgfonlayer}{background}
-          \node[inner sep=7pt, draw=mygray!40, dashed, fill=mygray!5,
-                rounded corners=7pt, fit=(l_x)(l_prob)] {};
-        \end{pgfonlayer}
+        \node[fbox] (prev_in) at (3, 6.5)
+          {Teacher block $\ell{-}1$\\[-1pt]{\tiny FP, frozen}};
+        \node[fbox] (prev_T) at (1.4, 5.2) {Teacher block $\ell$\\[-1pt]{\tiny FP, frozen}};
+        \node[tbox] (prev_S) at (4.6, 5.2) {Student block $\ell$\\[-1pt]{\tiny trainable}};
 
-        % ── Quantized Student ─────────────────────────────────────────
-        \node[font=\tiny, text=mybluedark] (r_x)  at (4.2,  0)   {$\hat x$};
-        \node[dbox, above=0.18cm of r_x]  (r_d0)  {Decoder Layer 0};
-        \node[tbox, above=of r_d0]        (r_d1)  {Decoder Layer 1};
-        \node[fbox, above=of r_d1]        (r_d2)  {Decoder Layer 2};
-        \node[font=\small, above=0.10cm of r_d2] (r_dots) {$\cdots$};
-        \node[fbox, above=0.10cm of r_dots] (r_dN){Decoding Layer N};
-        \node[fbox, above=of r_dN]        (r_rms) {RMS Norm.};
-        \node[fbox, above=of r_rms]       (r_log) {Logits};
-        \node[fbox, above=of r_log]       (r_sm)  {Softmax};
-        \node[fbox, above=of r_sm]        (r_prob){Prob.\ dist.};
-        \node[font=\tiny\bfseries, text=mybluedark, above=0.18cm of r_prob] {Student};
+        \draw[garr] (prev_in.south) to[bend right=10] (prev_T.north);
+        \draw[garr] (prev_in.south) to[bend left=10]  (prev_S.north);
 
-        \draw[garr] (r_x)--(r_d0);
-        \draw[garr] (r_d0)--(r_d1);
-        \foreach \a/\b in {r_d1/r_d2, r_dN/r_rms,
-                           r_rms/r_log, r_log/r_sm, r_sm/r_prob}
-          \draw[garr] (\a)--(\b);
-        \draw[garr] (r_d2)--(r_dots); \draw[garr] (r_dots)--(r_dN);
+        % Output nodes below each block
+        \node (prev_yT) at (1.4, 4.1) {$y_T$};
+        \node (prev_yS) at (4.6, 4.1) {$y_S$};
+        \draw[garr] (prev_T.south) -- (prev_yT.north);
+        \draw[garr] (prev_S.south) -- (prev_yS.north);
 
-        \begin{pgfonlayer}{background}
-          \node[inner sep=7pt, draw=mygray!40, dashed, fill=mygray!5,
-                rounded corners=7pt, fit=(r_x)(r_prob)] {};
-          \node[inner sep=5pt, draw=mygreen!60, fill=mygreen!8, rounded corners=5pt,
-                fit=(r_d0)] (rd0_bg) {};
-          \node[inner sep=5pt, draw=myorange!60, fill=myorange!8, rounded corners=5pt,
-                fit=(r_d1)] (rb1) {};
-        \end{pgfonlayer}
+        \draw[msearr] (prev_yT.east) -- node[midway, fill=white,
+              font=\scriptsize, inner sep=1pt] {$\mathcal L$} (prev_yS.west);
 
-        \draw[decorate, decoration={brace, amplitude=3pt}, mygreen!70]
-          (rd0_bg.north east) -- (rd0_bg.south east)
-          node[midway, right=4pt, font=\tiny, text=mygreen!70!black] {done\,$\checkmark$};
-        \draw[decorate, decoration={brace, amplitude=3pt}, myorange]
-          (rb1.north east) -- (rb1.south east)
-          node[midway, right=4pt, font=\tiny, text=myorange] {trainable};
-        \draw[decorate, decoration={brace, amplitude=3pt}, mygray!65]
-          (r_prob.north east) -- (r_d2.south east)
-          node[midway, right=4pt, font=\tiny, text=mygray] {frozen};
+        % ── Divider ───────────────────────────────────────────────────
+        \draw[mygray!40, dashed, line width=0.5pt] (-0.7, 3.5) -- (6.7, 3.5);
 
-        \draw[{Latex[length=1.2mm]}-{Latex[length=1.2mm]}, thick, myred!75]
-          (l_d1.east) -- node[above, font=\tiny, fill=white, inner sep=1pt]
-          {$\mathcal{L}$} (r_d1.west);
+        % ═══════════════════════════════════════════════════════════════
+        % BOTTOM: NOW — student receives output of student block ell-1 directly
+        % ═══════════════════════════════════════════════════════════════
+        \node[font=\small\bfseries, text=mybluedark]
+          at (3, 3.1) {Now};
+
+        % Teacher path
+        \node[fbox] (now_inT) at (1.4, 2.2)
+          {Teacher block $\ell{-}1$\\[-1pt]{\tiny FP, frozen}};
+        \node[fbox] (now_T) at (1.4, 0.9) {Teacher block $\ell$\\[-1pt]{\tiny FP, frozen}};
+        \draw[garr] (now_inT.south) -- (now_T.north);
+
+        % Student path: student block ell-1 (done) → student block ell directly
+        \node[dbox] (now_S0) at (4.6, 2.2)
+          {Student block $\ell{-}1$\\[-1pt]{\tiny done\,$\checkmark$}};
+        \node[tbox] (now_S) at (4.6, 0.9) {Student block $\ell$\\[-1pt]{\tiny trainable}};
+        \draw[garr] (now_S0.south) -- (now_S.north);
+
+        % Output nodes below each block
+        \node (now_yT) at (1.4, -0.2) {$y_T$};
+        \node (now_yS) at (4.6, -0.2) {$y_S$};
+        \draw[garr] (now_T.south) -- (now_yT.north);
+        \draw[garr] (now_S.south) -- (now_yS.north);
+
+        % MSE between output nodes
+        \draw[msearr] (now_yT.east) -- node[midway, fill=white,
+              font=\scriptsize, inner sep=1pt] {$\mathcal L$} (now_yS.west);
+
       \end{tikzpicture}}
       \end{center}
     \end{column}

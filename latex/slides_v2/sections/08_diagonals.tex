@@ -3,7 +3,9 @@
 \begin{frame}{Our Extension II: Selective Diagonal Placement}
 
   \begin{columns}[T]
-    \begin{column}{0.46\textwidth}
+    % ─── LEFT column: formula + bullet list ──────────────────────────
+    \begin{column}{0.40\textwidth}
+      \vspace{2.5em}
       \footnotesize
       \[
         D = \mathrm{diag}(d_1, \ldots, d_c), \qquad
@@ -18,70 +20,73 @@
       \end{itemize}
     \end{column}
 
-    \begin{column}{0.50\textwidth}
-      \scriptsize
-      \textbf{Ablation (Llama-3.2-1B, w4a4, $\alpha{=}0.5$, ADC PPL$\downarrow$):}\\[0.4em]
-      \renewcommand{\arraystretch}{1.25}
-      \begin{tabular}{@{}l c c@{}}
-        \toprule
-        \textbf{$\alpha$-mix base $+$} &
-          \tikz[overlay,remember picture,baseline]{\coordinate(col_noadc);}\bypass &
-          \tikz[overlay,remember picture,baseline]{\coordinate(col_adc);}\adcppl{} \\
-        \midrule
-        — (no diag)              & $24.24{\pm}0.6$ & $31.22{\pm}0.9$ \\
-        \texttt{diag\_mlp} only  & \best{$\mathbf{19.37}{\pm}0.4$} & $31.65{\pm}1.0$ \\
-        \texttt{diag\_attn} only & $24.98{\pm}0.6$ & \best{$29.41{\pm}0.8$} \\
-        \midrule
-        both diagonals           & $20.23{\pm}0.4$ & $27.56{\pm}0.7$ \\
-        \bottomrule
-      \end{tabular}
+    % ─── RIGHT column: schema + ablation table (all in one tikz) ─────
+    \begin{column}{0.56\textwidth}
+      \resizebox{\linewidth}{!}{%
+      \begin{tikzpicture}[
+          every node/.style={font=\scriptsize},
+          tile/.style={draw=mybluedark, rounded corners=2pt, fill=mybluedark!15,
+                       text=mybluedark, minimum width=2.0cm, minimum height=0.88cm,
+                       align=center},
+          adc/.style={draw=myorange, line width=1.5pt, rounded corners=2pt,
+                      fill=myorange!35, minimum width=1.3cm, minimum height=0.68cm,
+                      align=center},
+          arr/.style={-{Latex[length=1.3mm]}, thick},
+          annot/.style={-{Latex[length=2.0mm]}, line width=0.9pt, dashed, mybluedark!85},
+        ]
+        % ── Schema (top) ────────────────────────────────────────────
+        \node[font=\Large] (wdots) at (3.0,  0.8) {$\cdots$};
+        \node (wb)                  at (3.6,  0.8) {$\hat w$};
+        \node[font=\Large] (xdots) at (3.0, -0.8) {$\cdots$};
+        \node (xb)                  at (3.6, -0.8) {$\hat x$};
+
+        \node[tile] (T) at (5.8, 0) {Optical MVM\\$y{=}\langle\hat w,\hat x\rangle$};
+        \draw[arr] (wb) -- (T.north west);
+        \draw[arr] (xb) -- (T.south west);
+
+        \node (y)  at (7.6, 0) {$y$};
+        \draw[arr] (T) -- (y);
+
+        \node[adc] (A) at (8.9, 0) {ADC\\$\lfloor y/\delta\rfloor$};
+        \draw[arr] (y)--(A);
+
+        \node (yb) at (10.3, 0) {$\hat y$};
+        \draw[arr] (A)--(yb);
+
+        \begin{pgfonlayer}{background}
+          \node[inner sep=9pt, draw=myorange, line width=1.5pt,
+                rounded corners=7pt, fill=myorange!5,
+                fit=(y)(A)(yb)] (Z2) {};
+        \end{pgfonlayer}
+
+        % ── Ablation table (bottom) as a matrix so cells are addressable
+        \matrix (tab) [
+            below=2.0cm of T,
+            matrix of nodes,
+            nodes={align=center, anchor=center, inner sep=4pt,
+                   font=\scriptsize},
+            row 1/.style={nodes={font=\scriptsize\bfseries}},
+            row sep=2pt,
+            column sep=14pt,
+            ampersand replacement=\&
+          ] {
+            $\alpha$-mix base $+$  \& no-ADC PPL \& ADC PPL \\
+            — (no diag)            \& $24.24{\pm}0.6$ \& $31.22{\pm}0.9$ \\
+            \texttt{diag\_mlp} only  \& |[fill=mygreen!25]| $\mathbf{19.37}{\pm}0.4$ \& $31.65{\pm}1.0$ \\
+            \texttt{diag\_attn} only \& $24.98{\pm}0.6$ \& |[fill=mygreen!25]| $29.41{\pm}0.8$ \\
+            both diagonals         \& $20.23{\pm}0.4$ \& $27.56{\pm}0.7$ \\
+          };
+        % horizontal rule between last two rows
+        \draw[mygray!50] (tab-4-1.south west) -- (tab-4-3.south east);
+
+        % ── Dashed arrows from y / ŷ to header cells ─────────────────
+        \draw[annot] (y.south)  to[out=-90, in=90] (tab-1-2.north);
+        \draw[annot] (yb.south) to[out=-90, in=90] (tab-1-3.north);
+      \end{tikzpicture}}
+      \\[0.4em]
+      \centering
+      {\tiny\itshape Ablation (Llama-3.2-1B, w4a4, $\alpha{=}0.5$,
+       ADC PPL$\downarrow$).}
     \end{column}
   \end{columns}
-
-  \vspace{0.3em}
-  \begin{center}
-  \resizebox{0.55\linewidth}{!}{%
-  \begin{tikzpicture}[remember picture,
-      every node/.style={font=\scriptsize},
-      tile/.style={draw=mybluedark, rounded corners=2pt, fill=mybluedark!15,
-                   text=mybluedark, minimum width=2.0cm, minimum height=0.88cm,
-                   align=center},
-      adc/.style={draw=myorange, line width=1.5pt, rounded corners=2pt,
-                  fill=myorange!35, minimum width=1.3cm, minimum height=0.68cm,
-                  align=center},
-      arr/.style={-{Latex[length=1.3mm]}, thick},
-    ]
-    \node[font=\Large] (wdots) at (3.0,  0.8) {$\cdots$};
-    \node (wb)                  at (3.6,  0.8) {$\hat w$};
-    \node[font=\Large] (xdots) at (3.0, -0.8) {$\cdots$};
-    \node (xb)                  at (3.6, -0.8) {$\hat x$};
-
-    \node[tile] (T) at (5.8, 0) {Optical MVM\\$y{=}\langle\hat w,\hat x\rangle$};
-    \draw[arr] (wb) -- (T.north west);
-    \draw[arr] (xb) -- (T.south west);
-
-    \node (y)  at (7.6, 0) {$y$};
-    \draw[arr] (T) -- (y);
-
-    \node[adc] (A) at (8.9, 0) {ADC\\$\lfloor y/\delta\rfloor$};
-    \draw[arr] (y)--(A);
-
-    \node (yb) at (10.3, 0) {$\hat y$};
-    \draw[arr] (A)--(yb);
-
-    \begin{pgfonlayer}{background}
-      \node[inner sep=9pt, draw=myorange, line width=1.5pt,
-            rounded corners=7pt, fill=myorange!5,
-            fit=(y)(A)(yb)] (Z2) {};
-    \end{pgfonlayer}
-  \end{tikzpicture}}
-  \end{center}
-
-  % ─── Cross-picture dashed connectors from schema y/ŷ to table column headers ──
-  \begin{tikzpicture}[overlay, remember picture]
-    \draw[-{Latex[length=1.5mm]}, thick, dashed, mygray!70]
-      (y.north)  to[out=90, in=-90] (col_noadc);
-    \draw[-{Latex[length=1.5mm]}, thick, dashed, mygray!70]
-      (yb.north) to[out=90, in=-90] (col_adc);
-  \end{tikzpicture}
 \end{frame}

@@ -3,232 +3,191 @@
 
 ## Slide 0 — Title
 
-Good morning. I’m Alina Burykina. Today I will talk about making large language models work on analog optical chips.
+Good afternoon. I’m Alina Burykina. Today I will talk about making large language models work on analog optical chips.
 
 ---
 
 ## Slide 1 — Motivation
 
-Large language models are now used in many applications, but they are still expensive to run. A lot of the cost comes from memory movement and energy consumption during inference.
-
-This creates two practical problems. First, only very large organizations can serve the strongest models at scale. Second, it is still hard to run billion-parameter models on smaller devices.
+Large language models are widely used, but inference remains expensive because of memory movement and energy consumption, making it difficult for smaller organizations to serve advanced models at scale or run billion-parameter models on compact devices.
 
 ===
-One possible direction is analog optical computing. The idea is to perform the large linear operations not only with digital electronics, but directly with light.
+One possible solution is analog optical computing, where large linear operations are performed directly with light instead of digital electronics.
 
 ===
-This is not just a theoretical idea. There are experimental photonics labs that are actively building this kind of hardware. In our case, the project is connected to a collaboration with an optical hardware group at Oxford.
+This is not just a theoretical idea. Our project is connected to a collaboration with an optical hardware group at Oxford that is developing this type of photonic hardware. Before discussing the quantization method, let’s first look at what an optical inference setup might look like.
 
-So before discussing the quantization method, let’s look at what such an optical inference setup can look like.
 ---
 
 ## Slide 2 — How analog optical inference looks
 
-The input is encoded into light. The optical system performs the computation in the analog physical domain. Then the result is measured by a detector or camera and sent back to digital hardware.
+The input is encoded into light. The optical system performs the computation in the analog physical domain. Then the result is measured by a detector or camera(КАМ-ра) and sent back to digital hardware.
 
-So there is a boundary between the analog computation and the digital neural network.
-
-At this boundary, the continuous physical signal has to be read as a finite digital number. This reading step is not perfect. It introduces quantization through the ADC.
+So there is a boundary between the analog computation and the digital neural network. The continuous physical signal has to be read(рэд) as a finite(ФАЙ-найт) digital number. This reading step is not perfect. It introduces quantization through the ADC(эй-ди-си) (Analog to digital converter).
 
 
 ---
 
-## Slide 3 — The analog-digital boundary
+## Slides 3–5 — Optical layer model and ADC problem
 
-To study this problem algorithmically, I use this simplified model of an optical linear layer which is widely accepted by other researchers. 
+Algorithmically, the simplified optical linear layer looks like this.
 
-First, the weights and activations are quantized digitally for setting up the phusical system
+First, weights and activations are digitally quantized before being sent to the optical system. Then the optical engine performs the matrix-vector multiplication.
 
-Then the optical engine computes matrix “may-trix”-vector multiplication using the laser. 
+Up to this point, the problem is well-studied: it is typical quantization.
+The main complication is that LLM activations contain strong outlier channels, which make quantization difficult. As shown in the bottom-right histogram, values from the outlier tail exceed the clipping range and get saturated into the same maximum quantization level. Since these outlier channels often carry important model signal, this saturation introduces large errors in the MVM result and can severely degrade LLM quality.
 
-The output is then passed through the ADC. Mathematically, the ADC maps the value to discrete levels, using a step size delta. The step size represents the smallest change in signal intensity that the camera can distinguish. Any variations smaller than Δ are treated as the same digital value, while larger changes are assigned to different levels. So the layer has two different quantization stages.
+After that, the analog output is passed through the ADC (Analog to digital converter) - our camera.
 
-Let's discusse those 2 quantizations.
+The ADC maps the continuous output to discrete levels using a step size delta. Delta is fixed by the hardware, so we cannot freely increase the resolution, and as we can see, this causes a severe degradation.
 
----
+A standard way to handle hardware effects is quantization-aware training. But for LLMs this is not practical: we usually do not have the original training data, and retraining billions of parameters is expensive.
 
-## Slide 4 — Digital quantization
+So I focus on post-training quantization. The model weights are frozen, and I only adapt the quantization pipeline around the fixed ADC.
 
-The first one is standard digital quantization of weights and activations. This is already well studied, but LLMs make it more difficult, while activations contain strong outlier channels, which is hard to qunatize.
-
-In this work, I use low-bit quantization for weights and activations of linear layers, mainly INT4. 
-
-отдельно сфокусируй внимание что этот y - это вот обычная оптимизация квантизации
-
----
-
-## Slide 5 — ADC: Reading the Analog Accumulation
-
-Now let’s move to ADC quantization after the analog computation.
-
-The important point is that the ADC step size is fixed by hardware. We cannot choose a different delta for each layer, token, or input.
-
-So the algorithm has to adapt to the ADC.
-
-A common way to do this in previous hardware-aware analog neural network work is quantization-aware training. The hardware effects are included during training, and the weights are updated to compensate for them.
-
-But this does not scale well as a general solution for LLMs. We usually do not have the original training data, and retraining billions of parameters is very expensive.
-
-Therefore, I focus on the post-training setting: the model weights are frozen, and we adapt only the quantization pipeline to the ADC.
-
-This makes the problem harder, but also much more practical for LLM deployment.
+The question is: can we still use post-training quantization in this setting?
 
 ---
 
 ## Slide 6 — Standard PTQ fails
 
-Before introducing my method, I first test a strong digital PTQ baseline: FlatQuant.
+Before proposing a method, I tested a strong PTQ baseline: FlatQuant. We use this method as the starting point for our pipeline.
 
-I compare two settings.
+There are two settings here. “No ADC” means the model is quantized, but the ADC step is disabled. “With ADC” means we include the finite-resolution readout, which is the actual analog hardware setting.
 
-PPL no ADC means that the model is quantized, but the ADC step is disabled. This measures normal digital quantization error.
+The result shows the problem very clearly.
 
-PPL with ADC means that the ADC is enabled. This is the actual analog hardware setting.
+With INT4 FlatQuant, the no-ADC perplexity is 15.41. This is worse than full precision, but still usable.
 
-The result is the key motivation. INT4 FlatQuant gives perplexity 15.41 without the ADC, so the model is damaged but still usable.
+But when the ADC is enabled, perplexity jumps to 2354. The model collapses.
 
-But with the ADC, perplexity jumps to 2354. The model collapses.
-
-So the problem is not just low-bit quantization. The problem is that standard PTQ does not account for the fixed ADC after the analog computation.
-
-The next question is: how can we adapt PTQ so that it works with the ADC?
-
+So the problem is not just low-bit quantization. The problem is that the standard FlatQuant baseline was not adapted to the way the optical chip reads the analog accumulation.
 
 ---
 
 ## Slide 7 — Our Extension I: Cross-block propagation
 
-The typical idea for PTQ method is the linear invariance: we can insert a transformation into the activation path and fold the inverse transformation into the weights. In full precision, the function stays the same.
+The typical idea for PTQ methods like FlatQuant is to learn a transformation T that preserves the output while making quantization easier.
 
-The standard is block-wise calibration, each transformer block is calibrated independently. The teacher and the student both receive clean full-precision input.
-This creates a mismatch in our setting.
+Here I use a teacher-student calibration setup. The teacher is the frozen full-precision model. The student is the quantized model with trainable PTQ transformations. Calibration means that on a small set of text samples, I train these transformations so that the student output matches the teacher output. This is not full retraining: the LLM weights stay frozen.
 
-At inference time, the input to a block is not clean. It is already corrupted by the ADC output of the previous block.
+In the standard FlatQuant baseline, each transformer block is calibrated independently, and both teacher and student receive clean full-precision inputs. This creates a mismatch for analog inference.
 
-So my first extension is cross-block propagation. During calibration, I pass the ADC-quantized student output from one block to the next. This makes error accumulation during calibration match error accumulation during inference.
+At inference time, the input to a block is not clean anymore. It already contains quantization and ADC errors from previous blocks.
 
-The model weights stay frozen; only the PTQ transformations are trained.
-
-However, using only ADC-corrupted inputs was still too noisy.
+So my first extension on top of the baseline is cross-block propagation. During calibration, I pass the ADC-quantized student output from one block to the next. This makes calibration look like real inference: the errors accumulate in the same way.
 ---
 
 ## Slide 8 — Our Extension I: alpha-mixed objective
 
-If we train only on noisy ADC inputs, the gradients become unstable and the rotations overfit to ADC noise.
+However, training only on ADC-corrupted inputs was too noisy. The gradients became unstable, and the transformations overfit to ADC noise.
 
-But the opposite also fails. If we train only on clean inputs, the block never learns to handle ADC error.
+So I use an alpha-mixed objective. One part of the loss compares the student to the full-precision teacher in a cleaner setting. The other part includes the ADC path.
 
-So I use a mixed objective.
-One part of the loss compares the student to the full-precision teacher in a cleaner setting. The other part includes the ADC path.
-
-The intuition is simple: one part of the loss gives a stable learning signal, and the other part teaches robustness to the ADC.
-
+The intuition is simple: the clean part gives a stable learning signal, and the ADC part teaches robustness to the real hardware error.
 
 
 ---
 
 ## Slide 9 — Our Extension II: selective diagonal placement
 
-The next issue I want to talk about is outliers.
-LLM activations are not evenly distributed across channels. Some channels have much larger values than the rest. This makes both digital quantization and ADC quantization harder.
+The second issue is activation shape.
 
-A common way to handle this is to add a trainable diagonal scaling next to the rotation. This gives the method per-channel control.
+LLM activations are not evenly distributed across channels. Some channels contain much larger values than the others. These outliers are difficult both for digital quantization and for the ADC.
 
-The diagonal idea itself is not new. It is related to existing PTQ methods.
+The FlatQuant baseline already supports using trainable diagonal scaling alongside rotations to gain per-channel control. However, standard methods apply them uniformly across the model.
 
-My contribution here is to study where these diagonals help under ADC quantization.
-The table shows that MLP diagonals and attention diagonals behave differently.
-MLP diagonals mostly improve PPL no ADC. This means they help with ordinary digital quantization and distribution flattening.
+My contribution here is studying exactly where and how these diagonals help when we introduce the physical ADC bottleneck.
 
-Attention diagonals reduce PPL with ADC more directly. This means they help with robustness to the ADC error.
+The ablation shows an important difference. MLP diagonals mostly improve perplexity without ADC, so they help with ordinary digital quantization and flattening the activation distribution. Attention diagonals reduce perplexity with ADC more directly, so they help more with robustness to ADC error.
 
-This tells us that different parts of the transformer should not necessarily be trained under the same conditions. This leads to staged training.
-
+This suggests that MLP and attention should not necessarily be trained under the same conditions.
 
 ---
 
 ## Slide 10 — Staged training: Stage A
 
-In first Stage of training, I focus on the MLP part.
-The MLP diagonals are mainly responsible for flattening the distribution and handling strong activation outliers. For that, they need a clean and stable signal.
-So in this stage, attention is frozen. I train the MLP rotations and MLP diagonals with the cleaner objective.
-You can think of this as a warm-up stage that makes the MLP activations easier to quantize before we expose the full block to ADC noise.
+Therefore I use staged training. First, I train the MLP part with a cleaner objective, as a warm-up. 
 
 
 ---
 
 ## Slide 11 — Staged training: Stage B
-In second one, I unfreeze the attention side and turn on the mixed ADC-aware objective.
-Now the attention part can learn to absorb the ADC error, while the MLP part is already in a better state.
-The important message is not the exact schedule, but that MLP and attention have different roles under ADC quantization.
-Staged training uses this difference.
 
+Then I unfreeze the attention side and turn on the mixed ADC-aware objective.
+
+The main message is that different parts of the transformer play different roles under ADC quantization, and the calibration schedule should reflect that.
 
 ---
 
 ## Slide 12 — Activation Shape vs ADC Effect
-This slide summarizes the intuition behind the PTQ branch.
+This slide gives the intuition visually.
 
-In LLMs, the problem is not only that values are low-bit. The problem is that activations are very uneven across channels.
+The original activation has strong spikes and uneven channel magnitudes. 
 
-On the top left, the original activation has strong outliers.
+The rotations spread the energy across channels. 
 
-The transforms (T) spreads this energy across channels. The diagonal scaling then makes the channels more balanced.
+The diagonal scaling then makes the channels more balanced.
 
-The bottom row shows why this matters for ADC quantization. Red means values that are rounded to zero and lost. Orange means saturation, the are clipped to the same munber. Blue means useful ADC levels.
-
-With the original activation, almost 29 percent of values are lost in the dead-zone. After the transformations, this drops to about 17 percent.
-
-So our PTQ modifications make the ADC see a better-shaped signal.
-(поправить конец)
-
-
+This matters because the ADC has a fixed usable range. If the signal is badly shaped, many values either fall into the dead zone (red) or become saturated (yellow). After the transformations, the ADC sees a better-shaped signal.
 
 ---
 
-## Slide 12 — PTQ results
-This table answers the question: how far pure PTQ can go when the ADC is included.
+## Slide 13 — PTQ results
+This table shows how far pure PTQ can go.
 
-For INT8, standard FlatQuant has a no-ADC perplexity of 10, but with ADC it becomes 29.
-With our ADC-aware setup, the ADC perplexity drops to 14.
+Standard FlatQuant — calibrated independently and without ADC awareness — collapses with ADC, reaching a perplexity above 2000. 
 
-For INT4, the problem is much harder. Standard FlatQuant gives 15 without ADC, but 2354 with ADC. This is the collapse we saw earlier.
+With our full ADC-aware PTQ setup — which includes the cross-block propagation, mixed objective, and staged diagonals — this drops to 26.66.
 
-With the full ADC-aware PTQ setup, the INT4 ADC perplexity drops to 26.6.
-So PTQ reduces the collapse dramatically, but the full-precision baseline is 8.7.
-That motivates the second part of the thesis: what is the smallest additional correction we can add after PTQ?
+So the collapse is dramatically reduced. The baseline model was not adapted to the ADC before; now it can work under the ADC.
 
+But the full-precision baseline is still less than 10. So pure PTQ reaches a plateau. This motivates the second part.
 ---
 
 ## Slide 14 — Method II: Post-ADC residual LoRA
 
-Once pure PTQ reaches a plateau, I keep the quantized analog path frozen and add a small trainable residual branch.
-The idea is inspired by LoRA: instead of training a full weight matrix and doing QAT (which we cannot afforde), we train two small low-rank matrices.
+After PTQ, I freeze the quantized analog path and add a small trainable residual branch.
 
-The key design choice is the placement.
-The correction is added after the ADC, in the digital domain.
+The key design choice is placement. The correction is added after the ADC, in the digital domain.
 
-This is important because if the correction is placed before the ADC (like normaly lora do), then the ADC quantizes the correction as well, and much of the useful signal will be lost.
+This is important. If the correction is placed before the ADC, then the ADC quantizes the correction as well, and much of the useful signal is lost.
 
-For training the low-rank matrices, I use the next-token cross-entropy loss plus a KL distillation loss from the full-precision teacher.
+So the analog path remains frozen and hardware-compatible, while the LoRA branch learns a small digital correction for the ADC-induced error.
+
+For training, I use next-token cross-entropy plus a KL distillation loss from the full-precision teacher.
 
 ---
 
 ## Slide 15 — Final results
 
-This slide shows the final comparison for Llama-3.2-1B.
-The most important comparison is between the last two rows.
+This slide shows the final evaluation results for Llama 1B.
 
-With pure INT4 ADC-aware PTQ, the model reaches 26.66 perplexity on WikiText-2 and 45.62 on C4.
-After adding the post-ADC low-rank correction, perplexity improves to 14.03 on WikiText-2 and 23.20 on C4.
+Perplexity is shown on the left, where lower is better, and average downstream accuracy is shown on the right, evaluated using the llm-eval framework, where higher is better.
 
-The C4 result is especially important because the correction is trained on WikiText-2, while C4 is held out. So the correction is not only memorizing the calibration data. It transfers to a different dataset.
+Please focus on the “with ADC step” bracket at the bottom. These are our ADC-aware methods.
 
-The downstream tasks show that this is still not full-precision quality, but the model becomes much more usable under INT4 plus ADC.
+The key baseline is standard INT4 PTQ with ADC. Without any ADC-aware adaptation, the model collapses completely.
 
-The main contribution is the algorithmic adaptation around the chip’s fixed ADC and abalation that I have done.
+Our first contribution, the ADC-aware PTQ pipeline, resolves this collapse and reduces perplexity to 26.66, making the model operational again under the fixed hardware ADC constraints.
 
+Then we add the post-ADC low-rank correction. This further improves perplexity to 14.03 and increases downstream accuracy from 41.99% to 47.07%.
 
-----
-добавить 
-модель была не адаптирована - стала работать 
+An important result is generalization. The LoRA correction is trained only on WikiText-2, but the held-out C4 perplexity also improves strongly, dropping from 45.62 to 23.20. This suggests that the method is not simply overfitting to calibration data.
+
+---
+
+## Takeaways
+
+The main contributions are:
+
+First successful PTQ adaptation for optical chips: Post-training quantization was successfully adapted to work under fixed ADC constraints for the first time, completely preventing the model collapse seen in standard methods.
+
+Resolved error accumulation: Error accumulation during inference was resolved by introducing cross-block ADC propagation with a stable alpha-mixed objective.
+
+Optimized calibration: Calibration was optimized by demonstrating that fundamentally different diagonal scaling and staged training are required by MLP and Attention blocks.
+
+Broken pure PTQ plateau: The pure PTQ plateau was broken through the application of a lightweight post-ADC LoRA correction, and major perplexity gains were achieved with minimal trainable overhead.
+
+The overall message: For analog optical LLM inference, the ADC cannot be treated merely as a physical limitation to be handled at the end—it must be integrated as a core driver of the algorithmic design.
+

@@ -2464,13 +2464,23 @@
     <bcf:citekey order="53" intorder="1">Xiao2021AnalogAccuracy</bcf:citekey>
     <bcf:citekey order="53" intorder="2">LeGallo2023AnalogNAS</bcf:citekey>
     <bcf:citekey order="53" intorder="3">Buechel2025AnalogFoundation</bcf:citekey>
-    <bcf:citekey order="54" intorder="1">lora</bcf:citekey>
-    <bcf:citekey order="55" intorder="1">llama3</bcf:citekey>
-    <bcf:citekey order="56" intorder="1">wikitext2</bcf:citekey>
-    <bcf:citekey order="57" intorder="1">c4</bcf:citekey>
-    <bcf:citekey order="58" intorder="1">hellaswag</bcf:citekey>
-    <bcf:citekey order="59" intorder="1">mmlu</bcf:citekey>
-    <bcf:citekey order="60" intorder="1">winogrande</bcf:citekey>
+    <bcf:citekey order="54" intorder="1">FlatQuant2024</bcf:citekey>
+    <bcf:citekey order="55" intorder="1">lora</bcf:citekey>
+    <bcf:citekey order="56" intorder="1">llama3</bcf:citekey>
+    <bcf:citekey order="57" intorder="1">wikitext2</bcf:citekey>
+    <bcf:citekey order="58" intorder="1">c4</bcf:citekey>
+    <bcf:citekey order="59" intorder="1">lmevalharness</bcf:citekey>
+    <bcf:citekey order="60" intorder="1">hellaswag</bcf:citekey>
+    <bcf:citekey order="61" intorder="1">mmlu</bcf:citekey>
+    <bcf:citekey order="62" intorder="1">winogrande</bcf:citekey>
+    <bcf:citekey order="63" intorder="1">arc</bcf:citekey>
+    <bcf:citekey order="64" intorder="1">piqa</bcf:citekey>
+    <bcf:citekey order="65" intorder="1">openbookqa</bcf:citekey>
+    <bcf:citekey order="66" intorder="1">boolq</bcf:citekey>
+    <bcf:citekey order="67" intorder="1">QuaRot2024</bcf:citekey>
+    <bcf:citekey order="68" intorder="1">FlatQuant2024</bcf:citekey>
+    <bcf:citekey order="69" intorder="1">QDrop2022</bcf:citekey>
+    <bcf:citekey order="70" intorder="1">Spall2022HybridOptical</bcf:citekey>
   </bcf:section>
   <!-- SORTING TEMPLATES -->
   <bcf:sortingtemplate name="nty">

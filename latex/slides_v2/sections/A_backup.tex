@@ -1,5 +1,47 @@
 % ─── Appendix / Backup slides ─────────────────────────────────────────────────
 
+% ─── Backup: copy of Final Results slide (big table) ──────────────────────────
+\begin{frame}{Backup: Final Results — INT4+LoRA Beats INT8+ADC PTQ on Llama-3.2-1B}
+
+  \vspace{0.3em}
+  \begin{center}
+  \renewcommand{\arraystretch}{1.25}
+  \setlength{\tabcolsep}{3.0pt}
+  \scriptsize
+  \resizebox{\textwidth}{!}{%
+  \begin{tabular}{@{}l r r r r r r r r r r r@{}}
+    \toprule
+      & \multicolumn{2}{c}{\textbf{PPL} ($\downarrow$)}
+      & \multicolumn{8}{c}{\textbf{Accuracy} \% ($\uparrow$)}
+      & \\
+    \cmidrule(lr){2-3} \cmidrule(lr){4-11}
+    \textbf{Method} &
+      \textbf{Wiki} & \textbf{C4} &
+      \textbf{HSwag} & \textbf{MMLU} & \textbf{WinGr} &
+      \textbf{ARC-E} & \textbf{ARC-C} & \textbf{PIQA} &
+      \textbf{OBQA} & \textbf{BoolQ} & \textbf{Avg} \\
+    \midrule
+    bfloat16          & \textbf{8.68}  & \textbf{13.13} & \textbf{64.19} & \textbf{32.15} & 63.06 & 61.83 & 36.77 & 74.70 & 37.40 & 63.91 & \textbf{54.25} \\
+    \midrule
+    INT8 PTQ          &  8.69 & 13.15 & 64.17 & 31.89 & \textbf{63.38} & \textbf{69.82} & \textbf{39.16} & \textbf{75.79} & \textbf{39.20} & \textbf{64.22} & \textbf{55.95} \\
+    INT8 + ADC PTQ    & 16.85 & 29.56 & 45.04 & 26.83 & 56.59 & 48.44 & 28.84 & 64.36 & 30.00 & 59.63 & 44.97 \\
+    \midrule
+    INT4 PTQ          & 14.13 & 22.83 & 51.98 & 24.86 & 55.25 & 60.44 & 33.02 & 69.48 & 32.00 & 62.11 & 48.64 \\
+    INT4 + ADC PTQ    & 26.66 & 45.62 & 40.03 & 24.41 & 53.43 & 42.63 & 26.02 & 61.70 & 27.00 & 60.67 & 41.99 \\
+    INT4 + ADC + LoRA & \textbf{14.03} & \textbf{23.20} & \textbf{49.96} & \textbf{25.72} & \textbf{53.67} & \textbf{54.63} & \textbf{29.27} & \textbf{68.06} & \textbf{34.60} & 60.67 & \textbf{47.07} \\
+    \bottomrule
+  \end{tabular}}
+  \end{center}
+
+  \vspace{0.4em}
+  \begin{center}\scriptsize
+  PPL lower is better; accuracy higher is better.  \textbf{Avg} = unweighted
+  mean of the 8 lm-evaluation-harness accuracies.  Rows without ``+ ADC'' are
+  integer-only baselines (no ADC step); rows with ``+ ADC'' include the
+  finite-resolution ADC ($b_a{=}8$, fixed $\delta$).
+  \end{center}
+\end{frame}
+
 \begin{frame}{Backup: $\alpha$-Sweep — $\alpha{=}0.5$ Wins}
   \begin{center}
     \includegraphics[width=0.8\linewidth]{figs/plot_alpha_sweep.pdf}

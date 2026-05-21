@@ -112,6 +112,50 @@
       \field{title}{QuaRot: Outlier-Free 4-Bit Inference in Rotated LLMs}
       \field{year}{2024}
     \endentry
+    \entry{piqa}{inproceedings}{}{}
+      \name{author}{5}{}{%
+        {{hash=4cc4ca13eda1b8380f1589532b8e33ae}{%
+           family={Bisk},
+           familyi={B\bibinitperiod},
+           given={Yonatan},
+           giveni={Y\bibinitperiod}}}%
+        {{hash=560f431bda2e90c8056046656d2b7f8b}{%
+           family={Zellers},
+           familyi={Z\bibinitperiod},
+           given={Rowan},
+           giveni={R\bibinitperiod}}}%
+        {{hash=aeba30798273c8a631cf1c9fb001f55e}{%
+           family={Le\bibnamedelima Bras},
+           familyi={L\bibinitperiod\bibinitdelim B\bibinitperiod},
+           given={Ronan},
+           giveni={R\bibinitperiod}}}%
+        {{hash=159bca5607e3797666654a2e3022978a}{%
+           family={Gao},
+           familyi={G\bibinitperiod},
+           given={Jianfeng},
+           giveni={J\bibinitperiod}}}%
+        {{hash=64d48b2f4b0370b6692c87cfc65f19b9}{%
+           family={Choi},
+           familyi={C\bibinitperiod},
+           given={Yejin},
+           giveni={Y\bibinitperiod}}}%
+      }
+      \strng{namehash}{d33d03ad4541b92ca1c96decd0a2ac78}
+      \strng{fullhash}{5ec73c409e3f3add0c042d82ea239d63}
+      \strng{fullhashraw}{5ec73c409e3f3add0c042d82ea239d63}
+      \strng{bibnamehash}{d33d03ad4541b92ca1c96decd0a2ac78}
+      \strng{authorbibnamehash}{d33d03ad4541b92ca1c96decd0a2ac78}
+      \strng{authornamehash}{d33d03ad4541b92ca1c96decd0a2ac78}
+      \strng{authorfullhash}{5ec73c409e3f3add0c042d82ea239d63}
+      \strng{authorfullhashraw}{5ec73c409e3f3add0c042d82ea239d63}
+      \field{sortinit}{B}
+      \field{sortinithash}{d7095fff47cda75ca2589920aae98399}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the AAAI Conference on Artificial Intelligence (AAAI)}
+      \field{title}{{PIQA}: Reasoning about Physical Commonsense in Natural Language}
+      \field{year}{2020}
+    \endentry
     \entry{LRQAT2024}{article}{}{}
       \name{author}{3}{}{%
         {{hash=0a6fff9d12cf605d308b98a72faf1e94}{%
@@ -362,6 +406,111 @@
       \field{title}{PACT: Parameterized Clipping Activation for Quantized Neural Networks}
       \field{year}{2018}
     \endentry
+    \entry{boolq}{inproceedings}{}{}
+      \name{author}{6}{}{%
+        {{hash=9edd3110f9350150b9a22ef5b7d45d25}{%
+           family={Clark},
+           familyi={C\bibinitperiod},
+           given={Christopher},
+           giveni={C\bibinitperiod}}}%
+        {{hash=8dde73b4194f5bc4230c4808f3fc1534}{%
+           family={Lee},
+           familyi={L\bibinitperiod},
+           given={Kenton},
+           giveni={K\bibinitperiod}}}%
+        {{hash=a45784fe7163b45f11d166564f5d24b6}{%
+           family={Chang},
+           familyi={C\bibinitperiod},
+           given={Ming-Wei},
+           giveni={M\bibinithyphendelim W\bibinitperiod}}}%
+        {{hash=3b03c511a57b349562f0fc708a8d326d}{%
+           family={Kwiatkowski},
+           familyi={K\bibinitperiod},
+           given={Tom},
+           giveni={T\bibinitperiod}}}%
+        {{hash=b8bbd832353d6b8ffa73123369d39d55}{%
+           family={Collins},
+           familyi={C\bibinitperiod},
+           given={Michael},
+           giveni={M\bibinitperiod}}}%
+        {{hash=b92aa283415413bb8d2a1548716d0c7d}{%
+           family={Toutanova},
+           familyi={T\bibinitperiod},
+           given={Kristina},
+           giveni={K\bibinitperiod}}}%
+      }
+      \strng{namehash}{292622a793304f2d4f11a1aba6f50987}
+      \strng{fullhash}{c56855207299b41d43b8f38555f3fc9a}
+      \strng{fullhashraw}{c56855207299b41d43b8f38555f3fc9a}
+      \strng{bibnamehash}{292622a793304f2d4f11a1aba6f50987}
+      \strng{authorbibnamehash}{292622a793304f2d4f11a1aba6f50987}
+      \strng{authornamehash}{292622a793304f2d4f11a1aba6f50987}
+      \strng{authorfullhash}{c56855207299b41d43b8f38555f3fc9a}
+      \strng{authorfullhashraw}{c56855207299b41d43b8f38555f3fc9a}
+      \field{extraname}{1}
+      \field{sortinit}{C}
+      \field{sortinithash}{4d103a86280481745c9c897c925753c0}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the 2019 Conference of the North American Chapter of the Association for Computational Linguistics (NAACL)}
+      \field{title}{{BoolQ}: Exploring the Surprising Difficulty of Natural Yes/No Questions}
+      \field{year}{2019}
+    \endentry
+    \entry{arc}{article}{}{}
+      \name{author}{7}{}{%
+        {{hash=2db5de0aa2d8b8effcc6e63e976b4edb}{%
+           family={Clark},
+           familyi={C\bibinitperiod},
+           given={Peter},
+           giveni={P\bibinitperiod}}}%
+        {{hash=40acbd8a3bdb0d6f7881a7a608f329f7}{%
+           family={Cowhey},
+           familyi={C\bibinitperiod},
+           given={Isaac},
+           giveni={I\bibinitperiod}}}%
+        {{hash=24a50614f7ed5b3e1d70594a0e2c2a2a}{%
+           family={Etzioni},
+           familyi={E\bibinitperiod},
+           given={Oren},
+           giveni={O\bibinitperiod}}}%
+        {{hash=d52b94839fda8bece4ad0c811146f04f}{%
+           family={Khot},
+           familyi={K\bibinitperiod},
+           given={Tushar},
+           giveni={T\bibinitperiod}}}%
+        {{hash=a9e0631f7cb86b51f2dbfd908c164960}{%
+           family={Sabharwal},
+           familyi={S\bibinitperiod},
+           given={Ashish},
+           giveni={A\bibinitperiod}}}%
+        {{hash=295b73860bf51e24333e651d5d7c1239}{%
+           family={Schoenick},
+           familyi={S\bibinitperiod},
+           given={Carissa},
+           giveni={C\bibinitperiod}}}%
+        {{hash=21dbac8bb4ba1ed555216a1d80595c20}{%
+           family={Tafjord},
+           familyi={T\bibinitperiod},
+           given={Oyvind},
+           giveni={O\bibinitperiod}}}%
+      }
+      \strng{namehash}{4fd804525e38a0fa4371b95d31fc4585}
+      \strng{fullhash}{c73080df046134da3613334c185e0473}
+      \strng{fullhashraw}{c73080df046134da3613334c185e0473}
+      \strng{bibnamehash}{4fd804525e38a0fa4371b95d31fc4585}
+      \strng{authorbibnamehash}{4fd804525e38a0fa4371b95d31fc4585}
+      \strng{authornamehash}{4fd804525e38a0fa4371b95d31fc4585}
+      \strng{authorfullhash}{c73080df046134da3613334c185e0473}
+      \strng{authorfullhashraw}{c73080df046134da3613334c185e0473}
+      \field{extraname}{2}
+      \field{sortinit}{C}
+      \field{sortinithash}{4d103a86280481745c9c897c925753c0}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{journaltitle}{arXiv preprint arXiv:1803.05457}
+      \field{title}{Think You Have Solved Question Answering? Try {ARC}, the {AI2} Reasoning Challenge}
+      \field{year}{2018}
+    \endentry
     \entry{LLMint82022}{article}{}{}
       \name{author}{4}{}{%
         {{hash=67a40f4e13f66c2e43ce4d7d64b9d9a4}{%
@@ -575,6 +724,145 @@
       \field{journaltitle}{arXiv preprint arXiv:1902.08153}
       \field{title}{Learned Step Size Quantization}
       \field{year}{2019}
+    \endentry
+    \entry{lmevalharness}{misc}{}{}
+      \name{author}{24}{}{%
+        {{hash=5507d34dbd17d768ebf4620f85594a2b}{%
+           family={Gao},
+           familyi={G\bibinitperiod},
+           given={Leo},
+           giveni={L\bibinitperiod}}}%
+        {{hash=c64ac147d6304f963970674e9bfc0c3f}{%
+           family={Tow},
+           familyi={T\bibinitperiod},
+           given={Jonathan},
+           giveni={J\bibinitperiod}}}%
+        {{hash=5f304a65bdfda109daf63bbf4a6193f1}{%
+           family={Abbasi},
+           familyi={A\bibinitperiod},
+           given={Baber},
+           giveni={B\bibinitperiod}}}%
+        {{hash=865b3a07920bcd999406ae3062b413fa}{%
+           family={Biderman},
+           familyi={B\bibinitperiod},
+           given={Stella},
+           giveni={S\bibinitperiod}}}%
+        {{hash=8af8ca5f0b2c8e572957f767f9c8f910}{%
+           family={Black},
+           familyi={B\bibinitperiod},
+           given={Sid},
+           giveni={S\bibinitperiod}}}%
+        {{hash=10ec2d017636d06c00d85df51fef78b6}{%
+           family={DiPofi},
+           familyi={D\bibinitperiod},
+           given={Anthony},
+           giveni={A\bibinitperiod}}}%
+        {{hash=2c3115c5f4deb0a93b0f050e61ef1712}{%
+           family={Foster},
+           familyi={F\bibinitperiod},
+           given={Charles},
+           giveni={C\bibinitperiod}}}%
+        {{hash=dc995b6c205d77c198fe2367992db692}{%
+           family={Golding},
+           familyi={G\bibinitperiod},
+           given={Laurence},
+           giveni={L\bibinitperiod}}}%
+        {{hash=5423bf018189c77ed256687cdf163c7e}{%
+           family={Hsu},
+           familyi={H\bibinitperiod},
+           given={Jeffrey},
+           giveni={J\bibinitperiod}}}%
+        {{hash=b7a7319bca01467d7584d90b65ac168e}{%
+           family={Le\bibnamedelima Noac'h},
+           familyi={L\bibinitperiod\bibinitdelim N\bibinitperiod},
+           given={Alain},
+           giveni={A\bibinitperiod}}}%
+        {{hash=660432d549808eb388222f2b239999d5}{%
+           family={Li},
+           familyi={L\bibinitperiod},
+           given={Haonan},
+           giveni={H\bibinitperiod}}}%
+        {{hash=3768a1eecab98a9a7b681ab448262ca4}{%
+           family={McDonell},
+           familyi={M\bibinitperiod},
+           given={Kyle},
+           giveni={K\bibinitperiod}}}%
+        {{hash=a2deb8466aa6f0edfe3cc805f9d776d8}{%
+           family={Muennighoff},
+           familyi={M\bibinitperiod},
+           given={Niklas},
+           giveni={N\bibinitperiod}}}%
+        {{hash=d7473eb7b98c858d27c82241b7322dcd}{%
+           family={Ociepa},
+           familyi={O\bibinitperiod},
+           given={Chris},
+           giveni={C\bibinitperiod}}}%
+        {{hash=29552333c9a97a9a00b73e517562b786}{%
+           family={Phang},
+           familyi={P\bibinitperiod},
+           given={Jason},
+           giveni={J\bibinitperiod}}}%
+        {{hash=5afa2b0ad68750a05c11de571d07390d}{%
+           family={Reynolds},
+           familyi={R\bibinitperiod},
+           given={Laria},
+           giveni={L\bibinitperiod}}}%
+        {{hash=d0c7890613cd672b3d6658709fbd7b0c}{%
+           family={Schoelkopf},
+           familyi={S\bibinitperiod},
+           given={Hailey},
+           giveni={H\bibinitperiod}}}%
+        {{hash=caeee6d3b2648a82c342f32bd894b780}{%
+           family={Skowron},
+           familyi={S\bibinitperiod},
+           given={Aviya},
+           giveni={A\bibinitperiod}}}%
+        {{hash=4d951c2131a054e77beed93072b7f037}{%
+           family={Sutawika},
+           familyi={S\bibinitperiod},
+           given={Lintang},
+           giveni={L\bibinitperiod}}}%
+        {{hash=ffd1907ef0a8bbed89fa04d783f236b6}{%
+           family={Tang},
+           familyi={T\bibinitperiod},
+           given={Eric},
+           giveni={E\bibinitperiod}}}%
+        {{hash=0859aab679a69d137e1d6db568c02e8f}{%
+           family={Thite},
+           familyi={T\bibinitperiod},
+           given={Anish},
+           giveni={A\bibinitperiod}}}%
+        {{hash=89867761cca83ffcddbf67a0b76a8c1e}{%
+           family={Wang},
+           familyi={W\bibinitperiod},
+           given={Ben},
+           giveni={B\bibinitperiod}}}%
+        {{hash=069dc336b3fb2f586b29076e5ab0d101}{%
+           family={Wang},
+           familyi={W\bibinitperiod},
+           given={Kevin},
+           giveni={K\bibinitperiod}}}%
+        {{hash=4817500e279ce97b8c8f18b92a2a6ead}{%
+           family={Zou},
+           familyi={Z\bibinitperiod},
+           given={Andy},
+           giveni={A\bibinitperiod}}}%
+      }
+      \strng{namehash}{d611c484b71686c36aa03d3e7e32d7a1}
+      \strng{fullhash}{ee5abd3f366cf838a8874f2bcc34bf51}
+      \strng{fullhashraw}{ee5abd3f366cf838a8874f2bcc34bf51}
+      \strng{bibnamehash}{d611c484b71686c36aa03d3e7e32d7a1}
+      \strng{authorbibnamehash}{d611c484b71686c36aa03d3e7e32d7a1}
+      \strng{authornamehash}{d611c484b71686c36aa03d3e7e32d7a1}
+      \strng{authorfullhash}{ee5abd3f366cf838a8874f2bcc34bf51}
+      \strng{authorfullhashraw}{ee5abd3f366cf838a8874f2bcc34bf51}
+      \field{sortinit}{G}
+      \field{sortinithash}{32d67eca0634bf53703493fb1090a2e8}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{howpublished}{\url{https://github.com/EleutherAI/lm-evaluation-harness}}
+      \field{title}{A Framework for Few-Shot Language Model Evaluation}
+      \field{year}{2024}
     \endentry
     \entry{Gholami2021Survey}{article}{}{}
       \name{author}{6}{}{%
@@ -1061,6 +1349,45 @@
       \verb{url}
       \verb https://arxiv.org/abs/1609.07843
       \endverb
+    \endentry
+    \entry{openbookqa}{inproceedings}{}{}
+      \name{author}{4}{}{%
+        {{hash=2760810ac53a3b0afd0d63a8af2b52e3}{%
+           family={Mihaylov},
+           familyi={M\bibinitperiod},
+           given={Todor},
+           giveni={T\bibinitperiod}}}%
+        {{hash=2db5de0aa2d8b8effcc6e63e976b4edb}{%
+           family={Clark},
+           familyi={C\bibinitperiod},
+           given={Peter},
+           giveni={P\bibinitperiod}}}%
+        {{hash=d52b94839fda8bece4ad0c811146f04f}{%
+           family={Khot},
+           familyi={K\bibinitperiod},
+           given={Tushar},
+           giveni={T\bibinitperiod}}}%
+        {{hash=a9e0631f7cb86b51f2dbfd908c164960}{%
+           family={Sabharwal},
+           familyi={S\bibinitperiod},
+           given={Ashish},
+           giveni={A\bibinitperiod}}}%
+      }
+      \strng{namehash}{4906e011e0fbe33dbd5c4ff3d3f49493}
+      \strng{fullhash}{931ec28762f5f984c6d2ceda0de42130}
+      \strng{fullhashraw}{931ec28762f5f984c6d2ceda0de42130}
+      \strng{bibnamehash}{4906e011e0fbe33dbd5c4ff3d3f49493}
+      \strng{authorbibnamehash}{4906e011e0fbe33dbd5c4ff3d3f49493}
+      \strng{authornamehash}{4906e011e0fbe33dbd5c4ff3d3f49493}
+      \strng{authorfullhash}{931ec28762f5f984c6d2ceda0de42130}
+      \strng{authorfullhashraw}{931ec28762f5f984c6d2ceda0de42130}
+      \field{sortinit}{M}
+      \field{sortinithash}{4625c616857f13d17ce56f7d4f97d451}
+      \field{labelnamesource}{author}
+      \field{labeltitlesource}{title}
+      \field{booktitle}{Proceedings of the 2018 Conference on Empirical Methods in Natural Language Processing (EMNLP)}
+      \field{title}{Can a Suit of Armor Conduct Electricity? A New Dataset for Open Book Question Answering}
+      \field{year}{2018}
     \endentry
     \entry{AdaRound2020}{article}{}{}
       \name{author}{5}{}{%

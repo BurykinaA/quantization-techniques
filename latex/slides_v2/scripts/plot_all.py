@@ -163,8 +163,8 @@ def plot_int4_progression():
 # ════════════════════════════════════════════════════════════════════════════════
 def plot_diag_roles():
     configs = ["diag MLP\nonly", "diag Attn\nonly", "diag Both", "Staged\n(best)"]
-    bypass  = [19.37, 24.98, 19.69, 18.50]
-    adc     = [31.65, 29.41, 28.46, 27.60]
+    bypass  = [19.37, 24.98, 19.69, 17.83]
+    adc     = [31.65, 29.41, 28.46, 26.66]
 
     x = np.arange(len(configs))
     w = 0.35
@@ -173,8 +173,7 @@ def plot_diag_roles():
     b1 = ax.bar(x - w/2, bypass, w, color=C_BYPASS, alpha=0.85, label="no-ADC PPL", zorder=3)
     b2 = ax.bar(x + w/2, adc,    w, color=C_ADC,    alpha=0.85, label="ADC PPL",    zorder=3)
 
-    ax.axhline(14.41, color=C_INT8, linestyle=":", linewidth=1.2, label="INT8 best 14.41")
-    ax.axhline(8.68,  color=C_FP,   linestyle="--",linewidth=1.0, label="bfloat16 ≈ 8.68")
+    ax.axhline(8.68,  color=C_FP,   linestyle="--",linewidth=1.0, label="bfloat16 $\\approx$ 8.68")
 
     for bar, v in zip(b1, bypass):
         ax.text(bar.get_x() + bar.get_width()/2, v + 0.2,
