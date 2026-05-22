@@ -137,7 +137,6 @@ This matters because the ADC has a fixed usable range. If the signal is badly sh
 
 
 ---
-
 ## Slide 13 — PTQ results
 This table shows how far pure PTQ can go.
 
