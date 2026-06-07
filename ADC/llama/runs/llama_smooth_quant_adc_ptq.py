@@ -1917,6 +1917,9 @@ def main():
                         help="Weight λ for KL term in ce_kl loss: L = CE + λ·KL")
     parser.add_argument("--lora_kl_temperature", type=float, default=2.0,
                         help="Softmax temperature T for KL divergence")
+    parser.add_argument("--eval_pre_lora", action="store_true",
+                        help="Run WITH-ADC perplexity eval before applying LoRA "
+                             "(measures perplexity before vs after LoRA in one run)")
 
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
@@ -2653,6 +2656,51 @@ def main():
         )
 
     # =========================================================================
+    # STEP 2.35 (optional): WITH-ADC perplexity eval BEFORE LoRA
+    # =========================================================================
+    pre_lora_eval_metrics = {}    # per-dataset WITH-ADC metrics measured before LoRA
+    if args.eval_pre_lora and args.lora_rank > 0:
+        # Apply the same context-window cap used for the post-LoRA eval so that
+        # the before/after numbers are directly comparable.
+        _model_max_length = getattr(model.config, 'max_position_embeddings', 4096)
+        if args.max_length > _model_max_length:
+            logger.warning(
+                f"max_length ({args.max_length}) > model's max ({_model_max_length}), "
+                f"using {_model_max_length}"
+            )
+            args.max_length = _model_max_length
+
+        logger.info("=" * 80)
+        logger.info("STEP 2.35: PERPLEXITY EVALUATION (Sliding Window) -- BEFORE LoRA")
+        logger.info("=" * 80)
+        model.eval()
+        for _pre_ds in args.eval_datasets:
+            _pre_enc = load_and_tokenize_for_sliding_window(
+                _pre_ds, args.eval_split, tokenizer,
+                max_samples=args.max_eval_samples if _pre_ds == "c4" else None,
+            )
+            if _pre_enc is None:
+                logger.warning(f"Skipping pre-LoRA eval for {_pre_ds} (dataset unavailable).")
+                continue
+            _pre_m = compute_perplexity_sliding_window(
+                model, _pre_enc, device,
+                max_length=args.max_length, stride=args.stride,
+                desc=f"PreLoRA eval {_pre_ds}",
+            )
+            pre_lora_eval_metrics[_pre_ds] = _pre_m
+            logger.info(
+                f"BEFORE LoRA -> {_pre_ds.upper()} Perplexity: {_pre_m['perplexity']:.4f}  "
+                f"(Loss: {_pre_m['avg_loss']:.4f})"
+            )
+        if use_wandb:
+            for _pre_ds, _pre_m in pre_lora_eval_metrics.items():
+                wandb.log({
+                    f"eval/prelora/{_pre_ds}/perplexity": _pre_m["perplexity"],
+                    f"eval/prelora/{_pre_ds}/avg_loss": _pre_m["avg_loss"],
+                })
+        logger.info("=" * 80)
+
+    # =========================================================================
     # STEP 2.4 (optional): ADC-LoRA post-correction
     # =========================================================================
     if args.lora_rank > 0:
@@ -3038,6 +3086,8 @@ def main():
                 "bw":                    args.bw,
                 "ba":                    args.ba,
                 "k":                     args.k,
+                "mvm_limit":             args.mvm_limit,
+                "lora_rank":             getattr(args, "lora_rank", 0),
                 "fq_epochs":             args.fq_epochs,
                 "fq_nsamples":           args.fq_nsamples,
                 "fq_lambda_center":      getattr(args, "fq_lambda_center", 0.0),
@@ -3051,6 +3101,12 @@ def main():
                    for ds in _all_diag_metrics},
                 **{f"ppl_adc_{ds}": float(all_eval_metrics[ds]["perplexity"])
                    for ds in all_eval_metrics},
+                **{f"ppl_adc_prelora_{ds}": float(pre_lora_eval_metrics[ds]["perplexity"])
+                   for ds in pre_lora_eval_metrics},
+                "ppl_adc_prelora": (
+                    float(pre_lora_eval_metrics[args.eval_datasets[0]]["perplexity"])
+                    if args.eval_datasets[0] in pre_lora_eval_metrics else None
+                ),
                 "dead_rate_mean":        float(np.mean(_dead_vals)) if _dead_vals else None,
                 "dead_rate_max":         float(np.max(_dead_vals))  if _dead_vals else None,
                 "reconstruction_rel_mean": float(np.mean(_rel_vals)) if _rel_vals else None,
