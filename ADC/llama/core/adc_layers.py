@@ -208,7 +208,8 @@ class QATLinearADC(nn.Linear):
                  # W-reshape (kurtosis) parameters from paper Equation 6 & 7
                  use_kurtosis_loss: bool = True,
                  kurtosis_weight: float = 0.0006,  # λ_κ in paper
-                 target_kurtosis: float = 1.8):  # Target kurtosis (uniform-like)
+                 target_kurtosis: float = 1.8,  # Target kurtosis (uniform-like)
+                 mult_noise_std: float = 0.0):  # std of multiplicative Gaussian noise before ADC
         super().__init__(in_features, out_features, bias)
         
         self.bx = bx
@@ -217,6 +218,10 @@ class QATLinearADC(nn.Linear):
         self.k = k
         self.ashift = ashift
         self.signed_activations = signed_activations
+        # Std of multiplicative Gaussian noise applied to the analog partial sum
+        # (integer MVM result) before ADC quantization: y = (x_int * w_int) * N(1, std^2).
+        # 0.0 disables noise injection (default).
+        self.mult_noise_std = float(mult_noise_std)
         
         # W-reshape (kurtosis) parameters
         self.use_kurtosis_loss = use_kurtosis_loss
@@ -352,6 +357,12 @@ class QATLinearADC(nn.Linear):
         if self.bypass_adc:
             adc_output = y_int
         else:
+            # Multiplicative Gaussian noise on the analog partial sum, modelling
+            # analog-MVM / conductance variation: y = (x_int * w_int) * N(1, std^2).
+            # Applied before the ADC (y_adc = floor(y / delta)).
+            if self.mult_noise_std > 0.0:
+                noise = torch.randn_like(y_int) * self.mult_noise_std + 1.0
+                y_int = y_int * noise
             y_adc_codes = floor_ste(y_int / self.delta)
             y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)
             adc_output = y_adc_codes * self.delta
@@ -398,12 +409,14 @@ class TiledLinearADC(nn.Module):
                  use_kurtosis_loss: bool = True,
                  kurtosis_weight: float = 0.0006,
                  target_kurtosis: float = 1.8,
+                 mult_noise_std: float = 0.0,
                  logger=None):
         super().__init__()
         self.logger = logger
         self.in_features_total = in_features
         self.out_features = out_features
         self.mvm_limit = mvm_limit
+        self.mult_noise_std = float(mult_noise_std)
 
         n_tiles = 1
         tile_in = in_features
@@ -430,6 +443,7 @@ class TiledLinearADC(nn.Module):
                     use_kurtosis_loss=use_kurtosis_loss,
                     kurtosis_weight=kurtosis_weight,
                     target_kurtosis=target_kurtosis,
+                    mult_noise_std=mult_noise_std,
                 )
             )
     
@@ -453,6 +467,12 @@ class TiledLinearADC(nn.Module):
         """Enable/disable ADC bypass for all tiles."""
         for tile in self.tiles:
             tile.bypass_adc = bypass
+
+    def set_mult_noise_std(self, std: float):
+        """Set std of the multiplicative Gaussian noise (before ADC) for all tiles."""
+        self.mult_noise_std = float(std)
+        for tile in self.tiles:
+            tile.mult_noise_std = float(std)
     
     def set_bypass_all(self, bypass: bool):
         """Enable/disable FULL bypass for all tiles (plain linear, no quantization)."""

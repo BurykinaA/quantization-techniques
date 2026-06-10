@@ -87,6 +87,7 @@ class LlamaADCConverter:
         use_kurtosis_loss: bool = False,
         kurtosis_weight: float = 0.0,
         target_kurtosis: float = 1.8,
+        mult_noise_std: float = 0.0,
     ) -> nn.Module:
         """Replace all nn.Linear layers in the LLaMA model with TiledLinearADC."""
         if exclude_patterns is None:
@@ -121,6 +122,7 @@ class LlamaADCConverter:
                         use_kurtosis_loss=use_kurtosis_loss,
                         kurtosis_weight=kurtosis_weight,
                         target_kurtosis=target_kurtosis,
+                        mult_noise_std=mult_noise_std,
                     )
                     adc_layer.load_weights(child_module)
 
@@ -1937,6 +1939,9 @@ def main():
                         choices=["symmetric", "asymmetric"],
                         help="Activation quantization mode")
     parser.add_argument("--mvm_limit", type=int, default=256)
+    parser.add_argument("--adc_mult_noise_std", type=float, default=0.0,
+                        help="Std of multiplicative Gaussian noise injected before the ADC: "
+                             "y = (x_int * w_int) * N(1, std^2). 0.0 disables it.")
 
     # Calibration settings
     parser.add_argument("--calibration_method", type=str, default="percentile",
@@ -2505,7 +2510,13 @@ def main():
         use_kurtosis_loss=False,
         kurtosis_weight=0.0,
         target_kurtosis=1.8,
+        mult_noise_std=args.adc_mult_noise_std,
     )
+    if args.adc_mult_noise_std > 0.0:
+        logger.info(
+            f"Multiplicative Gaussian noise enabled before ADC: "
+            f"y = (x_int * w_int) * N(1, {args.adc_mult_noise_std}^2)"
+        )
 
     model = model.to(device)
     logger.info(f"Model moved to {device}")
@@ -3088,6 +3099,7 @@ def main():
                 "k":                     args.k,
                 "mvm_limit":             args.mvm_limit,
                 "lora_rank":             getattr(args, "lora_rank", 0),
+                "adc_mult_noise_std":    getattr(args, "adc_mult_noise_std", 0.0),
                 "fq_epochs":             args.fq_epochs,
                 "fq_nsamples":           args.fq_nsamples,
                 "fq_lambda_center":      getattr(args, "fq_lambda_center", 0.0),
