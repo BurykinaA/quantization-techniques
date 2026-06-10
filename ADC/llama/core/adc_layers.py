@@ -362,7 +362,15 @@ class QATLinearADC(nn.Linear):
             # Applied before the ADC (y_adc = floor(y / delta)).
             if self.mult_noise_std > 0.0:
                 noise = torch.randn_like(y_int) * self.mult_noise_std + 1.0
-                y_int = y_int * noise
+                if torch.is_grad_enabled():
+                    # Straight-through: the forward value carries the noise, but
+                    # gradients pass through unperturbed. This keeps autograd from
+                    # retaining the per-tile noise tensors for the backward pass
+                    # (which otherwise blows up memory during LoRA calibration),
+                    # and is consistent with the STE used for floor/round below.
+                    y_int = y_int + (y_int * noise - y_int).detach()
+                else:
+                    y_int = y_int * noise
             y_adc_codes = floor_ste(y_int / self.delta)
             y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)
             adc_output = y_adc_codes * self.delta
