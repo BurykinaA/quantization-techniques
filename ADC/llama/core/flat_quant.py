@@ -399,6 +399,9 @@ class FlatQuantLinear(nn.Module):
         self.lwc = lwc
         self._adc_config = dict(adc_config) if adc_config is not None else None
         self._reparameterized = False  # set True after reparameterize(); skips weight transform
+        # Std of multiplicative Gaussian noise injected on the pre-ADC partial sum
+        # during ADC-aware calibration (Stage B). 0.0 = clean (default).
+        self._adc_noise_std = 0.0
         # Penalty attrs — training-only, not part of adc_config
         self._penalty_lambda_clip    = 0.0
         self._penalty_lambda_dead    = 0.0
@@ -627,6 +630,13 @@ class FlatQuantLinear(nn.Module):
             _dev_type = "cuda" if code_xi.is_cuda else "cpu"
             with torch.amp.autocast(device_type=_dev_type, enabled=False):
                 y_int = F.linear(code_xi.float(), code_wi.float())       # [B, out], float32
+            if self._adc_noise_std > 0.0:
+                # Multiplicative Gaussian noise on the pre-ADC partial sum, mirroring
+                # TiledLinearADC inference: y = y_int * N(1, std^2). Kept in the graph
+                # (differentiable) so the transforms get the stochastic gradient of
+                # E_eps[MSE(noisy ADC, FP)]; floor_ste below handles the non-diff floor.
+                noise = torch.randn_like(y_int) * self._adc_noise_std + 1.0
+                y_int = y_int * noise
             y_adc  = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
 
             # Accumulate penalties (only when enabled)
@@ -1088,6 +1098,7 @@ def calibrate_flat_quant(
     stochastic_prop: bool = False,
     stochastic_mode: str = "bernoulli",  # "bernoulli" | "beta"
     beta_param: float = 2.0,
+    adc_noise_std: float = 0.0,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1355,6 +1366,7 @@ def calibrate_flat_quant(
                 _m._band_beta              = band_beta
                 _m._band_topk_frac         = band_topk_frac
                 _m._penalty_lambda_center  = lambda_center if _is_target else 0.0
+                _m._adc_noise_std          = adc_noise_std
 
         optimizer = torch.optim.AdamW(trained_params)
         total_steps = epochs * (actual_nsamples // cali_bsz)

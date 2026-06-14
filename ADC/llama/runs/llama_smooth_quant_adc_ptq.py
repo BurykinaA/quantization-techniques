@@ -1858,6 +1858,9 @@ def main():
                         help="Stage B epochs: after main calibration, run a second pass with propagation (0=disabled)")
     parser.add_argument("--fq_stage_b_prop_alpha", type=float, default=0.5,
                         help="Stage B propagation alpha (default 0.5)")
+    parser.add_argument("--fq_stage_b_noise_std", type=float, default=0.0,
+                        help="Multiplicative ADC noise std injected in Stage B transform "
+                             "calibration: optimize E_eps[MSE(noisy ADC, FP)]. 0.0 = clean (current).")
     parser.add_argument("--fq_prop_alpha_early", type=float, default=None,
                         help="Propagation alpha for early layers (0..fq_prop_late_start-1). If None, fq_prop_alpha used for all.")
     parser.add_argument("--fq_prop_late_start", type=int, default=8,
@@ -2437,6 +2440,7 @@ def main():
                     stochastic_prop=args.fq_stochastic_prop,
                     stochastic_mode=args.fq_stochastic_mode,
                     beta_param=args.fq_beta_param,
+                    adc_noise_std=args.fq_stage_b_noise_std,
                 )
 
             if args.fq_save_transforms:
@@ -3100,6 +3104,7 @@ def main():
                 "mvm_limit":             args.mvm_limit,
                 "lora_rank":             getattr(args, "lora_rank", 0),
                 "adc_mult_noise_std":    getattr(args, "adc_mult_noise_std", 0.0),
+                "fq_stage_b_noise_std":  getattr(args, "fq_stage_b_noise_std", 0.0),
                 "fq_epochs":             args.fq_epochs,
                 "fq_nsamples":           args.fq_nsamples,
                 "fq_lambda_center":      getattr(args, "fq_lambda_center", 0.0),
