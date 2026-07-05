@@ -1,0 +1,228 @@
+% ─── Combined Slide 3-5 (single interactive frame, 6 overlay steps) ─────────
+% Step 1: math model base
+% Step 2: + weights/activations
+% Step 3: + Laser input
+% Step 4: digital quantisation histograms (no hy)
+% Step 5: math model + ADC
+% Step 6: ADC histograms
+\begin{frame}
+  \frametitle{%
+    \only<1-3,5>{Math model of an optical linear layer}%
+    \only<4>{Digital Quantisation}%
+    \only<6>{ADC: Reading the Analog Accumulation}%
+  }
+
+  % ═══════════════════════════════════════════════════════════════════════
+  % SCENE A: Math model schema (steps 1, 2, 3, 5)
+  % ═══════════════════════════════════════════════════════════════════════
+  \begin{onlyenv}<1-3,5>
+    \vfill
+    \begin{center}
+    \resizebox{0.8\linewidth}{!}{%
+    \begin{tikzpicture}[
+        every node/.style={font=\small},
+        q/.style={draw=mybluedark, rounded corners=3pt, fill=myblue!22,
+                  minimum width=1.9cm, minimum height=0.72cm, align=center},
+        tile/.style={draw, rounded corners=3pt, fill=mybluedark!15, text=mybluedark,
+                     minimum width=2.2cm, minimum height=1.0cm, align=center},
+        adc/.style={draw=myorange, line width=1.5pt, rounded corners=3pt,
+                    fill=myorange!25, minimum width=1.7cm, minimum height=0.72cm,
+                    align=center},
+        arr/.style={-{Latex[length=2.5mm]}, thick, mybluedark}
+      ]
+      \useasboundingbox (-0.5, -3.4) rectangle (11.5, 3.4);
+
+      \node (w)  at (0,   1.1) {$w$};
+      \node[q] (qw) at (2.1,  1.1) {Digital\\quantiser};
+      \node (wb) at (4.0,  1.1) {$\hat w$};
+
+      \node (x)  at (0,  -1.1) {$x$};
+      \node[q] (qx) at (2.1, -1.1) {Digital\\quantiser};
+      \node (xb) at (4.0, -1.1) {$\hat x$};
+
+      \draw[arr] (w)--(qw);   \draw[arr] (qw)--(wb);
+      \draw[arr] (x)--(qx);   \draw[arr] (qx)--(xb);
+
+      \node[tile] (T) at (6.2, 0) {Optical MVM\\$y{=}\langle\hat w,\hat x\rangle$};
+      \draw[arr] (wb) -- (T.north west);
+      \draw[arr] (xb) -- (T.south west);
+
+      \node (y)  at (8.05, 0) {$y$};
+      \draw[arr] (T)--(y);
+
+      \node[adc] (A) at (9.4, 0) {ADC\\$\lfloor y/\delta\rfloor$};
+      \draw[arr] (y)--(A);
+
+      \node (yb) at (11.0, 0) {$\hat y$};
+      \draw[arr] (A)--(yb);
+
+      % Step-specific overlays inside the schema (non-cumulative)
+      % Step 2: ONLY weights + activations
+      \only<2>{
+        \node[anchor=south] at (4.0,  1.6)
+          {\includegraphics[width=2cm]{figs/parts/weights.pdf}};
+        \node[anchor=north] at (4.0, -1.6)
+          {\includegraphics[width=2cm]{figs/parts/activations.pdf}};
+      }
+      % Step 3: ONLY Laser input (over Optical MVM)
+      \only<3>{
+        \node[anchor=south] at (6.2, 0.7)
+          {\includegraphics[width=2.4cm]{figs/parts/mvm.pdf}};
+      }
+      % Step 5: ONLY camera (ADC)
+      \only<5>{
+        \node[anchor=south] at (9.4, 0.55)
+          {\includegraphics[width=2cm]{figs/parts/adc.pdf}};
+      }
+    \end{tikzpicture}}
+    \end{center}
+    \vfill
+
+    \begin{tikzpicture}[remember picture, overlay]
+      \node[anchor=south west, inner sep=0pt]
+        at ([xshift=0.6cm, yshift=0.5cm]current page.south west) {%
+        {\scriptsize\color{black}\itshape
+          \begin{tabular}{@{}l@{}}
+            $^{*}$MVM — matrix-vector multiplication. \\
+            $^{*}$ADC — analog-to-digital converter.
+          \end{tabular}}};
+      \only<1-3>{
+        \node[anchor=south east, inner sep=0pt]
+          at ([xshift=-0.5cm, yshift=0.5cm]current page.south east) {%
+            \includegraphics[width=4.2cm,keepaspectratio]{figs/Fig1b.pdf}};
+      }
+    \end{tikzpicture}
+  \end{onlyenv}
+
+  % ═══════════════════════════════════════════════════════════════════════
+  % SCENE B: Digital Quantisation histograms — no hy (step 4)
+  % ═══════════════════════════════════════════════════════════════════════
+  \begin{onlyenv}<4>
+    \vspace{-0.6em}
+    \begin{center}
+    \resizebox{0.8\linewidth}{!}{%
+    \begin{tikzpicture}[
+        every node/.style={font=\scriptsize},
+        dq/.style={draw=mybluedark, rounded corners=2pt, fill=myblue!22,
+                   minimum width=1.6cm, minimum height=0.68cm, align=center},
+        tile/.style={draw=mybluedark, rounded corners=2pt, fill=mybluedark!15,
+                     text=mybluedark, minimum width=2.0cm, minimum height=0.88cm,
+                     align=center},
+        adc/.style={draw=myorange, line width=1.5pt, rounded corners=2pt,
+                    fill=myorange!35, minimum width=1.3cm, minimum height=0.68cm,
+                    align=center},
+        arr/.style={-{Latex[length=1.3mm]}, thick},
+        histbox/.style={draw=mygray!55, thin, rounded corners=2pt,
+                        fill=white, inner sep=1pt},
+        link/.style={-{Latex[length=1.5mm]}, mygray!70, line width=0.6pt}
+      ]
+      \node (w)  at (0,   0.8) {$w$};
+      \node[dq]  (qw) at (1.8,  0.8) {Digital\\quantiser};
+      \node (wb) at (3.6,  0.8) {$\hat w$};
+
+      \node (x)  at (0,  -0.8) {$x$};
+      \node[dq]  (qx) at (1.8, -0.8) {Digital\\quantiser};
+      \node (xb) at (3.6, -0.8) {$\hat x$};
+
+      \draw[arr] (w)--(qw);  \draw[arr] (qw)--(wb);
+      \draw[arr] (x)--(qx);  \draw[arr] (qx)--(xb);
+
+      \node[tile] (T) at (5.8, 0) {Optical MVM\\$y{=}\langle\hat w,\hat x\rangle$};
+      \draw[arr] (wb) -- (T.north west);
+      \draw[arr] (xb) -- (T.south west);
+
+      \node (y)  at (7.6, 0) {$y$};
+      \draw[arr] (T) -- (y);
+
+      \node[adc] (A) at (8.9, 0) {ADC\\$\lfloor y/\delta\rfloor$};
+      \draw[arr] (y)--(A);
+
+      \node (yb) at (10.3, 0) {$\hat y$};
+      \draw[arr] (A)--(yb);
+
+      \begin{pgfonlayer}{background}
+        \node[inner sep=9pt, draw=mybluedark, line width=1.5pt,
+              rounded corners=7pt, fill=myblue!6,
+              fit=(w)(qw)(wb)(x)(qx)(xb)(T)(y)] (Z1) {};
+      \end{pgfonlayer}
+
+      \node[histbox] (hw)  at (0,   3.0) {\includegraphics[width=2.6cm]{figs/dist_w.pdf}};
+      \node[histbox] (hwb) at (3.6, 3.0) {\includegraphics[width=2.6cm]{figs/dist_w_hat.pdf}};
+      \draw[link] (hw.south)  -- (w.north);
+      \draw[link] (hwb.south) -- (wb.north);
+
+      \node[histbox] (hx)  at (0,  -3.0) {\includegraphics[width=2.6cm]{figs/dist_x.pdf}};
+      \node[histbox] (hxb) at (3.6,-3.0) {\includegraphics[width=2.6cm]{figs/dist_x_hat.pdf}};
+      \draw[link] (hx.north)  -- (x.south);
+      \draw[link] (hxb.north) -- (xb.south);
+
+      % ── Red "Problem" label next to the bottom-right (activations) histogram
+      \node[anchor=west, align=left, text=myred,
+            font=\bfseries\small] (problem)
+        at ([xshift=0.8cm]hxb.east)
+        {Problem:\\ Outlier Channel Saturation};
+    \end{tikzpicture}}
+    \end{center}
+  \end{onlyenv}
+
+  % ═══════════════════════════════════════════════════════════════════════
+  % SCENE C: ADC histograms (step 6)
+  % ═══════════════════════════════════════════════════════════════════════
+  \begin{onlyenv}<6>
+    \vspace{-0.6em}
+    \begin{columns}[c]
+    \begin{column}{0.32\textwidth}
+      {\large\bfseries\color{myred} Problems:}\\[0.6em]
+      {\bfseries\color{myred}
+        \mbox{1. $\delta$ is fixed by the hardware}\\[0.5em]
+        2. Quantization Aware Training (QAT) is not an option}
+    \end{column}
+    \begin{column}{0.66\textwidth}
+      \resizebox{\linewidth}{!}{%
+      \begin{tikzpicture}[
+          every node/.style={font=\scriptsize},
+          tile/.style={draw=mybluedark, rounded corners=2pt, fill=mybluedark!15,
+                       text=mybluedark, minimum width=2.0cm, minimum height=0.88cm,
+                       align=center},
+          adc/.style={draw=myorange, line width=1.5pt, rounded corners=2pt,
+                      fill=myorange!35, minimum width=1.3cm, minimum height=0.68cm,
+                      align=center},
+          arr/.style={-{Latex[length=1.3mm]}, thick},
+          histbox/.style={draw=mygray!55, thin, rounded corners=2pt,
+                          fill=white, inner sep=1pt},
+          link/.style={-{Latex[length=1.5mm]}, mygray!70, line width=0.6pt}
+        ]
+        \node[font=\Large] (wdots) at (3.0,  0.8) {$\cdots$};
+        \node (wb)                  at (3.6,  0.8) {$\hat w$};
+        \node[font=\Large] (xdots) at (3.0, -0.8) {$\cdots$};
+        \node (xb)                  at (3.6, -0.8) {$\hat x$};
+
+        \node[tile] (T) at (5.8, 0) {Optical MVM\\$y{=}\langle\hat w,\hat x\rangle$};
+        \draw[arr] (wb) -- (T.north west);
+        \draw[arr] (xb) -- (T.south west);
+
+        \node (y)  at (7.6, 0) {$y$};
+        \draw[arr] (T) -- (y);
+
+        \node[adc] (A) at (8.9, 0) {ADC\\$\lfloor y/\delta\rfloor$};
+        \draw[arr] (y)--(A);
+
+        \node (yb) at (10.3, 0) {$\hat y$};
+        \draw[arr] (A)--(yb);
+
+        \begin{pgfonlayer}{background}
+          \node[inner sep=9pt, draw=myorange, line width=1.5pt,
+                rounded corners=7pt, fill=myorange!5,
+                fit=(y)(A)(yb)] (Z2) {};
+        \end{pgfonlayer}
+
+        \node[histbox] (hy)  at (7.6,  3.0) {\includegraphics[width=2.6cm]{figs/dist_y.pdf}};
+        \node[histbox] (hyb) at (10.3, -2.0) {\includegraphics[width=2.6cm]{figs/dist_y_hat.pdf}};
+        \draw[link] (hy.south)  -- (y.north);
+        \draw[link] (hyb.north) -- (yb.south);
+      \end{tikzpicture}}
+    \end{column}
+    \end{columns}
+  \end{onlyenv}
+
+\end{frame}

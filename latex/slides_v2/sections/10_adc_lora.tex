@@ -1,0 +1,103 @@
+% ─── Slide: ADC-LoRA — main idea ─────────────────────────────────────────────
+\begin{frame}[shrink=20]{Post-ADC Residual LoRA: Breaking the Plateau}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      \textbf{Architecture:}
+      \small
+      \[
+        y = \underbrace{\mathrm{ADC}_{\mathrm{frozen}}(x)}_{\text{PTQ path}} +\;
+            \tfrac{\alpha}{r}\, B\!\left(A(x_{\mathbb{R}})\right)
+      \]
+      \normalsize
+      \begin{itemize}
+        \item Correction applied \textbf{after} ADC output
+        \item Base model frozen in fp16; LoRA adapters in fp32
+        \item Gradients never touch \texttt{round\_ste} / ADC clamp $\Rightarrow$ stable
+        \item Trained with LM cross-entropy (+ optional KL teacher), 5 epochs
+      \end{itemize}
+
+      \vspace{0.15em}
+      \begin{alertblock}{\textcolor{myred}{\textbf{Pre-ADC LoRA failed}}}
+        \small\texttt{pre\_adc\_r4\_down\_o}:
+        no-ADC=123, ADC=105.\\
+        Gradients through $\texttt{rnd\_ste}(\mathbf{W}{+}\Delta\mathbf{W})$
+        are too noisy from step~0.
+      \end{alertblock}
+
+      \vspace{0.15em}
+      \textbf{Best result} (\texttt{r4\_all\_ce\_kl}):
+      \begin{center}
+        \small
+        \begin{tabular}{lc}
+          \toprule
+          PTQ base & 27.60 \\
+          +\,LoRA (all\,7, r=4, CE+KL) & \best{14.03} \\
+          \bottomrule
+        \end{tabular}
+      \end{center}
+    \end{column}
+    \begin{column}{0.46\textwidth}
+      \scalebox{0.68}{%
+      \begin{tikzpicture}[
+          every node/.style={font=\scriptsize},
+          frozen/.style={draw, rounded corners=2pt, fill=mygray!20,
+                         minimum width=1.3cm, minimum height=0.5cm, align=center},
+          lora/.style={draw, rounded corners=2pt, fill=myblue!20,
+                       minimum width=1.1cm, minimum height=0.5cm, align=center},
+          sum/.style={draw, circle, fill=myorange!30, minimum size=0.45cm,
+                      inner sep=0pt, font=\small},
+          arr/.style={-{Latex[length=1.8mm]}, thick},
+          redarr/.style={-{Latex[length=1.8mm]}, thick, myred, dashed}
+        ]
+
+        % ── Input node ───────────────────────────────────────────────
+        \node (x) at (0, 0) {$x$};
+
+        % ── Frozen ADC path (top) ────────────────────────────────────
+        \node[frozen] (qx)  at (1.6,  0.7) {$Q_x$};
+        \node[frozen] (mvm) at (3.0,  0.7) {MVM};
+        \node[frozen] (adc) at (4.4,  0.7) {ADC\\$\lfloor\cdot/\delta\rfloor$};
+
+        \draw[arr] (x.north east) .. controls (0.5,0.7) .. (qx);
+        \draw[arr] (qx)  -- (mvm);
+        \draw[arr] (mvm) -- (adc);
+
+        % frozen label
+        \node[font=\tiny, text=gray, above=1pt of mvm] {\textit{frozen}};
+
+        % ── LoRA path (bottom) ───────────────────────────────────────
+        \node[lora] (la) at (1.8, -0.8) {$A$\;(fp32)};
+        \node[lora] (lb) at (3.3, -0.8) {$B$\;(fp32)};
+        \node[font=\tiny, text=myblue] at (2.55, -1.2) {low-rank correction};
+
+        \draw[arr] (x.south east) .. controls (0.5,-0.8) .. (la);
+        \draw[arr] (la) -- (lb);
+
+        % ── Sum node ─────────────────────────────────────────────────
+        \node[sum] (plus) at (5.6, 0) {$+$};
+
+        \draw[arr] (adc.east)  .. controls (5.2,0.7) .. (plus.north);
+        \draw[arr] (lb.east)   .. controls (4.8,-0.8) ..
+                   node[midway, right, font=\tiny] {$\frac{\alpha}{r}$}
+                   (plus.south);
+
+        % ── Output ───────────────────────────────────────────────────
+        \node (y) at (6.8, 0) {$y$};
+        \draw[arr] (plus) -- (y);
+
+        % ── Gradient note ────────────────────────────────────────────
+        \node[draw=mygreen!70!black, fill=mygreen!10, rounded corners=2pt,
+              font=\tiny, align=center, below=0.5cm of plus]
+          {grad never\\touches ADC};
+
+        % ── Pre-ADC FAILED box ───────────────────────────────────────
+        \node[draw=myred, fill=myred!10, rounded corners=3pt,
+              font=\tiny\bfseries, align=center, text=myred,
+              above=0.35cm of adc] (fail)
+          {Pre-ADC LoRA:\\no-ADC=123, ADC=105\\FAILED};
+        \draw[redarr] (fail.south) -- (adc.north);
+
+      \end{tikzpicture}}%
+    \end{column}
+  \end{columns}
+\end{frame}

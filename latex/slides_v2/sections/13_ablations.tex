@@ -1,0 +1,62 @@
+% ─── Slide 13: LoRA ablations + overhead ─────────────────────────────────────
+\begin{frame}[shrink=10]{LoRA Ablations and Overhead}
+
+  \begin{columns}[T]
+    \begin{column}{0.55\textwidth}
+      \scriptsize
+      \textbf{Ablations (Llama-3.2-1B, INT4, \adcppl{}$\downarrow$)}\\
+      \emph{Base PTQ: staged INT4 ($\adcppl{}\approx 27.5$).}\\[0.3em]
+
+      \renewcommand{\arraystretch}{1.05}
+      \begin{tabular}{@{}l l c@{}}
+        \toprule
+        \textbf{Axis} & \textbf{Setting} & $\adcppl{}$ \\
+        \midrule
+        \multirow{3}{*}{Rank $r$}
+          & $r{=}1$   & 15.90 \\
+          & $r{=}4$   & 15.57 \\
+          & $r{=}8$   & \best{15.24} \\
+        \midrule
+        \multirow{2}{*}{Loss}
+          & CE only     & 15.57 \\
+          & CE\,+\,KL   & \best{14.33} \\
+        \midrule
+        \multirow{3}{*}{Layers}
+          & last 8 only & 20.08 \\
+          & first 8     & 16.64 \\
+          & all 16      & \best{15.57} \\
+        \midrule
+        \multirow{2}{*}{Placement}
+          & Pre-ADC  & 105.6 \\
+          & Post-ADC & \best{15.57} \\
+        \midrule
+        \multirow{2}{*}{Coverage}
+          & down\,+\,o (CE\,+\,KL) & 14.33 \\
+          & all\,7 (CE\,+\,KL) & \best{14.03} \\
+        \bottomrule
+      \end{tabular}
+
+    \end{column}
+
+    \begin{column}{0.43\textwidth}
+      \footnotesize
+      \begin{center}
+      \textbf{Overhead on Llama-3.2-1B}\\
+      \emph{($d{=}2048$, 16 blocks, $r{=}4$, all 7 proj.)}\\[0.4em]
+
+      \renewcommand{\arraystretch}{1.2}
+      \begin{tabular}{@{}l r@{}}
+        \toprule
+        total LoRA params & $\sim$\SI{2.8}{M} \\
+        as fraction of FP weights & \textbf{0.22\%} \\
+        FP-teacher forward & 1$\times$ cached \\
+        student forward + back & $\sim$5$\times$ FP MAC \\
+        training (1 GPU, 5 ep.) & $\sim$\SI{45}{min} \\
+        inference MAC overhead & $<$\,0.5\% \\
+        \bottomrule
+      \end{tabular}
+      \end{center}
+
+    \end{column}
+  \end{columns}
+\end{frame}

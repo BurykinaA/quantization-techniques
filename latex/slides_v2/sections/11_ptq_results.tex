@@ -1,0 +1,28 @@
+% ─── Slide 11: PTQ Results ────────────────────────────────────────────────────
+\begin{frame}{PTQ Results on WikiText-2}
+
+  \vspace{-0.2em}
+  \footnotesize
+  \begin{center}
+  \renewcommand{\arraystretch}{1.3}
+  \begin{tabular}{@{}l c c c@{}}
+    \toprule
+    \textbf{Method} & \textbf{bits (w\,/\,a)} & $\bypass$ & $\adcppl{}$ \\
+    \midrule
+    FP baseline                        & 16\,/\,16 & 8.68 & — \\
+    \midrule
+    \rowcolor{myorange!7}
+    FlatQuant             & 4\,/\,4   & 15.41 & 2354 \\
+    \rowcolor{myorange!7}
+    \textbf{our setup}                 & 4\,/\,4   & \textbf{17.83} & \best{26.66} \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.8em}
+  \begin{center}
+    \footnotesize\itshape
+    PTQ reduces the collapse, but plateaus far from full precision
+    $\to$ need a small trainable correction.
+  \end{center}
+\end{frame}

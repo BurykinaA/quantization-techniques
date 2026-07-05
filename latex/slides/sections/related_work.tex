@@ -1,0 +1,33 @@
+% ─── Slide: Related work / positioning ────────────────────────────────────────
+\begin{frame}[shrink=30]{This Work in Context}
+  \begin{center}
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{lXp{3.3cm}}
+    \toprule
+    \textbf{Method} & \textbf{Key idea} & \textbf{Gap / limit} \\
+    \midrule
+    FlatQuant
+      & Learned Kronecker-decomposed orthogonal transforms per layer
+      & FP loss only; no ADC signal \\
+    OmniQuant / LET
+      & Learnable per-channel equivalent scaling (diagonal)
+      & No ADC-aware objective \\
+    QEP / prop.\ calib.
+      & Feed quantised activations into the next layer's calibration
+      & INT8 only; no mixed-loss \\
+    PACT / QDrop
+      & Stochastic / clamped quant-aware training
+      & Full re-training required \\
+    \midrule
+    \textbf{This work}
+      & ADC-aware PTQ ($\alpha$-mixed, staged diag) + post-ADC LoRA
+      & — \\
+    \bottomrule
+  \end{tabularx}
+  \end{center}
+
+  \vspace{0.3em}
+  \begin{exampleblock}{Key novelty}
+    \small No prior method directly targets the \textbf{post-ADC residual} — our LoRA correction is the first to do so.
+  \end{exampleblock}
+\end{frame}

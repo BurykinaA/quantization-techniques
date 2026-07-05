@@ -1,0 +1,149 @@
+% ─── Slide 8a: Diagonals — motivation + fix ──────────────────────────────────
+\begin{frame}[shrink=10]{Our Extension II: Trainable Diagonals (\texttt{add\_diag})}
+
+  \footnotesize
+  \textbf{Motivation.} A rotation $T$ flattens the \emph{shape} of the activation cloud, but not its \emph{per-channel scale}. On INT4 ADC this leaves residual outliers that shove a few channels into the clipping region.
+
+  \vspace{0.4em}
+  \pause
+  \textbf{Fix.} Absorb a trainable diagonal $D=\mathrm{diag}(d_1,\ldots,d_c)$ into the rotation:
+  \[
+    \tilde T \;=\; T\cdot D,\qquad d_i \in [10^{-4},\, 10]
+  \]
+
+  Invariance preserved — equal and opposite scaling on the next layer:
+  \[
+    y \;=\; (xD^{-1}T^{-1})\,(T D W^\top).
+  \]
+
+\end{frame}
+
+% ─── Slide 8b: motivation + fix repeated with figure below ───────────────────
+\begin{frame}[shrink=15]{Our Extension II: Trainable Diagonals (\texttt{add\_diag})}
+
+  \footnotesize
+  \textbf{Motivation.} A rotation $T$ flattens the \emph{shape} of the activation cloud, but not its \emph{per-channel scale}. On INT4 ADC this leaves residual outliers that shove a few channels into the clipping region.
+
+  \vspace{0.4em}
+  \textbf{Fix.} Absorb a trainable diagonal $D=\mathrm{diag}(d_1,\ldots,d_c)$ into the rotation:
+  \[
+    \tilde T \;=\; T\cdot D,\qquad d_i \in [10^{-4},\, 10]
+  \]
+  Invariance preserved — equal and opposite scaling on the next layer:
+  \[
+    y \;=\; (xD^{-1}T^{-1})\,(T D W^\top).
+  \]
+
+  \vspace{0.3em}
+  \begin{center}
+    \includegraphics[width=0.85\linewidth]{figs/smooth_quant_TODO.jpeg}
+  \end{center}
+
+\end{frame}
+
+% ─── Slide 8c: Diagonals — placement + ablation (with figure) ─────────────────
+\begin{frame}[shrink=10]{Our Extension II: Trainable Diagonals (\texttt{add\_diag})}
+
+  \begin{columns}[T]
+    \begin{column}{0.55\textwidth}
+      \footnotesize
+      \textbf{Where we place them.}
+      \begin{itemize}
+        \item \texttt{diag\_attn}: before \texttt{q/k/v/o} projections\\ {\scriptsize (absorbs attention-head variance)}
+        \item \texttt{diag\_mlp}: before \texttt{gate/up/down} projections\\ {\scriptsize (absorbs FFN outlier channels — SwiGLU)}
+      \end{itemize}
+
+      \vspace{0.3em}
+      \begin{center}
+      \resizebox{\linewidth}{!}{%
+      \begin{tikzpicture}[
+        every node/.style={font=\tiny},
+        pbox/.style={draw=mygray!55, dashed, fill=mygray!10, rounded corners=2pt,
+                     minimum width=0.9cm, minimum height=0.36cm, align=center},
+        Dbox/.style={draw=myorange, line width=1.0pt, fill=myorange!18, rounded corners=2pt,
+                     minimum width=1.85cm, minimum height=0.36cm, align=center},
+        cbox/.style={draw=mybluedark!55, fill=mybluedark!8, rounded corners=2pt,
+                     minimum width=2.6cm, minimum height=0.38cm, align=center},
+        garr/.style={-{Latex[length=1mm]}, mygray!75},
+      ]
+
+        % ─── Attention ────────────────────────────────────────────────
+        \node[font=\tiny\bfseries, text=mybluedark] at (1.15, -0.35) {Self-Attention};
+        \node (ax) at (1.15, 0) {$x$};
+        \node[Dbox, above=0.18cm of ax] (da1) {\texttt{diag\_attn}};
+
+        \node[pbox, above=0.30cm of da1, xshift=-1.05cm] (q)  {\texttt{q}};
+        \node[pbox, above=0.30cm of da1               ]  (k)  {\texttt{k}};
+        \node[pbox, above=0.30cm of da1, xshift=+1.05cm] (v)  {\texttt{v}};
+
+        \node[cbox, above=0.28cm of k] (attn) {Attention$(q,k,v)$};
+
+        \node[Dbox, above=0.25cm of attn, minimum width=1.3cm] (da2) {\texttt{diag\_attn}};
+        \node[pbox, above=0.22cm of da2] (op) {\texttt{o\_proj}};
+        \node[above=0.12cm of op] (ao) {out};
+
+        \draw[garr] (ax)--(da1);
+        \draw[garr] (da1.north)--(q.south);
+        \draw[garr] (da1.north)--(k.south);
+        \draw[garr] (da1.north)--(v.south);
+        \draw[garr] (q.north)--(attn.south);
+        \draw[garr] (k.north)--(attn.south);
+        \draw[garr] (v.north)--(attn.south);
+        \draw[garr] (attn)--(da2);
+        \draw[garr] (da2)--(op);
+        \draw[garr] (op)--(ao);
+
+        % ─── MLP ──────────────────────────────────────────────────────
+        \node[font=\tiny\bfseries, text=mybluedark] at (4.85, -0.35) {MLP (SwiGLU)};
+        \node (mx) at (4.85, 0) {$x$};
+        \node[Dbox, above=0.18cm of mx] (dm1) {\texttt{diag\_mlp}};
+
+        \node[pbox, above=0.30cm of dm1, xshift=-0.75cm] (gate) {\texttt{gate}};
+        \node[pbox, above=0.30cm of dm1, xshift=+0.75cm] (up)   {\texttt{up}};
+
+        \node[cbox, above=0.28cm of gate, xshift=0.75cm,
+              minimum width=2.0cm] (swi) {SwiGLU~$(\times)$};
+
+        \node[Dbox, above=0.25cm of swi, minimum width=1.5cm] (dm2) {\texttt{diag\_mlp}};
+        \node[pbox, above=0.22cm of dm2, minimum width=1.3cm] (dn) {\texttt{down}};
+        \node[above=0.12cm of dn] (mo) {out};
+
+        \draw[garr] (mx)--(dm1);
+        \draw[garr] (dm1.north)--(gate.south);
+        \draw[garr] (dm1.north)--(up.south);
+        \draw[garr] (gate.north)--(swi.south);
+        \draw[garr] (up.north)--(swi.south);
+        \draw[garr] (swi)--(dm2);
+        \draw[garr] (dm2)--(dn);
+        \draw[garr] (dn)--(mo);
+
+        % ─── separator ────────────────────────────────────────────────
+        \draw[dashed, mygray!35, line width=0.4pt] (3.0, -0.5) -- (3.0, 4.4);
+
+      \end{tikzpicture}}
+      \end{center}
+    \end{column}
+
+    % ── right column: ablation table ─────────────────────────────────
+    \begin{column}{0.43\textwidth}
+      \scriptsize
+      \textbf{Ablation (Llama-3.2-1B, w4a4, ADC PPL$\downarrow$):}\\[0.3em]
+      \begin{tabular}{@{}l c c c@{}}
+        \toprule
+        \textbf{FlatQuant +} & \bypass & \adcppl{} & dead-rate \\
+        \midrule
+        — (base)           & 13.17 & 2355 & 80.9\% \\
+        \texttt{diag\_mlp} only    & 12.58 & 1090 & 45.2\% \\
+        \texttt{diag\_attn} only   & 12.89 & 830  & 32.1\% \\
+        both diagonals     & \textbf{12.04} & \textbf{420} & \textbf{10.4\%} \\
+        \bottomrule
+      \end{tabular}
+      {\tiny\color{mygray}(numbers to be re-filled from v3 logs)}
+
+      \vspace{0.6em}
+      \begin{alertblock}{Why it matters for ADC}
+        \scriptsize Diagonals absorb the per-channel dynamic range — so a single $\delta$ can serve every channel. This is the only PTQ knob we have that directly targets the \emph{fixed-step} nature of ADC.
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+\end{frame}

@@ -1,0 +1,26 @@
+% ─── Slide 15: Summary / Takeaways ────────────────────────────────────────────
+\begin{frame}{Summary}
+
+\textbf{First PTQ-based adaptation that makes LLM inference viable
+under optical constraints.}
+
+\vspace{0.9em}
+
+\begin{itemize}
+    \item Achieved \textbf{47.07\% average downstream accuracy with ADC},
+    close to the \textbf{48.64\% digital INT4 reference without ADC}.
+
+    \item \textbf{Cross-block propagation:} Prevented model collapse by passing 
+    ADC errors between blocks to match real inference.
+
+    \item \textbf{$\alpha$-mixed objective:} Stabilized calibration by balancing 
+    a clean teacher signal with hardware-aware robustness.
+
+    \item \textbf{Activation reshaping:} Improved ADC robustness by optimizing 
+    diagonals for the hardware-fixed ADC range.
+
+    \item \textbf{Post-ADC LoRA:} Broke the pure-PTQ performance plateau with 
+    a lightweight digital correction.
+\end{itemize}
+
+\end{frame}

@@ -1,0 +1,30 @@
+% ─── Slide 5: Research Questions ─────────────────────────────────────────────
+\begin{frame}[shrink=10]{Research Questions}
+
+  \begin{columns}[T]
+    \begin{column}{0.56\textwidth}
+      \footnotesize
+      \begin{description}
+        \setlength\itemsep{0.4em}
+        \item[\color{mybluedark}\textbf{Q1}] Can we \textbf{reshape $x,w$} so that ADC-quantised forward matches FP behaviour \emph{without} retraining the model?\\
+          \textit{\scriptsize $\to$ Method I: FlatQuant + trainable diagonals}
+        \item[\color{mybluedark}\textbf{Q2}] How low can \textbf{pure PTQ} drive $\adcppl{}$ on INT8?\\
+          \textit{\scriptsize $\to$ block-wise propagated calibration}
+        \item[\color{mybluedark}\textbf{Q3}] Does the same recipe work on \textbf{INT4 ADC}, where $\delta$ is $330\times$ smaller?\\
+          \textit{\scriptsize $\to$ staged training, $\alpha$-mix loss}
+        \item[\color{mybluedark}\textbf{Q4}] When PTQ \textbf{plateaus}, what is the minimum intervention beyond PTQ?\\
+          \textit{\scriptsize $\to$ Method II: Post-ADC residual LoRA}
+      \end{description}
+    \end{column}
+
+    \begin{column}{0.42\textwidth}
+      \small
+      \begin{alertblock}{Thesis in one line}
+        \emph{The right place to correct ADC error is \textbf{after} the ADC, not before it.}
+      \end{alertblock}
+
+      \vspace{0.8em}
+      \footnotesize\textbf{Setup:} Llama-3.2-1B, WikiText-2 for calibration, WikiText-2 + C4 for evaluation, ADC spec\\ $b_a{=}8$, $k{=}16$, $M{=}256$.
+    \end{column}
+  \end{columns}
+\end{frame}

@@ -1,0 +1,68 @@
+% ─── Slide 14: Final Results ─────────────────────────────────────────────────
+\begin{frame}[shrink=20]{Final Results: INT4+LoRA Beats INT8 PTQ}
+
+  \vspace{-0.3em}
+  \footnotesize
+  \begin{center}
+  \renewcommand{\arraystretch}{1.25}
+  \begin{tabular}{@{}l c c c c@{}}
+    \toprule
+    \textbf{Configuration} & \textbf{bits} & \textbf{WikiText-2 \adcppl{}} & \textbf{C4 \adcppl{}} & \textbf{extra params} \\
+    \midrule
+    FP baseline                                    & 16/16 & 10.53 & 12.10 & — \\
+    \midrule
+    \rowcolor{mybluedark!5}
+    INT8 — FlatQuant per-proj                      & 8/8   & 28.86 & 33.41 & 0 \\
+    \rowcolor{mybluedark!5}
+    INT8 — block+$\alpha$-mix \textbf{(our PTQ)}   & 8/8   & 14.41 & 16.52 & 0 \\
+    \midrule
+    \rowcolor{myorange!7}
+    INT4 — FlatQuant per-proj                      & 4/4   & 2355 & 3180 & 0 \\
+    \rowcolor{myorange!7}
+    INT4 — staged+$\alpha$-mix+diag \textbf{(our PTQ)} & 4/4 & 27.60 & 31.18 & 0 \\
+    \rowcolor{mygreen!12}
+    INT4 + Post-ADC LoRA \textbf{(ours, final)}   & 4/4   & \best{13.96} & \best{15.80} & 0.15\% \\
+    \bottomrule
+  \end{tabular}
+  \end{center}
+
+  \vspace{0.5em}
+  \pause
+  \begin{columns}[T]
+    \begin{column}{0.55\textwidth}
+      \begin{center}
+      \resizebox{0.96\linewidth}{!}{%
+      \begin{tikzpicture}
+        \begin{axis}[
+          ybar=3pt, bar width=12pt, width=9cm, height=4.4cm,
+          ymin=10, ymax=35, ylabel={\scriptsize $\adcppl{}$},
+          symbolic x coords={FP, {INT8 base}, {INT8 ours}, {INT4 ours}, {+ LoRA}},
+          xtick=data, enlarge x limits=0.15,
+          x tick label style={font=\scriptsize, rotate=20, anchor=east},
+          y tick label style={font=\tiny},
+          ylabel style={font=\scriptsize},
+          legend style={font=\scriptsize, at={(0.02,0.98)}, anchor=north west, draw=none},
+          nodes near coords, nodes near coords style={font=\tiny},
+        ]
+          \addplot[fill=mygray!40] coordinates {(FP, 10.53) ({INT8 base}, 28.86) ({INT8 ours}, 14.41) ({INT4 ours}, 27.60) ({+ LoRA}, 13.96)};
+          \addplot[fill=myorange!70] coordinates {(FP, 12.10) ({INT8 base}, 33.41) ({INT8 ours}, 16.52) ({INT4 ours}, 31.18) ({+ LoRA}, 15.80)};
+          \legend{WikiText-2, C4}
+          \draw[very thick, mygreen!80!black, dashed] (axis cs:FP, 10.53) -- (axis cs:+ LoRA, 10.53);
+        \end{axis}
+      \end{tikzpicture}}
+      \end{center}
+    \end{column}
+    \begin{column}{0.43\textwidth}
+      \small
+      \begin{alertblock}{Headlines}
+        \scriptsize
+        \begin{itemize}
+          \item \textbf{INT4 + LoRA (13.96) \emph{beats} best INT8 PTQ (14.41)} using half the bits.
+          \item Gap to FP shrinks from $17.1$ PPL (INT4 PTQ) to $3.4$ PPL.
+          \item Generalises: C4 pattern mirrors WikiText-2 despite calibration only on WikiText-2.
+          \item Only 0.15\% extra parameters; $<$2\% inference overhead.
+        \end{itemize}
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+\end{frame}

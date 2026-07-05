@@ -1,0 +1,61 @@
+% ─── Slide 6: QAT vs PTQ diagram ──────────────────────────────────────────────
+\begin{frame}{QAT vs PTQ}
+
+  \begin{center}
+  \begin{tikzpicture}[
+      every node/.style={font=\small},
+      box/.style={draw, rounded corners=3pt, fill=mygray!25,
+                  minimum width=2.6cm, minimum height=0.68cm,
+                  align=center, inner sep=4pt},
+      wbox/.style={draw, rounded corners=3pt, fill=mygray!25,
+                   minimum width=5.2cm, minimum height=0.68cm,
+                   align=center, inner sep=4pt},
+      arr/.style={-{Latex[length=2mm]}, thick}
+    ]
+
+    % ── Pre-trained Model ────────────────────────────────────────────
+    \node[box, minimum width=3.4cm] (PTM) at (0, 0) {Pre-trained Model};
+    \node[font=\small\bfseries, text=mybluedark] at (-6.5, 0) {QAT};
+    \node[font=\small\bfseries, text=myorange]   at ( 6.5, 0) {PTQ};
+
+    % ── Row 2: four boxes, well spaced ───────────────────────────────
+    \node[box] (QM)  at (-4.2, -1.9) {Quantize\\Model};
+    \node[box] (TD)  at (-1.6, -1.9) {Training\\Data};
+    \node[box, minimum width=2.0cm] (CD)  at ( 1.6, -1.9) {Calibration\\Data};
+    \node[box, minimum width=2.0cm] (CAL) at ( 4.2, -1.9) {Calibration};
+
+    % ── Row 3 ─────────────────────────────────────────────────────────
+    \node[wbox] (RQM) at (-2.9, -3.7) {Retrain Quantized Model};
+    \node[box]  (QM2) at ( 4.2, -3.7) {Quantize Model};
+
+    % ── Row 4 ─────────────────────────────────────────────────────────
+    \node[wbox] (QATM) at (-2.9, -5.3) {QAT Quantized Model};
+    \node[box]  (PTQM) at ( 4.2, -5.3) {PTQ Quantized Model};
+
+    % ── Arrows from PTM ──────────────────────────────────────────────
+    \draw[arr] (PTM.south) -- ++(0,-0.5) -| (QM.north);
+    \draw[arr] (PTM.south) -- ++(0,-0.5) -| (CAL.north);
+
+    % ── QAT: T-junction QM + TD → RQM ────────────────────────────────
+    \coordinate (jL) at ($(QM.south)+(0,-0.45)$);
+    \coordinate (jR) at ($(TD.south)+(0,-0.45)$);
+    \draw (QM.south) -- (jL);
+    \draw (TD.south) -- (jR);
+    \draw (jL) -- (jR);
+    \draw[arr] ($(jL)!0.5!(jR)$) -- (RQM.north);
+
+    % ── PTQ: CD → CAL → QM2 ──────────────────────────────────────────
+    \draw[arr] (CD.east) -- (CAL.west);
+    \draw[arr] (CAL.south) -- (QM2.north);
+
+    % ── Outputs ──────────────────────────────────────────────────────
+    \draw[arr] (RQM.south) -- (QATM.north);
+    \draw[arr] (QM2.south) -- (PTQM.north);
+
+    % ── Dashed separator ─────────────────────────────────────────────
+    \draw[dashed, mygray!50, line width=0.5pt] (0, 0.5) -- (0, -5.9);
+
+  \end{tikzpicture}
+  \end{center}
+
+\end{frame}

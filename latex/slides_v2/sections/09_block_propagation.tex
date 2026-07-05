@@ -1,0 +1,181 @@
+% ─── Slide 9b: Propagation — Block 1 with Block 0 done ───────────────────────
+% (FlatQuant Baseline block-wise calibration moved to A_backup.tex)
+\begin{frame}{Our Extension I: Cross-block Propagation}
+
+  \begin{columns}[T]
+    \begin{column}{0.32\textwidth}
+      \vspace{1.5em}
+      \footnotesize
+      \[
+        y \;=\; x W^\top
+          \;=\;
+          \underbrace{(x T^{-1})}_{\tilde x}\,
+          \underbrace{(T W^\top)}_{\tilde W^\top}.
+      \]
+      \vspace{0.4em}
+
+      \textbf{Previously:}\\
+      Each transformer block is calibrated independently
+      $\Rightarrow$ \alert{mismatch}.
+
+      \vspace{0.6em}
+
+      \textbf{Now:} error accumulates the same way
+      during train and inference.
+    \end{column}
+
+    \begin{column}{0.66\textwidth}
+      \begin{center}
+      \resizebox{!}{0.78\textheight}{%
+      \begin{tikzpicture}[
+        every node/.style={font=\scriptsize},
+        fbox/.style={draw=mygray!55, dashed, fill=mygray!12, rounded corners=3pt,
+                     minimum width=2.4cm, minimum height=0.75cm, align=center},
+        tbox/.style={draw=myorange, line width=1.0pt, fill=myorange!22, rounded corners=3pt,
+                     minimum width=2.4cm, minimum height=0.75cm, align=center},
+        dbox/.style={draw=mygreen!65, fill=mygreen!18, rounded corners=3pt,
+                     minimum width=2.4cm, minimum height=0.75cm, align=center},
+        adcbox/.style={draw=myorange, line width=1.0pt, rounded corners=2pt,
+                       fill=myorange!30, minimum width=1.0cm, minimum height=0.5cm, align=center},
+        garr/.style={-{Latex[length=1.3mm]}, thick, mygray!75},
+        msearr/.style={{Latex[length=1.4mm]}-{Latex[length=1.4mm]}, thick, myred!80}
+      ]
+
+        % ═══════════════════════════════════════════════════════════════
+        % TOP: PREVIOUSLY — both blocks see the same teacher (FP) input
+        % ═══════════════════════════════════════════════════════════════
+        \node[font=\small\bfseries, text=mybluedark]
+          at (3, 7.4) {Previously};
+
+        \node[fbox] (prev_in) at (3, 6.5)
+          {Teacher block $\ell{-}1$\\[-1pt]{\tiny FP, frozen}};
+        \node[fbox] (prev_T) at (1.4, 5.2) {Teacher block $\ell$\\[-1pt]{\tiny FP, frozen}};
+        \node[tbox] (prev_S) at (4.6, 5.2) {Student block $\ell$\\[-1pt]{\tiny trainable}};
+
+        \draw[garr] (prev_in.south) to[bend right=10] (prev_T.north);
+        \draw[garr] (prev_in.south) to[bend left=10]  (prev_S.north);
+
+        % Output nodes below each block
+        \node (prev_yT) at (1.4, 4.1) {$y_T$};
+        \node (prev_yS) at (4.6, 4.1) {$y_S$};
+        \draw[garr] (prev_T.south) -- (prev_yT.north);
+        \draw[garr] (prev_S.south) -- (prev_yS.north);
+
+        \draw[msearr] (prev_yT.east) -- node[midway, fill=white,
+              font=\scriptsize, inner sep=1pt] {$\mathcal L$} (prev_yS.west);
+
+        % ── Divider ───────────────────────────────────────────────────
+        \draw[mygray!40, dashed, line width=0.5pt] (-0.7, 3.5) -- (6.7, 3.5);
+
+        % ═══════════════════════════════════════════════════════════════
+        % BOTTOM: NOW — student receives output of student block ell-1 directly
+        % ═══════════════════════════════════════════════════════════════
+        \node[font=\small\bfseries, text=mybluedark]
+          at (3, 3.1) {Now};
+
+        % Teacher path
+        \node[fbox] (now_inT) at (1.4, 2.2)
+          {Teacher block $\ell{-}1$\\[-1pt]{\tiny FP, frozen}};
+        \node[fbox] (now_T) at (1.4, 0.9) {Teacher block $\ell$\\[-1pt]{\tiny FP, frozen}};
+        \draw[garr] (now_inT.south) -- (now_T.north);
+
+        % Student path: student block ell-1 (done) → student block ell directly
+        \node[dbox] (now_S0) at (4.6, 2.2)
+          {Student block $\ell{-}1$\\[-1pt]{\tiny done\,$\checkmark$}};
+        \node[tbox] (now_S) at (4.6, 0.9) {Student block $\ell$\\[-1pt]{\tiny trainable}};
+        \draw[garr] (now_S0.south) -- (now_S.north);
+
+        % Output nodes below each block
+        \node (now_yT) at (1.4, -0.2) {$y_T$};
+        \node (now_yS) at (4.6, -0.2) {$y_S$};
+        \draw[garr] (now_T.south) -- (now_yT.north);
+        \draw[garr] (now_S.south) -- (now_yS.north);
+
+        % MSE between output nodes
+        \draw[msearr] (now_yT.east) -- node[midway, fill=white,
+              font=\scriptsize, inner sep=1pt] {$\mathcal L$} (now_yS.west);
+
+      \end{tikzpicture}}
+      \end{center}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ─── Slide 9c: α-mixed objective (diagram + formula) ─────────────────────────
+\begin{frame}{Our Extension II: $\alpha$-Mixed Objective}
+
+  \vspace{-0.4em}
+  \begin{center}
+  \resizebox{!}{0.72\textheight}{%
+  \begin{tikzpicture}[
+    every node/.style={font=\scriptsize},
+    dq/.style={draw=mybluedark, rounded corners=2pt, fill=myblue!20,
+               minimum width=1.2cm, minimum height=0.50cm, align=center},
+    tile/.style={draw=mybluedark, rounded corners=2pt, fill=mybluedark!12,
+                 text=mybluedark, minimum width=1.6cm, minimum height=0.65cm, align=center},
+    adc/.style={draw=myorange, line width=1.2pt, rounded corners=2pt,
+                fill=myorange!25, minimum width=1.0cm, minimum height=0.50cm, align=center},
+    tbox/.style={draw=mygray!55, rounded corners=4pt, fill=mygray!10,
+                 minimum width=2.6cm, minimum height=0.65cm, align=center},
+    arr/.style={-{Latex[length=1.3mm]}, thick}
+  ]
+    \node (w)  at (0,   0.8) {$w$};
+    \node[dq]  (qw) at (1.5,  0.8) {Digital\\quantiser};
+    \node (wb) at (3.0,  0.8) {$\hat w$};
+    \node (x)  at (0,  -0.8) {$x$};
+    \node[dq]  (qx) at (1.5, -0.8) {Digital\\quantiser};
+    \node (xb) at (3.0, -0.8) {$\hat x$};
+
+    \draw[arr] (w)--(qw);  \draw[arr] (qw)--(wb);
+    \draw[arr] (x)--(qx);  \draw[arr] (qx)--(xb);
+
+    \node[tile] (T) at (4.6, 0) {Optical MVM\\$y{=}\langle\hat w,\hat x\rangle$};
+    \draw[arr] (wb) -- (T.north west);
+    \draw[arr] (xb) -- (T.south west);
+
+    \node (y)  at (6.0, 0) {$y$};
+    \draw[arr] (T)--(y);
+
+    \node[adc] (A) at (7.1, 0) {ADC\\$\lfloor y/\delta\rfloor$};
+    \draw[arr] (y)--(A);
+
+    \node (yh) at (8.2, 0) {$\hat y$};
+    \draw[arr] (A)--(yh);
+
+    \coordinate (sbox_pad) at ([xshift=0.9cm]yh);
+    \begin{pgfonlayer}{background}
+      \node[inner sep=9pt, draw=mygray!50, fill=mygray!7, rounded corners=8pt,
+            fit=(w)(qw)(wb)(x)(qx)(xb)(T)(y)(A)(yh)(sbox_pad)] (sbox) {};
+    \end{pgfonlayer}
+    \node[font=\scriptsize\bfseries, text=mygray!80,
+          anchor=south west, xshift=4pt, yshift=2pt] at (sbox.north west) {Student};
+
+    \node[tbox] (teach) at (7.1, -2.5)
+      {$y^\star = \langle w,\, x\rangle$};
+    \node[font=\scriptsize\bfseries, text=mygray!80,
+          anchor=south west, xshift=4pt, yshift=2pt] at (teach.north west) {Teacher};
+
+    % ── FP loss: vertical first, then horizontal — label on vertical mid ──
+    \draw[{Latex[length=1.3mm]}-{Latex[length=1.3mm]}, thick, myblue!80]
+      (teach.north west) |- (y.south);
+    \node[font=\scriptsize, text=myblue, fill=white, inner sep=2pt]
+      at ($(teach.north west)!0.5!(teach.north west |- y.south)$)
+      {$\mathcal{L}_{\rm FP}$};
+
+    % ── ADC loss ─────────────────────────────────────────────────────────
+    \draw[{Latex[length=1.3mm]}-{Latex[length=1.3mm]}, thick, myorange!90]
+      (teach.north east) |- (yh.south);
+    \node[font=\scriptsize, text=myorange, fill=white, inner sep=2pt]
+      at ($(teach.north east)!0.5!(teach.north east |- yh.south)$)
+      {$\mathcal{L}_{\rm ADC}$};
+  \end{tikzpicture}}
+  \end{center}
+
+  \vspace{0.6em}
+  \[
+    \mathcal L(\alpha) \;=\; (1{-}\alpha)\,\mathcal L_{\mathrm{FP}} \;+\; \alpha\,\mathcal L_{\mathrm{ADC}}
+  \]
+
+\end{frame}
+
+% α-sweep plot moved to backup (A_backup.tex)

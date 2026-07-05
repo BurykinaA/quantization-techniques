@@ -1,0 +1,55 @@
+% ─── Slide 7: FlatQuant base ─────────────────────────────────────────────────
+\begin{frame}[shrink=10]{FlatQuant: Rotate, Flatten, Calibrate per Layer}
+
+  \begin{columns}[T]
+    \begin{column}{0.46\textwidth}
+      \footnotesize
+      \textbf{1. Linear invariance.}\\
+      For any invertible $T$:
+      \[
+        y \;=\; xW^\top \;=\; \underbrace{(xT^{-1})}_{\tilde x}\underbrace{(TW^\top)}_{\tilde W^\top}.
+      \]
+      Choose $T$ so $\tilde x$ is \emph{flat} $\Rightarrow$ integer quantisation \& ADC coverage improve.
+
+      \vspace{0.5em}
+      \pause
+      \textbf{2. Kronecker factorisation.}\\[0.2em]
+      Parameterise $T \in \mathbb{R}^{d\times d}$ as
+      \[
+        T \;=\; T_1 \otimes T_2,\quad T_1{\in}\mathbb{R}^{\sqrt d \times \sqrt d},\; T_2{\in}\mathbb{R}^{\sqrt d \times \sqrt d}
+      \]
+      \vspace{-0.4em}\\
+      \scriptsize \# params $\mathcal{O}(d)$ instead of $\mathcal{O}(d^2)$.
+    \end{column}
+
+    \begin{column}{0.5\textwidth}
+      \footnotesize
+      \onslide<3->{%
+      \textbf{3. Teacher-student per-layer calibration.}\\[0.3em]
+      For each linear layer $L$:
+      \begin{itemize}
+        \item \textbf{Teacher} (FP): $y^\star = L_{\mathrm{FP}}(x^\star)$
+        \item \textbf{Student} (quantised + $T$): $\hat y = \hat L_{T}(\hat x)$
+        \item Minimise $\|\hat y - y^\star\|^2$ over $T$'s only.
+      \end{itemize}
+
+      \vspace{0.4em}
+      \begin{center}
+      \begin{tikzpicture}[every node/.style={font=\tiny}, node distance=0.25cm,
+                         box/.style={draw, rounded corners=2pt, minimum width=1.6cm, minimum height=0.45cm, align=center}]
+        \node[box, fill=mygray!15] (t) {\textbf{Teacher} layer\\ FP, frozen};
+        \node[box, fill=myorange!25, below=0.35cm of t] (s) {\textbf{Student} layer\\ quantised, $T$ trainable};
+        \node[right=0.4cm of t, font=\scriptsize] (y1) {$y^\star$};
+        \node[right=0.4cm of s, font=\scriptsize] (y2) {$\hat y$};
+        \draw[-{Latex}] (t.east) -- (y1);
+        \draw[-{Latex}] (s.east) -- (y2);
+        \node[right=0.4cm of y1] (loss) {};
+        \draw[decorate, decoration={brace, amplitude=3pt}] (y1.east) -- (y2.east) node[midway, right=3pt, font=\scriptsize] {$\|\cdot\|^2$};
+      \end{tikzpicture}
+      \end{center}
+      }% end onslide<3->
+
+
+    \end{column}
+  \end{columns}
+\end{frame}

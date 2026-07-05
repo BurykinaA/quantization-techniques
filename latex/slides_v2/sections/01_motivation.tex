@@ -1,0 +1,67 @@
+% ─── Slide: Motivation ────────────────────────────────────────────────────────
+\begin{frame}[shrink=20]{Why Analog Inference? Why This Is Hard.}
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \textbf{The opportunity: analog MVM}
+      \begin{itemize}
+        \item LLM inference is memory- and compute-bound
+        \item Analog \emph{multiply-accumulate} is $10\text{--}100\times$ more energy-efficient vs. digital
+        \item Real benefit only if output precision is sufficient
+      \end{itemize}
+      \vspace{0.15em}
+      \textbf{The bottleneck: ADC}
+      \begin{itemize}
+        \item After each tile MVM, an ADC digitises the analog accumulator
+        \item ADC resolution is \emph{coarse}: $\delta \approx 2016$ (INT8 tile)
+        \item Poor activation distributions $\Rightarrow$ most outputs fall in the \alert{dead zone} ($|y_\mathrm{int}| < \delta$)
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \begin{tikzpicture}[
+          every node/.style={font=\scriptsize},
+          box/.style={draw, rounded corners=3pt, minimum width=1.55cm,
+                      minimum height=0.55cm, align=center, fill=white},
+          arr/.style={-{Latex[length=2mm]}, thick},
+          lbl/.style={font=\tiny, text=gray}
+        ]
+
+        % ── Digital path ─────────────────────────────────────────────
+        \node[font=\small\bfseries, text=mybluedark] at (0, 0) {Digital};
+
+        \node[box, fill=myblue!15]   (dx) at (0,-0.7)  {$x$ (FP16)};
+        \node[box, fill=myblue!15]   (dm) at (0,-1.55) {MatMul\\(FP16)};
+        \node[box, fill=mygreen!20]  (dy) at (0,-2.4)  {$y$ (FP16)};
+
+        \draw[arr] (dx) -- (dm);
+        \draw[arr] (dm) -- (dy);
+        \node[lbl, right=1pt of dm] {exact};
+
+        % ── Analog path ──────────────────────────────────────────────
+        \node[font=\small\bfseries, text=mybluedark] at (3.2, 0) {Analog};
+
+        \node[box, fill=myblue!15]   (aq) at (3.2,-0.7)  {Quantize\\$\hat{x}$ (INT4)};
+        \node[box, fill=myblue!25]   (am) at (3.2,-1.55) {Crossbar\\(analog)};
+        \node[box, fill=myorange!60] (aa) at (3.2,-2.4)  {\textbf{ADC}\\$\lfloor y/\delta\rfloor$};
+        \node[box, fill=mygreen!20]  (ay) at (3.2,-3.25) {$y$ (FP16)};
+
+        \draw[arr] (aq) -- (am);
+        \draw[arr] (am) -- (aa);
+        \draw[arr] (aa) -- (ay);
+
+        % dead-zone annotation
+        \node[draw=myorange, rounded corners=2pt, fill=myorange!15,
+              font=\tiny, align=center,
+              right=0.25cm of aa] (dz)
+          {dead zone\\$|y_\mathrm{int}|<\delta$\\$\Rightarrow z=0$};
+        \draw[->, myorange, thick] (dz.west) -- (aa.east);
+
+        % energy label
+        \node[font=\tiny\itshape, text=mygreen, below=2pt of ay]
+          {$10\text{--}100\times$ more efficient};
+
+        % separator
+        \draw[dashed, gray!50] (1.65, 0.2) -- (1.65,-3.6);
+      \end{tikzpicture}
+    \end{column}
+  \end{columns}
+\end{frame}

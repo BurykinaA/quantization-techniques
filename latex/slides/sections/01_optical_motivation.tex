@@ -1,0 +1,64 @@
+% ─── Slide: Optical GPU for LLM inference (motivation) ────────────────────────
+\begin{frame}[shrink=10]{Optical GPU for LLM Inference}
+
+  {\footnotesize\color{mygray}%
+    Photonic tensor core for Transformer linear layers}
+
+  \vspace{0.5em}
+  {\bfseries\normalsize LLM inference is mostly dense linear algebra}
+
+  \vspace{0.15em}
+  {\small\color{mybluedark}%
+    QKV projections\ $\cdot$\ FFN\ $\cdot$\ Output projection}
+
+  \vspace{0.55em}
+  \begin{center}
+  \begin{tikzpicture}[
+      every node/.style={font=\small},
+      box/.style={draw, rounded corners=3pt, align=center,
+                  minimum height=0.65cm},
+      arr/.style={-{Latex[length=2.5mm]}, thick, mybluedark}
+    ]
+    \node[box, fill=myblue!15, minimum width=2.6cm] (inp) at (-4.6, 0)
+      {Hidden state};
+    \node[box, fill=myorange!30, draw=myorange!70,
+          minimum width=4.4cm, minimum height=1.1cm] (opt) at (0, 0)
+      {\textbf{Optical MVM engine}\\[-2pt]
+       {\tiny vector + weights encoded in light}};
+    \node[box, fill=mygreen!20, minimum width=2.6cm] (out) at (4.6, 0)
+      {Next hidden state};
+    \draw[arr] (inp) -- (opt);
+    \draw[arr] (opt) -- (out);
+  \end{tikzpicture}
+  \end{center}
+
+  \vspace{0.45em}
+  \begin{columns}[c]
+    \begin{column}{0.33\textwidth}
+      \centering
+      {\large\bfseries\color{myorange} ${\sim}10^3\times$}\\[0.15em]
+      {\tiny\color{mygray} energy-efficiency gain}
+    \end{column}
+    \begin{column}{0.33\textwidth}
+      \centering
+      {\large\bfseries\color{myorange} ${\leq}10^{17}$ ops/s}\\[0.15em]
+      {\tiny\color{mygray} projected inference throughput}
+    \end{column}
+    \begin{column}{0.33\textwidth}
+      \centering
+      {\large\bfseries\color{myorange} ${\leq}100$ GHz}\\[0.15em]
+      {\tiny\color{mygray} optical input switching}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.45em}
+  {\footnotesize\color{mygray}%
+    Not a GPU replacement — a specialized photonic accelerator
+    for Transformer linear layers.%
+    \footnote{\tiny Bandyopadhyay et al.,
+    \textit{Single chip photonic deep neural network with accelerated
+    training}, arXiv:2308.05226}}
+
+  \note{Я не утверждаю, что вся LLM будет оптической. Идея в том, что самая дорогая часть inference — линейная алгебра — может быть вынесена в оптический accelerator.}
+
+\end{frame}
