@@ -1,0 +1,168 @@
+\begin{thebibliography}{26}
+\providecommand{\natexlab}[1]{#1}
+
+\bibitem[{Anonymous(2025)}]{qep2025}
+Anonymous. 2025.
+\newblock Quantization Error Propagation: Revisiting Layer-Wise Post-Training
+  Quantization.
+\newblock arXiv preprint.
+
+\bibitem[{Ashkboos et~al.(2024)}]{ashkboos2024quarot}
+Ashkboos, S.; et~al. 2024.
+\newblock QuaRot: Outlier-Free 4-Bit Inference in Rotated LLMs.
+\newblock arXiv:2404.00456.
+
+\bibitem[{Buechel et~al.(2025)}]{buchel2025analog}
+Buechel, J.; et~al. 2025.
+\newblock Analog Foundation Models.
+\newblock arXiv:2505.09663.
+
+\bibitem[{Chen et~al.(2024)Chen, Shao, Xu, Wang, Gao, Zhang, Qiao, and
+  Luo}]{chen2024efficientqat}
+Chen, M.; Shao, W.; Xu, P.; Wang, J.; Gao, P.; Zhang, K.; Qiao, Y.; and Luo, P.
+  2024.
+\newblock EfficientQAT: Efficient Quantization-Aware Training for Large
+  Language Models.
+\newblock arXiv:2407.11062.
+
+\bibitem[{Ding et~al.(2023)Ding, Liu, Tu, Zhang, Li, Hu, Chen, Tang, Xiong,
+  Yin, and Wang}]{ding2023cbq}
+Ding, X.; Liu, X.; Tu, Z.; Zhang, Y.; Li, W.; Hu, J.; Chen, H.; Tang, Y.;
+  Xiong, Z.; Yin, B.; and Wang, Y. 2023.
+\newblock CBQ: Cross-Block Quantization for Large Language Models.
+\newblock arXiv:2312.07950.
+
+\bibitem[{Dubey et~al.(2024)}]{dubey2024llama}
+Dubey, A.; et~al. 2024.
+\newblock The Llama 3 Herd of Models.
+\newblock arXiv:2407.21783.
+
+\bibitem[{Esser et~al.(2019)Esser, McKinstry, Bablani, Appuswamy, and
+  Modha}]{esser2019learned}
+Esser, S.~K.; McKinstry, J.~L.; Bablani, D.; Appuswamy, R.; and Modha, D.~S.
+  2019.
+\newblock Learned Step Size Quantization.
+\newblock arXiv:1902.08153.
+
+\bibitem[{Frantar et~al.(2022)Frantar, Ashkboos, Hoefler, and
+  Alistarh}]{frantar2022gptq}
+Frantar, E.; Ashkboos, S.; Hoefler, T.; and Alistarh, D. 2022.
+\newblock GPTQ: Accurate Post-Training Quantization for Generative Pre-trained
+  Transformers.
+\newblock arXiv:2210.17323.
+
+\bibitem[{Gao et~al.(2024)}]{gao2024lmeval}
+Gao, L.; et~al. 2024.
+\newblock A Framework for Few-Shot Language Model Evaluation.
+\newblock \url{https://github.com/EleutherAI/lm-evaluation-harness}.
+
+\bibitem[{Gholami et~al.(2021)Gholami, Kim, Dong, Yao, Mahoney, and
+  Keutzer}]{gholami2021survey}
+Gholami, A.; Kim, S.; Dong, Z.; Yao, Z.; Mahoney, M.~W.; and Keutzer, K. 2021.
+\newblock A Survey of Quantization Methods for Efficient Neural Network
+  Inference.
+\newblock arXiv:2103.13630.
+
+\bibitem[{Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
+  Chen}]{hu2022lora}
+Hu, E.~J.; Shen, Y.; Wallis, P.; Allen-Zhu, Z.; Li, Y.; Wang, S.; Wang, L.; and
+  Chen, W. 2022.
+\newblock LoRA: Low-Rank Adaptation of Large Language Models.
+\newblock In \emph{International Conference on Learning Representations}.
+
+\bibitem[{Jacob et~al.(2018)Jacob, Kligys, Chen, Zhu, Tang, Howard, Adam, and
+  Kalenichenko}]{jacob2018quantization}
+Jacob, B.; Kligys, S.; Chen, B.; Zhu, M.; Tang, M.; Howard, A.; Adam, H.; and
+  Kalenichenko, D. 2018.
+\newblock Quantization and Training of Neural Networks for Efficient
+  Integer-Arithmetic-Only Inference.
+\newblock arXiv:1712.05877.
+
+\bibitem[{Le~Gallo et~al.(2023)}]{legallo2023mixed}
+Le~Gallo, M.; et~al. 2023.
+\newblock A 64-Core Mixed-Signal In-Memory Compute Chip Based on Phase-Change
+  Memory for Deep Neural Network Inference.
+\newblock \emph{Nature Electronics}, 6: 680--693.
+
+\bibitem[{Lin et~al.(2023)Lin, Tang, Tang, Yang, Chen, and Han}]{lin2023awq}
+Lin, J.; Tang, J.; Tang, H.; Yang, S.; Chen, X.; and Han, S. 2023.
+\newblock AWQ: Activation-aware Weight Quantization for LLM Compression and
+  Acceleration.
+\newblock arXiv:2306.00978.
+
+\bibitem[{Liu et~al.(2024{\natexlab{a}})}]{liu2024flatquant}
+Liu, R.; et~al. 2024{\natexlab{a}}.
+\newblock FlatQuant: Flatness Matters for LLM Quantization.
+\newblock arXiv:2410.09426.
+
+\bibitem[{Liu et~al.(2023)Liu, Oguz, Zhao, Chang, Stock, Mehdad, Shi,
+  Krishnamoorthi, and Chandra}]{liu2023llmqat}
+Liu, Z.; Oguz, B.; Zhao, C.; Chang, E.; Stock, P.; Mehdad, Y.; Shi, Y.;
+  Krishnamoorthi, R.; and Chandra, V. 2023.
+\newblock LLM-QAT: Data-Free Quantization Aware Training for Large Language
+  Models.
+\newblock arXiv:2305.17888.
+
+\bibitem[{Liu et~al.(2024{\natexlab{b}})}]{liu2024spinquant}
+Liu, Z.; et~al. 2024{\natexlab{b}}.
+\newblock SpinQuant: LLM Quantization with Learned Rotations.
+\newblock arXiv:2405.16406.
+
+\bibitem[{Merity et~al.(2017)Merity, Xiong, Bradbury, and
+  Socher}]{merity2017pointer}
+Merity, S.; Xiong, C.; Bradbury, J.; and Socher, R. 2017.
+\newblock Pointer Sentinel Mixture Models.
+\newblock In \emph{International Conference on Learning Representations}.
+
+\bibitem[{Raffel et~al.(2020)Raffel, Shazeer, Roberts, Lee, Narang, Matena,
+  Zhou, Li, and Liu}]{raffel2020exploring}
+Raffel, C.; Shazeer, N.; Roberts, A.; Lee, K.; Narang, S.; Matena, M.; Zhou,
+  Y.; Li, W.; and Liu, P.~J. 2020.
+\newblock Exploring the Limits of Transfer Learning with a Unified Text-to-Text
+  Transformer.
+\newblock \emph{Journal of Machine Learning Research}, 21(140): 1--67.
+
+\bibitem[{Shao et~al.(2023)Shao, Chen, Zhang, Xu, Zhao, Li, Zhang, Gao, Qiao,
+  and Luo}]{shao2023omniquant}
+Shao, W.; Chen, M.; Zhang, Z.; Xu, P.; Zhao, L.; Li, Z.; Zhang, K.; Gao, P.;
+  Qiao, Y.; and Luo, P. 2023.
+\newblock OmniQuant: Omnidirectionally Calibrated Quantization for Large
+  Language Models.
+\newblock arXiv:2308.13137.
+
+\bibitem[{Spall, Guo, and Lvovsky(2022)}]{spall2022hybrid}
+Spall, J.; Guo, X.; and Lvovsky, A.~I. 2022.
+\newblock Hybrid Training of Optical Neural Networks.
+\newblock \emph{Optica}, 9(7): 803--811.
+
+\bibitem[{Tang et~al.(2024)}]{tang2024raoq}
+Tang, M.; et~al. 2024.
+\newblock RAOQ: Reshape and Adapt for Output Quantization.
+\newblock In \emph{International Conference on Machine Learning}.
+
+\bibitem[{Wei et~al.(2023)Wei, Zhang, Li, Zhang, Gong, Guo, and
+  Liu}]{wei2023outlier}
+Wei, X.; Zhang, Y.; Li, Y.; Zhang, X.; Gong, R.; Guo, J.; and Liu, X. 2023.
+\newblock Outlier Suppression+: Accurate Quantization of Large Language Models
+  by Equivalent and Effective Shifting and Scaling.
+\newblock arXiv:2304.09145.
+
+\bibitem[{Xiao et~al.(2022)Xiao, Lin, Seznec, Wu, Demouth, and
+  Han}]{xiao2022smoothquant}
+Xiao, G.; Lin, J.; Seznec, M.; Wu, H.; Demouth, J.; and Han, S. 2022.
+\newblock SmoothQuant: Accurate and Efficient Post-Training Quantization for
+  Large Language Models.
+\newblock arXiv:2211.10438.
+
+\bibitem[{Xiao et~al.(2021)}]{xiao2021accuracy}
+Xiao, P.; et~al. 2021.
+\newblock On the Accuracy of Analog Neural Network Inference Accelerators.
+\newblock arXiv:2109.01262.
+
+\bibitem[{Zhang et~al.(2024)Zhang, Cheng, Constantinides, and
+  Zhao}]{zhang2024lqer}
+Zhang, C.; Cheng, J.; Constantinides, G.~A.; and Zhao, Y. 2024.
+\newblock LQER: Low-Rank Quantization Error Reconstruction for LLMs.
+\newblock arXiv:2402.02446.
+
+\end{thebibliography}
