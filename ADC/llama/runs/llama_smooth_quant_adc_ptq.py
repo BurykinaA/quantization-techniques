@@ -273,6 +273,38 @@ def load_and_tokenize_for_sliding_window(
     return encodings
 
 
+def limit_sliding_window_encodings(
+    encodings: dict,
+    max_length: int,
+    stride: int | None,
+    max_windows: int | None,
+) -> dict:
+    """Limit an evaluation corpus without changing perplexity accounting."""
+    if max_windows is None:
+        return encodings
+    if max_windows < 1:
+        raise ValueError("max_eval_windows must be at least 1")
+
+    effective_stride = stride if stride is not None else max_length // 2
+    max_tokens = max_length + (max_windows - 1) * effective_stride
+    current_tokens = encodings["input_ids"].size(1)
+    if current_tokens <= max_tokens:
+        return encodings
+
+    logger.info(
+        "Smoke/eval limit: truncating corpus from %s to %s tokens (%s windows)",
+        f"{current_tokens:,}",
+        f"{max_tokens:,}",
+        max_windows,
+    )
+    return {
+        key: value[:, :max_tokens]
+        if isinstance(value, torch.Tensor) and value.dim() >= 2
+        else value
+        for key, value in encodings.items()
+    }
+
+
 def compute_perplexity_sliding_window(
     model,
     encodings,
@@ -2169,6 +2201,8 @@ def main():
     parser.add_argument("--eval_split", type=str, default="test",
                         choices=["train", "validation", "test"])
     parser.add_argument("--max_eval_samples", type=int, default=1000)
+    parser.add_argument("--max_eval_windows", type=int, default=None,
+                        help="Optional sliding-window cap for smoke/debug evaluation only")
     parser.add_argument("--calibration_max_length", type=int, default=512)
     parser.add_argument("--fp_only_eval", action="store_true",
                         help="Evaluate the loaded BF16/FP model and exit before preprocessing")
@@ -2439,6 +2473,12 @@ def main():
             if encodings is None:
                 logger.warning("Skipping FP eval for %s (dataset unavailable)", dataset_name)
                 continue
+            encodings = limit_sliding_window_encodings(
+                encodings,
+                args.max_length,
+                args.stride,
+                args.max_eval_windows,
+            )
             fp_eval_metrics[dataset_name] = compute_perplexity_sliding_window(
                 model,
                 encodings,
@@ -2480,6 +2520,7 @@ def main():
                     "stride": args.stride or args.max_length // 2,
                     "eval_split": args.eval_split,
                     "max_eval_samples": args.max_eval_samples,
+                    "max_eval_windows": args.max_eval_windows,
                 },
                 "results": {
                     **{
@@ -2507,6 +2548,12 @@ def main():
         baseline_enc = load_and_tokenize_for_sliding_window(
             args.eval_datasets[0], args.eval_split, tokenizer,
             max_samples=args.max_eval_samples if args.eval_datasets[0] == "c4" else None,
+        )
+        baseline_enc = limit_sliding_window_encodings(
+            baseline_enc,
+            args.max_length,
+            args.stride,
+            args.max_eval_windows,
         )
         baseline_metrics = compute_perplexity_sliding_window(
             model, baseline_enc, device,
@@ -3032,6 +3079,12 @@ def main():
             if _pre_enc is None:
                 logger.warning(f"Skipping pre-LoRA eval for {_pre_ds} (dataset unavailable).")
                 continue
+            _pre_enc = limit_sliding_window_encodings(
+                _pre_enc,
+                args.max_length,
+                args.stride,
+                args.max_eval_windows,
+            )
             _pre_m = compute_perplexity_sliding_window(
                 model, _pre_enc, device,
                 max_length=args.max_length, stride=args.stride,
@@ -3234,6 +3287,12 @@ def main():
             if _diag_enc is None:
                 logger.warning(f"Skipping bypass eval for {_diag_ds} (dataset unavailable).")
                 continue
+            _diag_enc = limit_sliding_window_encodings(
+                _diag_enc,
+                args.max_length,
+                args.stride,
+                args.max_eval_windows,
+            )
             _m = compute_perplexity_sliding_window(
                 model, _diag_enc, device,
                 max_length=args.max_length, stride=args.stride,
@@ -3286,6 +3345,12 @@ def main():
         if encodings is None:
             logger.warning(f"Skipping eval for {eval_dataset_name} (dataset unavailable).")
             continue
+        encodings = limit_sliding_window_encodings(
+            encodings,
+            args.max_length,
+            args.stride,
+            args.max_eval_windows,
+        )
 
         metrics = compute_perplexity_sliding_window(
             model, encodings, device,
@@ -3483,6 +3548,7 @@ def main():
                 "max_length":            args.max_length,
                 "stride":                args.stride or args.max_length // 2,
                 "max_eval_samples":      args.max_eval_samples,
+                "max_eval_windows":      args.max_eval_windows,
             },
             "results": {
                 "ppl_bypass":            float(_diag_metrics["perplexity"]) if _diag_metrics else None,

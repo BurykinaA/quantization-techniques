@@ -131,6 +131,7 @@ run_adc_transfer() {
   local max_eval_samples=1000
   local max_length=2048
   local stride=1024
+  local -a eval_limit_args=()
   local -a optional_args=(
     --run_lm_eval
     --lm_eval_tasks hellaswag mmlu winogrande arc_easy arc_challenge piqa openbookqa boolq
@@ -151,6 +152,7 @@ run_adc_transfer() {
     max_eval_samples=2
     max_length=64
     stride=32
+    eval_limit_args=(--max_eval_windows 8)
     optional_args=()
   fi
 
@@ -207,6 +209,7 @@ run_adc_transfer() {
     --disable_wandb \
     --wandb_run_name "${run_name}" \
     --results_json_path "${RESULTS_JSON}" \
+    "${eval_limit_args[@]}" \
     "${optional_args[@]}"
 }
 
