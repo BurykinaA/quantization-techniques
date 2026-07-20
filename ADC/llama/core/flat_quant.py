@@ -1282,6 +1282,14 @@ def calibrate_flat_quant(
             super().__init__()
             self.module = module
 
+        def __getattr__(self, name):
+            """Expose decoder metadata inspected before the layer forward."""
+            try:
+                return super().__getattr__(name)
+            except AttributeError:
+                module = super().__getattr__("module")
+                return getattr(module, name)
+
         def forward(self, inp, **kwargs):
             nonlocal inps
             if cache["i"] < nsamples:
