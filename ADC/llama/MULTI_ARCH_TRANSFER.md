@@ -58,7 +58,8 @@ python3 -m pytest ADC/llama/tests/test_multi_arch_flat_quant.py -q
 Smoke mode runs model loading, one short FlatQuant pass, Stage B, ADC
 conversion/calibration, pre-LoRA perplexity, one short LoRA pass, and final
 perplexity for every architecture. Perplexity is capped at eight windows per
-dataset, and the full downstream suite is intentionally skipped.
+dataset, the full downstream suite is intentionally skipped, and model weights
+are not saved. Logs, compact diagnostics, and the shared JSON are still written.
 
 ```bash
 SMOKE=1 SKIP_COMPLETED=1 \

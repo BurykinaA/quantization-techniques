@@ -152,7 +152,7 @@ run_adc_transfer() {
     max_eval_samples=2
     max_length=64
     stride=32
-    eval_limit_args=(--max_eval_windows 8)
+    eval_limit_args=(--max_eval_windows 8 --skip_model_save)
     optional_args=()
   fi
 

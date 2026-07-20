@@ -2233,6 +2233,8 @@ def main():
     # Model serialization
     parser.add_argument("--save_full_model_pt", action="store_true",
                         help="Save model_full.pt + model_info.json for the chat server (torch.save)")
+    parser.add_argument("--skip_model_save", action="store_true",
+                        help="Skip model/tokenizer checkpoint serialization (for smoke runs)")
 
     # Visualization settings
     parser.add_argument("--disable_visualizations", action="store_true",
@@ -3409,12 +3411,14 @@ def main():
         wandb.run.summary["eval_max_length"] = args.max_length
         wandb.run.summary["eval_stride"] = args.stride or args.max_length // 2
 
-    # Save calibrated model
-    logger.info(f"Saving calibrated model to: {args.output_dir}")
+    # Save calibrated model unless this is a lightweight smoke run.
     os.makedirs(args.output_dir, exist_ok=True)
-
-    model.save_pretrained(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
+    if args.skip_model_save:
+        logger.info("Skipping model/tokenizer checkpoint serialization")
+    else:
+        logger.info(f"Saving calibrated model to: {args.output_dir}")
+        model.save_pretrained(args.output_dir)
+        tokenizer.save_pretrained(args.output_dir)
 
     # Save full model object for chat server (torch.save)
     if getattr(args, 'save_full_model_pt', False):
@@ -3494,7 +3498,10 @@ def main():
     logger.info("=" * 80)
     logger.info("PTQ COMPLETE!")
     logger.info("=" * 80)
-    logger.info(f"Calibrated model saved to: {args.output_dir}")
+    if args.skip_model_save:
+        logger.info("Calibrated model checkpoint intentionally not saved")
+    else:
+        logger.info(f"Calibrated model saved to: {args.output_dir}")
     logger.info(f"Perplexity: {eval_metrics['perplexity']:.2f}")
 
     if viz_before or viz_after:
