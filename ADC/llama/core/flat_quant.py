@@ -738,6 +738,12 @@ class FlatQuantLlamaMLP(nn.Module):
         adc_config: dict | None = None,
     ):
         super().__init__()
+        self._orig_mlp_cls = type(mlp)
+        self._orig_mlp_attrs = {
+            name: getattr(mlp, name)
+            for name in ("config", "hidden_size", "intermediate_size")
+            if hasattr(mlp, name)
+        }
         self.act_fn = mlp.act_fn
 
         self.gate_proj = FlatQuantLinear(mlp.gate_proj, w_bits, a_bits, lwc, lac, adc_config)
@@ -812,7 +818,6 @@ class FlatQuantLlamaMLP(nn.Module):
         self.gate_proj.reparameterize(qa_trans=self.up_gate_trans)
         self.up_proj.reparameterize(qa_trans=self.up_gate_trans)
         self.down_proj.reparameterize(qa_trans=self.down_trans)
-        self.up_gate_trans.use_diag = False
         # Absorb down_trans diagonal into up_proj weights so the
         # downstream intermediate tensor is already scaled.
         if self.down_trans.add_diag:
@@ -964,6 +969,87 @@ class FlatQuantLlamaAttention(nn.Module):
 # Part 5 — Model-Level Operations
 # =========================================================================
 
+def get_decoder_backbone(model: nn.Module) -> nn.Module:
+    """Return the Hugging Face decoder backbone containing ``layers``.
+
+    Llama, Qwen2/2.5, OLMo-HF, and TinyLlama expose the decoder as
+    ``model.model``. Direct decoder modules with a top-level ``layers``
+    container are accepted as well.
+    """
+    backbone = getattr(model, "model", None)
+    if backbone is None or not hasattr(backbone, "layers"):
+        backbone = model if hasattr(model, "layers") else None
+    if backbone is None:
+        model_type = getattr(getattr(model, "config", None), "model_type", type(model).__name__)
+        raise ValueError(
+            f"Unsupported decoder layout for {model_type!r}: "
+            "expected model.model.layers or model.layers"
+        )
+    return backbone
+
+
+def get_decoder_layers(model: nn.Module) -> nn.ModuleList:
+    """Return the decoder layer container for a supported causal LM."""
+    layers = get_decoder_backbone(model).layers
+    if not isinstance(layers, (nn.ModuleList, list, tuple)) or len(layers) == 0:
+        raise ValueError("Unsupported decoder layout: decoder layers must be non-empty")
+    return layers
+
+
+def validate_model_layout(model: nn.Module) -> dict:
+    """Validate the shared gated-decoder layout required by FlatQuant.
+
+    The selected Llama, Qwen2.5, OLMo-HF, and TinyLlama checkpoints all use
+    q/k/v/o attention projections and gate/up/down SwiGLU projections. Their
+    attention implementations remain untouched and are called through the
+    original Hugging Face module.
+    """
+    layers = get_decoder_layers(model)
+    required_layer = ("self_attn", "mlp", "input_layernorm", "post_attention_layernorm")
+    required_attn = ("q_proj", "k_proj", "v_proj", "o_proj")
+    required_mlp = ("gate_proj", "up_proj", "down_proj", "act_fn")
+
+    for index, layer in enumerate(layers):
+        missing_layer = [name for name in required_layer if not hasattr(layer, name)]
+        if missing_layer:
+            raise ValueError(f"Layer {index} is missing required modules: {missing_layer}")
+
+        missing_attn = [name for name in required_attn if not hasattr(layer.self_attn, name)]
+        if missing_attn:
+            raise ValueError(f"Layer {index} attention is missing projections: {missing_attn}")
+
+        missing_mlp = [name for name in required_mlp if not hasattr(layer.mlp, name)]
+        if missing_mlp:
+            raise ValueError(f"Layer {index} MLP is missing components: {missing_mlp}")
+
+        for name in required_attn:
+            projection = getattr(layer.self_attn, name)
+            if not isinstance(projection, nn.Linear):
+                raise ValueError(
+                    f"Layer {index} attention.{name} must be nn.Linear before wrapping, "
+                    f"got {type(projection).__name__}"
+                )
+        for name in ("gate_proj", "up_proj", "down_proj"):
+            projection = getattr(layer.mlp, name)
+            if not isinstance(projection, nn.Linear):
+                raise ValueError(
+                    f"Layer {index} mlp.{name} must be nn.Linear before wrapping, "
+                    f"got {type(projection).__name__}"
+                )
+
+    model_type = getattr(getattr(model, "config", None), "model_type", type(model).__name__)
+    return {
+        "model_type": model_type,
+        "num_layers": len(layers),
+        "attention_class": type(layers[0].self_attn).__name__,
+        "mlp_class": type(layers[0].mlp).__name__,
+        "affine_input_norm": getattr(layers[0].input_layernorm, "weight", None) is not None,
+        "affine_post_attention_norm": (
+            getattr(layers[0].post_attention_layernorm, "weight", None) is not None
+        ),
+    }
+
+
 def apply_flatquant_to_model(
     model: nn.Module,
     w_bits: int = 8,
@@ -973,7 +1059,7 @@ def apply_flatquant_to_model(
     lac: bool = True,
     adc_config: dict | None = None,
 ) -> nn.Module:
-    """Replace LLaMA attention and MLP with FlatQuant-wrapped versions.
+    """Replace compatible gated-decoder attention and MLP modules.
 
     Args:
         adc_config: When provided, ``train_forward`` simulates the full
@@ -982,7 +1068,18 @@ def apply_flatquant_to_model(
 
                 {bx, bw, ba, k, mvm_limit, signed_activations}
     """
-    layers = model.model.layers
+    layout = validate_model_layout(model)
+    logger.info(
+        "FlatQuant layout: model_type=%s, layers=%d, attention=%s, mlp=%s, "
+        "affine_norms=(%s, %s)",
+        layout["model_type"],
+        layout["num_layers"],
+        layout["attention_class"],
+        layout["mlp_class"],
+        layout["affine_input_norm"],
+        layout["affine_post_attention_norm"],
+    )
+    layers = get_decoder_layers(model)
     for i in tqdm(range(len(layers)), desc="Applying FlatQuant wrappers"):
         layer = layers[i]
         layers[i].self_attn = FlatQuantLlamaAttention(
@@ -1001,7 +1098,7 @@ def reparameterize_model(model: nn.Module) -> nn.Module:
     transforms are effectively identity.  Call ``strip_flatquant_wrappers``
     next to remove the wrappers entirely.
     """
-    for layer in model.model.layers:
+    for layer in get_decoder_layers(model):
         attn = layer.self_attn
         mlp = layer.mlp
 
@@ -1017,10 +1114,23 @@ def reparameterize_model(model: nn.Module) -> nn.Module:
 
 
 def _reparameterize_ln(ln: nn.Module, trans: KroneckerTransform) -> None:
-    """Absorb diagonal scaling from *trans* into LayerNorm weight."""
-    w = ln.weight.data
+    """Absorb diagonal scaling into an affine norm when possible.
+
+    OLMo uses a non-affine LayerNorm. In that case the learned diagonal must
+    stay active inside ``KroneckerTransform``; this is algebraically equivalent
+    to absorbing it into an affine norm weight.
+    """
+    weight = getattr(ln, "weight", None)
+    if weight is None:
+        logger.info(
+            "Keeping FlatQuant diagonal active for non-affine norm %s",
+            type(ln).__name__,
+        )
+        return
+
+    w = weight.data
     ori_dtype = w.dtype
-    ln.weight.data = (w.to(torch.float64) * trans.diag_scale.to(torch.float64)).to(ori_dtype)
+    weight.data = (w.to(torch.float64) * trans.diag_scale.to(torch.float64)).to(ori_dtype)
     trans.use_diag = False
 
 
@@ -1030,7 +1140,7 @@ def strip_flatquant_wrappers(model: nn.Module) -> nn.Module:
     **Must** be called after ``reparameterize_model()`` so the learned
     transforms are already folded into weights.
     """
-    for layer in model.model.layers:
+    for layer in get_decoder_layers(model):
         # --- Attention: put original attn back with reparameterised projs ---
         attn_wrapper = layer.self_attn
         if isinstance(attn_wrapper, FlatQuantLlamaAttention):
@@ -1041,12 +1151,13 @@ def strip_flatquant_wrappers(model: nn.Module) -> nn.Module:
             orig.o_proj = attn_wrapper.o_proj.linear
             layer.self_attn = orig
 
-        # --- MLP: reconstruct a standard LlamaMLP with reparameterised projs ---
+        # --- MLP: reconstruct the original HF MLP class with reparameterised projs ---
         mlp_wrapper = layer.mlp
         if isinstance(mlp_wrapper, FlatQuantLlamaMLP):
-            from transformers.models.llama.modeling_llama import LlamaMLP
-            new_mlp = object.__new__(LlamaMLP)
+            new_mlp = object.__new__(mlp_wrapper._orig_mlp_cls)
             nn.Module.__init__(new_mlp)
+            for name, value in mlp_wrapper._orig_mlp_attrs.items():
+                setattr(new_mlp, name, value)
             new_mlp.gate_proj = mlp_wrapper.gate_proj.linear
             new_mlp.up_proj = mlp_wrapper.up_proj.linear
             new_mlp.down_proj = mlp_wrapper.down_proj.linear
@@ -1116,7 +1227,7 @@ def calibrate_flat_quant(
 
     Parameters
     ----------
-    model       : LLaMA model with FlatQuant wrappers already applied.
+    model       : compatible gated-decoder model with FlatQuant wrappers applied.
     dataloader  : calibration data — iterable of (input_ids, …) tuples.
     device      : GPU device.
     nsamples    : number of calibration samples.
@@ -1140,14 +1251,15 @@ def calibrate_flat_quant(
         dtype = torch.float32
         traincast = nullcontext
 
-    layers = model.model.layers
+    backbone = get_decoder_backbone(model)
+    layers = get_decoder_layers(model)
     hidden_size = model.config.hidden_size
 
     # Move embedding + first layer to device for input capture
     layers[0] = layers[0].to(device)
-    model.model.embed_tokens = model.model.embed_tokens.to(device)
-    if hasattr(model.model, "rotary_emb"):
-        model.model.rotary_emb = model.model.rotary_emb.to(device)
+    backbone.embed_tokens = backbone.embed_tokens.to(device)
+    if hasattr(backbone, "rotary_emb"):
+        backbone.rotary_emb = backbone.rotary_emb.to(device)
 
     # ── Step 1: capture first-layer inputs ─────────────────────────
     #
@@ -1225,9 +1337,9 @@ def calibrate_flat_quant(
     # Free GPU memory from embedding / rotary
     layers[0] = layers[0].module
     layers[0] = layers[0].cpu()
-    model.model.embed_tokens = model.model.embed_tokens.cpu()
-    if hasattr(model.model, "rotary_emb"):
-        model.model.rotary_emb = model.model.rotary_emb.cpu()
+    backbone.embed_tokens = backbone.embed_tokens.cpu()
+    if hasattr(backbone, "rotary_emb"):
+        backbone.rotary_emb = backbone.rotary_emb.cpu()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
@@ -1721,7 +1833,7 @@ def capture_layer_outputs(
     outputs: dict = {}
     hooks: list = []
 
-    for i, layer in enumerate(model.model.layers):
+    for i, layer in enumerate(get_decoder_layers(model)):
         outputs[i] = {}
 
         if isinstance(layer.mlp, FlatQuantLlamaMLP):
@@ -1828,7 +1940,7 @@ def save_flat_transforms(model: nn.Module, path: str) -> None:
     to reproduce the reparameterized weights on reload.
     """
     transforms = {}
-    for i, layer in enumerate(model.model.layers):
+    for i, layer in enumerate(get_decoder_layers(model)):
         state = {}
         if isinstance(layer.self_attn, FlatQuantLlamaAttention):
             state["attn_ln_trans"] = layer.self_attn.ln_trans.state_dict()
@@ -1882,7 +1994,7 @@ def load_flat_transforms(model: nn.Module, path: str) -> nn.Module:
 
     transforms = torch.load(path, map_location=_device)
     for i, state in transforms.items():
-        layer = model.model.layers[i]
+        layer = get_decoder_layers(model)[i]
 
         # --- Attention ---
         if "attn_ln_trans" in state and isinstance(layer.self_attn, FlatQuantLlamaAttention):

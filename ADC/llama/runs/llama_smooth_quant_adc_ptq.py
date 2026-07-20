@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Post-Training Quantization (PTQ) for ADC-based LLaMA models with optional
-SmoothQuant or FlatQuant preprocessing.
+Post-Training Quantization (PTQ) for ADC-based gated decoder models with
+optional SmoothQuant or FlatQuant preprocessing.
 
 Pipeline: Preprocess (SmoothQuant/FlatQuant/None) → ADC Convert → Calibrate → Evaluate → Visualize
 
-Supports:
-- meta-llama/Llama-3.1-8B
-- meta-llama/Llama-3.2-3B
-- meta-llama/Llama-3.2-1B
+The FlatQuant path is layout-based and supports Llama, Qwen2.5, OLMo-HF,
+and TinyLlama checkpoints that expose the standard q/k/v/o and
+gate/up/down projection layout.
 """
 
 import argparse
@@ -42,6 +41,7 @@ from ADC.llama.core.adc_lora import apply_adc_lora, calibrate_adc_lora
 from ADC.llama.core.flat_quant import (
     apply_flatquant_to_model,
     calibrate_flat_quant,
+    validate_model_layout,
     reparameterize_model as fq_reparameterize_model,
     strip_flatquant_wrappers,
     save_flat_transforms,
@@ -58,17 +58,18 @@ logger = logging.getLogger(__name__)
 
 
 # =========================================================================
-# LLaMA ADC Converter (identical to llama_adc_ptq.py)
+# Gated-decoder ADC converter
 # =========================================================================
 
-class LlamaADCConverter:
-    """Convert LLaMA model to use ADC QAT layers for causal LM."""
+class DecoderADCConverter:
+    """Convert a compatible causal LM to use tiled ADC layers."""
 
     @staticmethod
     def is_after_silu(name: str) -> bool:
         """
         Detect if this linear layer follows a SiLU activation.
-        In LLaMA MLP: output = down_proj(silu(gate_proj(x)) * up_proj(x))
+        In the supported gated MLPs:
+        output = down_proj(silu(gate_proj(x)) * up_proj(x))
         So down_proj receives SiLU output.
         """
         return "down_proj" in name
@@ -89,7 +90,7 @@ class LlamaADCConverter:
         target_kurtosis: float = 1.8,
         mult_noise_std: float = 0.0,
     ) -> nn.Module:
-        """Replace all nn.Linear layers in the LLaMA model with TiledLinearADC."""
+        """Replace eligible ``nn.Linear`` layers with ``TiledLinearADC``."""
         if exclude_patterns is None:
             exclude_patterns = ["embed_tokens", "lm_head"]
 
@@ -101,7 +102,7 @@ class LlamaADCConverter:
                 full_name = f"{name}.{child_name}" if name else child_name
 
                 if isinstance(child_module, nn.Linear) and not should_exclude(full_name):
-                    layer_ashift = ashift and LlamaADCConverter.is_after_silu(full_name)
+                    layer_ashift = ashift and DecoderADCConverter.is_after_silu(full_name)
 
                     if signed_activations is not None:
                         layer_signed_activations = signed_activations
@@ -148,6 +149,10 @@ class LlamaADCConverter:
             if hasattr(module, "parameters"):
                 counts["total_params"] += sum(p.numel() for p in module.parameters())
         return counts
+
+
+# Backward-compatible name for any external scripts importing the old class.
+LlamaADCConverter = DecoderADCConverter
 
 
 # =========================================================================
@@ -1754,13 +1759,210 @@ def _run_stage_eval(model, encodings, device, stage_name, args, use_wandb):
     return metrics
 
 
+PAPER_LM_EVAL_TASKS = [
+    "hellaswag",
+    "mmlu",
+    "winogrande",
+    "arc_easy",
+    "arc_challenge",
+    "piqa",
+    "openbookqa",
+    "boolq",
+]
+
+PAPER_LM_EVAL_FEWSHOT = {
+    "hellaswag": 0,
+    "mmlu": 5,
+    "winogrande": 0,
+    "arc_easy": 0,
+    "arc_challenge": 0,
+    "piqa": 0,
+    "openbookqa": 0,
+    "boolq": 0,
+}
+
+PAPER_LM_EVAL_METRICS = {
+    "hellaswag": ("acc_norm", "acc"),
+    "mmlu": ("acc",),
+    "winogrande": ("acc",),
+    "arc_easy": ("acc_norm", "acc"),
+    "arc_challenge": ("acc_norm", "acc"),
+    "piqa": ("acc_norm", "acc"),
+    "openbookqa": ("acc_norm", "acc"),
+    "boolq": ("acc",),
+}
+
+
+def _extract_lm_eval_accuracy(task: str, output: dict) -> tuple[float, str]:
+    """Extract the paper metric from an lm-evaluation-harness result."""
+    candidates = []
+    for section_name in ("results", "groups"):
+        section = output.get(section_name, {})
+        if task in section and isinstance(section[task], dict):
+            candidates.append(section[task])
+
+    for metric_name in PAPER_LM_EVAL_METRICS[task]:
+        for result in candidates:
+            for key, value in result.items():
+                if key.split(",", 1)[0] == metric_name and isinstance(value, (int, float)):
+                    return float(value), key
+
+    if task == "mmlu":
+        # Older harness versions may omit the aggregate group entry. Fall back
+        # to the macro mean over the emitted MMLU subject tasks.
+        subject_accuracies = []
+        for result_name, result in output.get("results", {}).items():
+            if not result_name.startswith("mmlu_") or not isinstance(result, dict):
+                continue
+            for key, value in result.items():
+                if key.split(",", 1)[0] == "acc" and isinstance(value, (int, float)):
+                    subject_accuracies.append(float(value))
+                    break
+        if subject_accuracies:
+            return sum(subject_accuracies) / len(subject_accuracies), "acc,macro_subjects"
+
+    available = sorted(
+        {
+            key
+            for result in candidates
+            for key, value in result.items()
+            if isinstance(value, (int, float))
+        }
+    )
+    raise KeyError(
+        f"Could not find a supported accuracy metric for {task!r}; available={available}"
+    )
+
+
+def run_lm_evaluation(
+    model: nn.Module,
+    tokenizer,
+    device,
+    tasks: list[str],
+    batch_size: str,
+    limit: float | None = None,
+    stage: str = "final",
+) -> dict:
+    """Evaluate the in-memory model with the paper's 0/5-shot protocol."""
+    unknown_tasks = sorted(set(tasks) - set(PAPER_LM_EVAL_TASKS))
+    if unknown_tasks:
+        raise ValueError(
+            f"Unsupported paper lm-eval tasks: {unknown_tasks}; "
+            f"choose from {PAPER_LM_EVAL_TASKS}"
+        )
+
+    try:
+        from lm_eval import evaluator
+        from lm_eval.models.huggingface import HFLM
+    except ImportError as exc:
+        raise RuntimeError(
+            "lm-evaluation-harness is required for --run_lm_eval. "
+            "Install it in the remote environment before running downstream evaluation."
+        ) from exc
+
+    if isinstance(device, torch.device):
+        lm_device = str(device)
+    elif isinstance(device, int):
+        lm_device = f"cuda:{device}"
+    else:
+        lm_device = str(device)
+
+    logger.info(
+        "Starting lm-evaluation-harness stage=%s tasks=%s batch_size=%s limit=%s",
+        stage,
+        tasks,
+        batch_size,
+        limit,
+    )
+    model.eval()
+    lm = HFLM(
+        pretrained=model,
+        tokenizer=tokenizer,
+        batch_size=batch_size,
+        device=lm_device,
+    )
+
+    combined_output: dict = {"results": {}, "groups": {}}
+    for num_fewshot in sorted({PAPER_LM_EVAL_FEWSHOT[task] for task in tasks}):
+        grouped_tasks = [
+            task for task in tasks if PAPER_LM_EVAL_FEWSHOT[task] == num_fewshot
+        ]
+        if not grouped_tasks:
+            continue
+        output = evaluator.simple_evaluate(
+            model=lm,
+            tasks=grouped_tasks,
+            num_fewshot=num_fewshot,
+            limit=limit,
+            log_samples=False,
+        )
+        combined_output["results"].update(output.get("results", {}))
+        combined_output["groups"].update(output.get("groups", {}))
+
+    metrics = {}
+    for task in tasks:
+        accuracy, metric_name = _extract_lm_eval_accuracy(task, combined_output)
+        metrics[task] = {
+            "accuracy": accuracy,
+            "accuracy_pct": accuracy * 100.0,
+            "metric": metric_name,
+            "num_fewshot": PAPER_LM_EVAL_FEWSHOT[task],
+        }
+        logger.info(
+            "lm-eval %s/%s: %.2f%% (%s, %d-shot)",
+            stage,
+            task,
+            accuracy * 100.0,
+            metric_name,
+            PAPER_LM_EVAL_FEWSHOT[task],
+        )
+
+    if metrics:
+        mean_accuracy = sum(item["accuracy"] for item in metrics.values()) / len(metrics)
+        metrics["mean"] = {
+            "accuracy": mean_accuracy,
+            "accuracy_pct": mean_accuracy * 100.0,
+            "num_tasks": len(metrics),
+        }
+        logger.info("lm-eval %s mean accuracy: %.2f%%", stage, mean_accuracy * 100.0)
+    return metrics
+
+
+def upsert_results_record(path: str, record: dict) -> None:
+    """Atomically add or replace one run in the shared JSON result list."""
+    import json
+
+    existing = []
+    try:
+        with open(path, encoding="utf-8") as handle:
+            existing = json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    if not isinstance(existing, list):
+        raise ValueError(f"Results file must contain a JSON list: {path}")
+
+    run_name = record["run_name"]
+    existing = [item for item in existing if item.get("run_name") != run_name]
+    existing.append(record)
+
+    absolute_path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
+    temporary_path = f"{absolute_path}.tmp.{os.getpid()}"
+    with open(temporary_path, "w", encoding="utf-8") as handle:
+        json.dump(existing, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(temporary_path, absolute_path)
+    logger.info("Results written to: %s", absolute_path)
+
+
 # =========================================================================
 # Main pipeline
 # =========================================================================
 
 def main():
     parser = argparse.ArgumentParser(
-        description="PTQ for ADC-based LLaMA models with configurable preprocessing"
+        description="PTQ for ADC-based gated decoder models with configurable preprocessing"
     )
 
     # Model settings
@@ -1968,6 +2170,17 @@ def main():
                         choices=["train", "validation", "test"])
     parser.add_argument("--max_eval_samples", type=int, default=1000)
     parser.add_argument("--calibration_max_length", type=int, default=512)
+    parser.add_argument("--fp_only_eval", action="store_true",
+                        help="Evaluate the loaded BF16/FP model and exit before preprocessing")
+    parser.add_argument("--run_lm_eval", action="store_true",
+                        help="Run the paper's downstream lm-evaluation-harness tasks")
+    parser.add_argument("--lm_eval_tasks", nargs="+", default=PAPER_LM_EVAL_TASKS,
+                        choices=PAPER_LM_EVAL_TASKS,
+                        help="Downstream tasks; MMLU uses 5-shot and all others use 0-shot")
+    parser.add_argument("--lm_eval_batch_size", type=str, default="auto",
+                        help="Batch size passed to lm-evaluation-harness (for example auto or 1)")
+    parser.add_argument("--lm_eval_limit", type=float, default=None,
+                        help="Optional per-task example limit for remote smoke runs only")
 
     # WandB settings
     parser.add_argument("--wandb_project", type=str, default="llama-smooth-quant-adc-ptq")
@@ -1978,6 +2191,10 @@ def main():
     parser.add_argument("--results_json_path", type=str, default=None,
                         help="Append a JSON record with key metrics to this file after each run. "
                              "Creates the file if it does not exist.")
+    parser.add_argument("--no_date_suffix", action="store_true",
+                        help="Use output_dir exactly as given (recommended for resumable batches)")
+    parser.add_argument("--enforce_transfer_quant_config", action="store_true",
+                        help="Reject quantization settings that differ from the paper transfer protocol")
 
     # Model serialization
     parser.add_argument("--save_full_model_pt", action="store_true",
@@ -2015,6 +2232,37 @@ def main():
 
     args = parser.parse_args()
     set_seed(args.seed)
+
+    if args.enforce_transfer_quant_config:
+        expected = {
+            "preprocess_method": "flat_quant",
+            "torch_dtype": "bfloat16",
+            "bx": 4,
+            "bw": 4,
+            "ba": 8,
+            "k": 16,
+            "mvm_limit": 256,
+            "activation_quant": "symmetric",
+            "ashift": False,
+            "lora_rank": 4,
+            "lora_loss": "ce_kl",
+        }
+        mismatches = {
+            name: {"expected": value, "actual": getattr(args, name)}
+            for name, value in expected.items()
+            if getattr(args, name) != value
+        }
+        expected_targets = {
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        }
+        if set(args.lora_target_modules) != expected_targets:
+            mismatches["lora_target_modules"] = {
+                "expected": sorted(expected_targets),
+                "actual": sorted(args.lora_target_modules),
+            }
+        if mismatches:
+            raise ValueError(f"Transfer quantization protocol mismatch: {mismatches}")
 
     # Derive signed_activations flag
     if args.activation_quant == "symmetric":
@@ -2134,10 +2382,11 @@ def main():
     else:
         logger.info("WandB logging disabled")
 
-    # Load LLaMA model
-    logger.info(f"Loading LLaMA model: {args.model_name}")
+    # Load a compatible gated decoder model
+    logger.info(f"Loading causal LM: {args.model_name}")
 
-    args.output_dir = append_current_date_to_path(args.output_dir)
+    if not args.no_date_suffix:
+        args.output_dir = append_current_date_to_path(args.output_dir)
 
     dtype_map = {"float16": torch.float16, "bfloat16": torch.bfloat16, "float32": torch.float32}
     torch_dtype = dtype_map.get(args.torch_dtype, torch.float16)
@@ -2162,6 +2411,91 @@ def main():
         device = next(iter(model.hf_device_map.values())) if model.hf_device_map else device
 
     logger.info(f"Model loaded with dtype={torch_dtype}, device={device}")
+    layout_info = validate_model_layout(model)
+    logger.info(
+        "Validated decoder layout: model_type=%s, layers=%d, attention=%s, mlp=%s, "
+        "affine_norms=(%s, %s)",
+        layout_info["model_type"],
+        layout_info["num_layers"],
+        layout_info["attention_class"],
+        layout_info["mlp_class"],
+        layout_info["affine_input_norm"],
+        layout_info["affine_post_attention_norm"],
+    )
+
+    if args.fp_only_eval:
+        logger.info("=" * 80)
+        logger.info("BF16/FP-ONLY EVALUATION")
+        logger.info("=" * 80)
+        fp_eval_metrics = {}
+        model.eval()
+        for dataset_name in args.eval_datasets:
+            encodings = load_and_tokenize_for_sliding_window(
+                dataset_name,
+                args.eval_split,
+                tokenizer,
+                max_samples=args.max_eval_samples if dataset_name == "c4" else None,
+            )
+            if encodings is None:
+                logger.warning("Skipping FP eval for %s (dataset unavailable)", dataset_name)
+                continue
+            fp_eval_metrics[dataset_name] = compute_perplexity_sliding_window(
+                model,
+                encodings,
+                device,
+                max_length=args.max_length,
+                stride=args.stride,
+                desc=f"BF16 eval {dataset_name}",
+            )
+            logger.info(
+                "BF16 %s perplexity: %.4f",
+                dataset_name,
+                fp_eval_metrics[dataset_name]["perplexity"],
+            )
+
+        fp_downstream_metrics = {}
+        if args.run_lm_eval:
+            fp_downstream_metrics = run_lm_evaluation(
+                model,
+                tokenizer,
+                device,
+                tasks=args.lm_eval_tasks,
+                batch_size=args.lm_eval_batch_size,
+                limit=args.lm_eval_limit,
+                stage="bf16",
+            )
+
+        if args.results_json_path:
+            fp_record = {
+                "run_name": args.wandb_run_name or f"{model_short_name}_bf16",
+                "timestamp": datetime.now().isoformat(),
+                "status": "success",
+                "model_name": args.model_name,
+                "model_type": layout_info["model_type"],
+                "stage": "bf16",
+                "config": {
+                    "torch_dtype": args.torch_dtype,
+                    "eval_datasets": list(args.eval_datasets),
+                    "max_length": args.max_length,
+                    "stride": args.stride or args.max_length // 2,
+                    "eval_split": args.eval_split,
+                    "max_eval_samples": args.max_eval_samples,
+                },
+                "results": {
+                    **{
+                        f"ppl_bf16_{dataset_name}": float(metrics["perplexity"])
+                        for dataset_name, metrics in fp_eval_metrics.items()
+                    },
+                    "downstream_bf16": fp_downstream_metrics,
+                },
+            }
+            upsert_results_record(args.results_json_path, fp_record)
+
+        if use_wandb:
+            for dataset_name, metrics in fp_eval_metrics.items():
+                wandb.log({f"bf16/{dataset_name}/perplexity": metrics["perplexity"]})
+            wandb.finish()
+        return
 
     # =========================================================================
     # Optional: FP16 baseline perplexity check (before any changes)
@@ -2501,7 +2835,7 @@ def main():
     # STEP 1: Convert to ADC layers (on the now-smoothed model)
     # =========================================================================
     logger.info("Converting to ADC layers...")
-    model = LlamaADCConverter.replace_linear_with_adc(
+    model = DecoderADCConverter.replace_linear_with_adc(
         model,
         bx=args.bx,
         bw=args.bw,
@@ -2534,7 +2868,7 @@ def main():
     else:
         logger.info("PACT inference disabled: TiledLinearADC uses per-token amax at inference")
 
-    stats = LlamaADCConverter.count_adc_layers(model)
+    stats = DecoderADCConverter.count_adc_layers(model)
     logger.info(f"Model: {stats['adc_linear']} ADC layers, {stats['regular_linear']} regular Linear, {stats['total_params']:,} params")
 
     # Stage eval C: ADC layers present, bypass_all=True → FP forward through ADC structure.
@@ -2674,6 +3008,7 @@ def main():
     # STEP 2.35 (optional): WITH-ADC perplexity eval BEFORE LoRA
     # =========================================================================
     pre_lora_eval_metrics = {}    # per-dataset WITH-ADC metrics measured before LoRA
+    pre_lora_downstream_metrics = {}
     if args.eval_pre_lora and args.lora_rank > 0:
         # Apply the same context-window cap used for the post-LoRA eval so that
         # the before/after numbers are directly comparable.
@@ -2713,6 +3048,16 @@ def main():
                     f"eval/prelora/{_pre_ds}/perplexity": _pre_m["perplexity"],
                     f"eval/prelora/{_pre_ds}/avg_loss": _pre_m["avg_loss"],
                 })
+        if args.run_lm_eval:
+            pre_lora_downstream_metrics = run_lm_evaluation(
+                model,
+                tokenizer,
+                device,
+                tasks=args.lm_eval_tasks,
+                batch_size=args.lm_eval_batch_size,
+                limit=args.lm_eval_limit,
+                stage="adc_ptq",
+            )
         logger.info("=" * 80)
 
     # =========================================================================
@@ -2968,6 +3313,19 @@ def main():
             f"Windows: {metrics['num_windows']})"
         )
 
+    downstream_metrics = {}
+    if args.run_lm_eval:
+        final_stage = "adc_lora" if args.lora_rank > 0 else "adc_ptq"
+        downstream_metrics = run_lm_evaluation(
+            model,
+            tokenizer,
+            device,
+            tasks=args.lm_eval_tasks,
+            batch_size=args.lm_eval_batch_size,
+            limit=args.lm_eval_limit,
+            stage=final_stage,
+        )
+
     # Log all metrics to wandb
     if use_wandb:
         for ds_name, metrics in all_eval_metrics.items():
@@ -3026,7 +3384,7 @@ def main():
     # Save calibration info
     with open(os.path.join(args.output_dir, "calibration_info.txt"), "w") as f:
         f.write("=" * 80 + "\n")
-        f.write("LLaMA PREPROCESS + ADC POST-TRAINING QUANTIZATION (PTQ) RESULTS\n")
+        f.write("GATED DECODER + ADC POST-TRAINING QUANTIZATION (PTQ) RESULTS\n")
         f.write("=" * 80 + "\n\n")
         f.write(f"Model: {args.model_name}\n")
         f.write(f"Preprocess: {preprocess_summary}\n")
@@ -3088,28 +3446,43 @@ def main():
     # Export key metrics to JSON (for overnight batch runs)
     # -------------------------------------------------------------------------
     if args.results_json_path:
-        import json as _json
         # Compute mean dead_rate and reconstruction_rel from adc_diag_results
         _dead_vals = [r["dead_rate"] for r in adc_diag_results.values() if "dead_rate" in r]
         _rel_vals  = [r["reconstruction_rel"] for r in adc_diag_results.values() if "reconstruction_rel" in r]
         _record = {
             "run_name":      getattr(args, "wandb_run_name", None) or args.output_dir,
-            "timestamp":     __import__("datetime").datetime.now().isoformat(),
+            "timestamp":     datetime.now().isoformat(),
             "status":        "success",
+            "model_name":    args.model_name,
+            "model_type":    layout_info["model_type"],
+            "stage":         "adc_transfer",
             "config": {
+                "torch_dtype":            args.torch_dtype,
+                "preprocess_method":       args.preprocess_method,
                 "bx":                    args.bx,
                 "bw":                    args.bw,
                 "ba":                    args.ba,
                 "k":                     args.k,
                 "mvm_limit":             args.mvm_limit,
+                "activation_quant":       args.activation_quant,
+                "ashift":                 args.ashift,
                 "lora_rank":             getattr(args, "lora_rank", 0),
+                "lora_targets":          list(args.lora_target_modules),
+                "lora_epochs":           args.lora_epochs,
+                "lora_loss":             args.lora_loss,
                 "adc_mult_noise_std":    getattr(args, "adc_mult_noise_std", 0.0),
                 "fq_stage_b_noise_std":  getattr(args, "fq_stage_b_noise_std", 0.0),
+                "fq_stage_b_epochs":     args.fq_stage_b_epochs,
+                "fq_stage_b_prop_alpha": args.fq_stage_b_prop_alpha,
                 "fq_epochs":             args.fq_epochs,
                 "fq_nsamples":           args.fq_nsamples,
                 "fq_lambda_center":      getattr(args, "fq_lambda_center", 0.0),
                 "fq_propagate_quant":    getattr(args, "fq_propagate_quant", False),
                 "fq_kronecker_init":     getattr(args, "fq_kronecker_init", "random"),
+                "eval_datasets":         list(args.eval_datasets),
+                "max_length":            args.max_length,
+                "stride":                args.stride or args.max_length // 2,
+                "max_eval_samples":      args.max_eval_samples,
             },
             "results": {
                 "ppl_bypass":            float(_diag_metrics["perplexity"]) if _diag_metrics else None,
@@ -3127,21 +3500,15 @@ def main():
                 "dead_rate_mean":        float(np.mean(_dead_vals)) if _dead_vals else None,
                 "dead_rate_max":         float(np.max(_dead_vals))  if _dead_vals else None,
                 "reconstruction_rel_mean": float(np.mean(_rel_vals)) if _rel_vals else None,
+                "downstream_adc_ptq":    pre_lora_downstream_metrics,
+                **(
+                    {"downstream_adc_lora": downstream_metrics}
+                    if args.lora_rank > 0
+                    else {"downstream_adc_ptq": downstream_metrics}
+                ),
             },
         }
-        _existing = []
-        try:
-            with open(args.results_json_path) as _f:
-                _existing = _json.load(_f)
-        except (FileNotFoundError, _json.JSONDecodeError):
-            pass
-        # Replace any existing entry with the same run_name (deduplicates retries)
-        _existing = [r for r in _existing if r.get("run_name") != _record["run_name"]]
-        _existing.append(_record)
-        os.makedirs(os.path.dirname(os.path.abspath(args.results_json_path)), exist_ok=True)
-        with open(args.results_json_path, "w") as _f:
-            _json.dump(_existing, _f, indent=2)
-        logger.info(f"Results appended to: {args.results_json_path}")
+        upsert_results_record(args.results_json_path, _record)
 
     # Final WandB logging
     if use_wandb:
