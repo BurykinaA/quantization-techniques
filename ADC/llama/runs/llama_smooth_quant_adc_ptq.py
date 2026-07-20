@@ -2283,6 +2283,23 @@ def main():
             "lora_rank": 4,
             "lora_loss": "ce_kl",
         }
+        if args.max_eval_windows is None:
+            expected.update({
+                "fq_nsamples": 1024,
+                "fq_cali_bsz": 16,
+                "fq_epochs": 30,
+                "fq_diag_attn": False,
+                "fq_diag_mlp": True,
+                "fq_stage_b_epochs": 10,
+                "fq_stage_b_prop_alpha": 0.5,
+                "fq_stage_b_diag_attn": True,
+                "fq_stage_b_diag_mlp": False,
+                "calibration_batch_size": 4,
+                "lora_epochs": 5,
+                "max_eval_samples": 1000,
+                "max_length": 2048,
+                "stride": 1024,
+            })
         mismatches = {
             name: {"expected": value, "actual": getattr(args, name)}
             for name, value in expected.items()
@@ -3546,11 +3563,17 @@ def main():
                 "fq_stage_b_noise_std":  getattr(args, "fq_stage_b_noise_std", 0.0),
                 "fq_stage_b_epochs":     args.fq_stage_b_epochs,
                 "fq_stage_b_prop_alpha": args.fq_stage_b_prop_alpha,
+                "fq_stage_b_diag_attn":  args.fq_stage_b_diag_attn,
+                "fq_stage_b_diag_mlp":   args.fq_stage_b_diag_mlp,
                 "fq_epochs":             args.fq_epochs,
                 "fq_nsamples":           args.fq_nsamples,
+                "fq_cali_bsz":           args.fq_cali_bsz,
+                "fq_diag_attn":          args.fq_diag_attn,
+                "fq_diag_mlp":           args.fq_diag_mlp,
                 "fq_lambda_center":      getattr(args, "fq_lambda_center", 0.0),
                 "fq_propagate_quant":    getattr(args, "fq_propagate_quant", False),
                 "fq_kronecker_init":     getattr(args, "fq_kronecker_init", "random"),
+                "calibration_batch_size": args.calibration_batch_size,
                 "eval_datasets":         list(args.eval_datasets),
                 "max_length":            args.max_length,
                 "stride":                args.stride or args.max_length // 2,

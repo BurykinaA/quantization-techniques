@@ -16,9 +16,12 @@ The historical `run_perplexity_all_models.sh` and
 - W4 per-channel symmetric weights
 - A4 signed symmetric activations
 - signed 8-bit ADC, `k=16`, `M=256`
-- FlatQuant: 1024 samples, 30 epochs
-- propagated Stage B: 10 epochs, `alpha=0.5`
-- post-ADC LoRA: rank 4, all seven projections, 5 epochs, CE + KL
+- FlatQuant Stage A: 1024 samples, 30 epochs, calibration batch size 16,
+  MLP diagonal training
+- propagated Stage B: 10 epochs, `alpha=0.5`, attention diagonal training
+- ADC scale calibration batch size 4
+- post-ADC LoRA: rank 4, all seven projections, 5 epochs, CE + KL,
+  calibration batch size 16
 - WikiText-2 `test` and the existing C4 `test` to `validation` mapping
 - context 2048, stride 1024, 1000 C4 samples
 - downstream: HellaSwag, MMLU, WinoGrande, ARC-Easy, ARC-Challenge,

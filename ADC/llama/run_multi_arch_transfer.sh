@@ -126,13 +126,15 @@ run_adc_transfer() {
   local lora_nsamples=1024
   local lora_epochs=5
   local calibration_batches=100
-  local calibration_batch_size=4
+  local fq_cali_bsz=16
+  local adc_calibration_batch_size=4
   local calibration_length=512
   local max_eval_samples=1000
   local max_length=2048
   local stride=1024
   local -a eval_limit_args=()
   local -a optional_args=(
+    --fq_save_transforms
     --run_lm_eval
     --lm_eval_tasks hellaswag mmlu winogrande arc_easy arc_challenge piqa openbookqa boolq
     --lm_eval_batch_size auto
@@ -147,7 +149,8 @@ run_adc_transfer() {
     lora_nsamples=2
     lora_epochs=1
     calibration_batches=1
-    calibration_batch_size=1
+    fq_cali_bsz=1
+    adc_calibration_batch_size=1
     calibration_length=64
     max_eval_samples=2
     max_length=64
@@ -175,10 +178,12 @@ run_adc_transfer() {
     --fq_w_bits 4 \
     --fq_a_bits 4 \
     --fq_nsamples "${fq_nsamples}" \
-    --fq_cali_bsz "${calibration_batch_size}" \
+    --fq_cali_bsz "${fq_cali_bsz}" \
     --fq_epochs "${fq_epochs}" \
+    --fq_diag_mlp \
     --fq_stage_b_epochs "${stage_b_epochs}" \
     --fq_stage_b_prop_alpha 0.5 \
+    --fq_stage_b_diag_attn \
     --bx 4 \
     --bw 4 \
     --ba 8 \
@@ -187,7 +192,7 @@ run_adc_transfer() {
     --activation_quant symmetric \
     --calibration_dataset wikitext2 \
     --num_calibration_batches "${calibration_batches}" \
-    --calibration_batch_size "${calibration_batch_size}" \
+    --calibration_batch_size "${adc_calibration_batch_size}" \
     --calibration_max_length "${calibration_length}" \
     --eval_datasets wikitext2 c4 \
     --eval_split test \
