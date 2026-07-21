@@ -27,6 +27,7 @@ MODEL_IDS=(
 
 mkdir -p "$(dirname "${RESULTS_JSON}")" "${CHECKPOINT_ROOT}" "${LOG_ROOT}"
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 is_selected() {
   local key="$1"
@@ -81,6 +82,27 @@ run_logged() {
   "$@" 2>&1 | tee "${log_path}"
 }
 
+has_complete_pre_lora_metrics() {
+  local log_path="$1"
+  "${PYTHON_BIN}" - "${log_path}" <<'PY'
+import sys
+
+with open(sys.argv[1], encoding="utf-8", errors="replace") as handle:
+    text = handle.read()
+
+datasets = ("WIKITEXT2", "C4")
+tasks = (
+    "hellaswag", "mmlu", "winogrande", "arc_easy",
+    "arc_challenge", "piqa", "openbookqa", "boolq",
+)
+complete = (
+    all(f"BEFORE LoRA -> {dataset} Perplexity:" in text for dataset in datasets)
+    and all(f"lm-eval adc_ptq/{task}:" in text for task in tasks)
+)
+raise SystemExit(0 if complete else 1)
+PY
+}
+
 run_bf16() {
   local key="$1"
   local model_id="$2"
@@ -132,13 +154,21 @@ run_adc_transfer() {
   local max_eval_samples=1000
   local max_length=2048
   local stride=1024
+  local lora_microbatch_size="${LORA_MICROBATCH_SIZE:-4}"
+  local lora_gradient_accumulation_steps="${LORA_GRADIENT_ACCUMULATION_STEPS:-1}"
   local -a eval_limit_args=()
+  local -a resume_args=()
   local -a optional_args=(
     --fq_save_transforms
     --run_lm_eval
     --lm_eval_tasks hellaswag mmlu winogrande arc_easy arc_challenge piqa openbookqa boolq
     --lm_eval_batch_size auto
   )
+
+  if [[ "${key}" == "qwen25_15b" && -z "${LORA_MICROBATCH_SIZE+x}" ]]; then
+    lora_microbatch_size=2
+    lora_gradient_accumulation_steps=2
+  fi
 
   if [[ "${SMOKE}" == "1" ]]; then
     run_suffix="adc_transfer_smoke"
@@ -155,6 +185,8 @@ run_adc_transfer() {
     max_eval_samples=2
     max_length=64
     stride=32
+    lora_microbatch_size=1
+    lora_gradient_accumulation_steps=1
     eval_limit_args=(--max_eval_windows 8 --skip_model_save)
     optional_args=()
   fi
@@ -162,10 +194,20 @@ run_adc_transfer() {
   local run_name="${key}_${run_suffix}"
   local output_dir="${CHECKPOINT_ROOT}/${key}/${output_suffix}"
   local log_path="${LOG_ROOT}/${run_name}.log"
+  local transforms_path="${output_dir}/flat_quant_transforms.pt"
 
   if is_completed "${run_name}"; then
     echo "Skipping completed run: ${run_name}"
     return
+  fi
+
+  if [[ "${SMOKE}" != "1" && -f "${transforms_path}" ]]; then
+    resume_args=(--fq_reload_path "${transforms_path}" --fq_skip_stage_b_on_reload)
+    if [[ -f "${log_path}" ]] && has_complete_pre_lora_metrics "${log_path}"; then
+      local pre_lora_resume_log="${log_path%.log}.pre_lora_resume.log"
+      cp "${log_path}" "${pre_lora_resume_log}"
+      resume_args+=(--pre_lora_metrics_log "${pre_lora_resume_log}")
+    fi
   fi
 
   run_logged "${log_path}" \
@@ -208,6 +250,8 @@ run_adc_transfer() {
     --lora_loss ce_kl \
     --lora_kl_weight 0.5 \
     --lora_kl_temperature 2.0 \
+    --lora_microbatch_size "${lora_microbatch_size}" \
+    --lora_gradient_accumulation_steps "${lora_gradient_accumulation_steps}" \
     --eval_pre_lora \
     --enforce_transfer_quant_config \
     --disable_visualizations \
@@ -215,7 +259,8 @@ run_adc_transfer() {
     --wandb_run_name "${run_name}" \
     --results_json_path "${RESULTS_JSON}" \
     "${eval_limit_args[@]}" \
-    "${optional_args[@]}"
+    "${optional_args[@]}" \
+    "${resume_args[@]}"
 }
 
 echo "Results: ${RESULTS_JSON}"

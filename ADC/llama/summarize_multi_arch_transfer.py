@@ -122,6 +122,7 @@ def validate_adc_config(record: dict) -> list[str]:
         "lora_rank": 4,
         "lora_epochs": 5,
         "lora_loss": "ce_kl",
+        "lora_effective_batch_size": 4,
         "fq_epochs": 30,
         "fq_nsamples": 1024,
         "fq_cali_bsz": 16,

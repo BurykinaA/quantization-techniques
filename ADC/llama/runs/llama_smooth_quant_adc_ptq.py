@@ -1960,6 +1960,64 @@ def run_lm_evaluation(
     return metrics
 
 
+def load_pre_lora_metrics_from_log(
+    path: str,
+    expected_datasets: list[str],
+    expected_tasks: list[str],
+) -> tuple[dict, dict]:
+    """Recover completed pre-LoRA metrics when resuming after a later failure."""
+    import re
+
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        text = handle.read()
+
+    perplexity_metrics = {}
+    ppl_pattern = re.compile(
+        r"BEFORE LoRA -> ([A-Z0-9_]+) Perplexity: ([0-9.eE+-]+)"
+        r"\s+\(Loss: ([0-9.eE+-]+)\)"
+    )
+    for dataset_name, perplexity, avg_loss in ppl_pattern.findall(text):
+        perplexity_metrics[dataset_name.lower()] = {
+            "perplexity": float(perplexity),
+            "avg_loss": float(avg_loss),
+        }
+
+    downstream_metrics = {}
+    task_pattern = re.compile(
+        r"lm-eval adc_ptq/([^:]+): ([0-9.eE+-]+)% "
+        r"\((.+), ([0-9]+)-shot\)"
+    )
+    for task, accuracy_pct, metric_name, num_fewshot in task_pattern.findall(text):
+        accuracy = float(accuracy_pct) / 100.0
+        downstream_metrics[task] = {
+            "accuracy": accuracy,
+            "accuracy_pct": float(accuracy_pct),
+            "metric": metric_name,
+            "num_fewshot": int(num_fewshot),
+        }
+
+    missing_datasets = sorted(set(expected_datasets) - set(perplexity_metrics))
+    missing_tasks = sorted(set(expected_tasks) - set(downstream_metrics))
+    if missing_datasets or missing_tasks:
+        raise ValueError(
+            f"Incomplete pre-LoRA resume log {path}: "
+            f"missing_datasets={missing_datasets}, missing_tasks={missing_tasks}"
+        )
+
+    if expected_tasks:
+        mean_accuracy = (
+            sum(downstream_metrics[task]["accuracy"] for task in expected_tasks)
+            / len(expected_tasks)
+        )
+        downstream_metrics["mean"] = {
+            "accuracy": mean_accuracy,
+            "accuracy_pct": mean_accuracy * 100.0,
+            "num_tasks": len(expected_tasks),
+        }
+    logger.info("Recovered pre-LoRA PPL/downstream metrics from %s", path)
+    return perplexity_metrics, downstream_metrics
+
+
 def upsert_results_record(path: str, record: dict) -> None:
     """Atomically add or replace one run in the shared JSON result list."""
     import json
@@ -2156,14 +2214,22 @@ def main():
                         help="Weight λ for KL term in ce_kl loss: L = CE + λ·KL")
     parser.add_argument("--lora_kl_temperature", type=float, default=2.0,
                         help="Softmax temperature T for KL divergence")
+    parser.add_argument("--lora_microbatch_size", type=int, default=None,
+                        help="Physical LoRA batch on GPU (default: calibration loader batch)")
+    parser.add_argument("--lora_gradient_accumulation_steps", type=int, default=1,
+                        help="LoRA gradient accumulation steps")
     parser.add_argument("--eval_pre_lora", action="store_true",
                         help="Run WITH-ADC perplexity eval before applying LoRA "
                              "(measures perplexity before vs after LoRA in one run)")
+    parser.add_argument("--pre_lora_metrics_log", type=str, default=None,
+                        help="Reuse completed pre-LoRA metrics from a prior failed run log")
 
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
     parser.add_argument("--fq_reload_path", type=str, default=None,
                         help="Path to pre-trained FlatQuant transforms .pt file")
+    parser.add_argument("--fq_skip_stage_b_on_reload", action="store_true",
+                        help="Treat reloaded transforms as final and skip Stage B")
 
     # ADC settings
     parser.add_argument("--bx", type=int, default=8, help="Activation bits")
@@ -2305,6 +2371,18 @@ def main():
             for name, value in expected.items()
             if getattr(args, name) != value
         }
+        if args.max_eval_windows is None:
+            actual_lora_microbatch = (
+                args.lora_microbatch_size or args.calibration_batch_size
+            )
+            actual_lora_effective_batch = (
+                actual_lora_microbatch * args.lora_gradient_accumulation_steps
+            )
+            if actual_lora_effective_batch != 4:
+                mismatches["lora_effective_batch_size"] = {
+                    "expected": 4,
+                    "actual": actual_lora_effective_batch,
+                }
         expected_targets = {
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",
@@ -2803,7 +2881,12 @@ def main():
                     beta_param=args.fq_beta_param,
                 )
 
-            if args.fq_stage_b_epochs > 0:
+            if args.fq_reload_path and args.fq_skip_stage_b_on_reload:
+                logger.info("Reloaded transforms marked final; skipping FlatQuant Stage B")
+
+            if args.fq_stage_b_epochs > 0 and not (
+                args.fq_reload_path and args.fq_skip_stage_b_on_reload
+            ):
                 # Stage B diag selection:
                 # If --fq_stage_b_diag_attn or --fq_stage_b_diag_mlp are set, use those.
                 # Otherwise inherit Stage A diag settings.
@@ -3076,61 +3159,70 @@ def main():
     pre_lora_eval_metrics = {}    # per-dataset WITH-ADC metrics measured before LoRA
     pre_lora_downstream_metrics = {}
     if args.eval_pre_lora and args.lora_rank > 0:
-        # Apply the same context-window cap used for the post-LoRA eval so that
-        # the before/after numbers are directly comparable.
-        _model_max_length = getattr(model.config, 'max_position_embeddings', 4096)
-        if args.max_length > _model_max_length:
-            logger.warning(
-                f"max_length ({args.max_length}) > model's max ({_model_max_length}), "
-                f"using {_model_max_length}"
+        if args.pre_lora_metrics_log:
+            pre_lora_eval_metrics, pre_lora_downstream_metrics = (
+                load_pre_lora_metrics_from_log(
+                    args.pre_lora_metrics_log,
+                    expected_datasets=args.eval_datasets,
+                    expected_tasks=args.lm_eval_tasks if args.run_lm_eval else [],
+                )
             )
-            args.max_length = _model_max_length
+        else:
+            # Apply the same context-window cap used for the post-LoRA eval so that
+            # the before/after numbers are directly comparable.
+            _model_max_length = getattr(model.config, 'max_position_embeddings', 4096)
+            if args.max_length > _model_max_length:
+                logger.warning(
+                    f"max_length ({args.max_length}) > model's max ({_model_max_length}), "
+                    f"using {_model_max_length}"
+                )
+                args.max_length = _model_max_length
 
-        logger.info("=" * 80)
-        logger.info("STEP 2.35: PERPLEXITY EVALUATION (Sliding Window) -- BEFORE LoRA")
-        logger.info("=" * 80)
-        model.eval()
-        for _pre_ds in args.eval_datasets:
-            _pre_enc = load_and_tokenize_for_sliding_window(
-                _pre_ds, args.eval_split, tokenizer,
-                max_samples=args.max_eval_samples if _pre_ds == "c4" else None,
-            )
-            if _pre_enc is None:
-                logger.warning(f"Skipping pre-LoRA eval for {_pre_ds} (dataset unavailable).")
-                continue
-            _pre_enc = limit_sliding_window_encodings(
-                _pre_enc,
-                args.max_length,
-                args.stride,
-                args.max_eval_windows,
-            )
-            _pre_m = compute_perplexity_sliding_window(
-                model, _pre_enc, device,
-                max_length=args.max_length, stride=args.stride,
-                desc=f"PreLoRA eval {_pre_ds}",
-            )
-            pre_lora_eval_metrics[_pre_ds] = _pre_m
-            logger.info(
-                f"BEFORE LoRA -> {_pre_ds.upper()} Perplexity: {_pre_m['perplexity']:.4f}  "
-                f"(Loss: {_pre_m['avg_loss']:.4f})"
-            )
-        if use_wandb:
-            for _pre_ds, _pre_m in pre_lora_eval_metrics.items():
-                wandb.log({
-                    f"eval/prelora/{_pre_ds}/perplexity": _pre_m["perplexity"],
-                    f"eval/prelora/{_pre_ds}/avg_loss": _pre_m["avg_loss"],
-                })
-        if args.run_lm_eval:
-            pre_lora_downstream_metrics = run_lm_evaluation(
-                model,
-                tokenizer,
-                device,
-                tasks=args.lm_eval_tasks,
-                batch_size=args.lm_eval_batch_size,
-                limit=args.lm_eval_limit,
-                stage="adc_ptq",
-            )
-        logger.info("=" * 80)
+            logger.info("=" * 80)
+            logger.info("STEP 2.35: PERPLEXITY EVALUATION (Sliding Window) -- BEFORE LoRA")
+            logger.info("=" * 80)
+            model.eval()
+            for _pre_ds in args.eval_datasets:
+                _pre_enc = load_and_tokenize_for_sliding_window(
+                    _pre_ds, args.eval_split, tokenizer,
+                    max_samples=args.max_eval_samples if _pre_ds == "c4" else None,
+                )
+                if _pre_enc is None:
+                    logger.warning(f"Skipping pre-LoRA eval for {_pre_ds} (dataset unavailable).")
+                    continue
+                _pre_enc = limit_sliding_window_encodings(
+                    _pre_enc,
+                    args.max_length,
+                    args.stride,
+                    args.max_eval_windows,
+                )
+                _pre_m = compute_perplexity_sliding_window(
+                    model, _pre_enc, device,
+                    max_length=args.max_length, stride=args.stride,
+                    desc=f"PreLoRA eval {_pre_ds}",
+                )
+                pre_lora_eval_metrics[_pre_ds] = _pre_m
+                logger.info(
+                    f"BEFORE LoRA -> {_pre_ds.upper()} Perplexity: {_pre_m['perplexity']:.4f}  "
+                    f"(Loss: {_pre_m['avg_loss']:.4f})"
+                )
+            if use_wandb:
+                for _pre_ds, _pre_m in pre_lora_eval_metrics.items():
+                    wandb.log({
+                        f"eval/prelora/{_pre_ds}/perplexity": _pre_m["perplexity"],
+                        f"eval/prelora/{_pre_ds}/avg_loss": _pre_m["avg_loss"],
+                    })
+            if args.run_lm_eval:
+                pre_lora_downstream_metrics = run_lm_evaluation(
+                    model,
+                    tokenizer,
+                    device,
+                    tasks=args.lm_eval_tasks,
+                    batch_size=args.lm_eval_batch_size,
+                    limit=args.lm_eval_limit,
+                    stage="adc_ptq",
+                )
+            logger.info("=" * 80)
 
     # =========================================================================
     # STEP 2.4 (optional): ADC-LoRA post-correction
@@ -3163,6 +3255,8 @@ def main():
             teacher_name_or_path=args.model_name if args.lora_loss == "ce_kl" else None,
             kl_weight=args.lora_kl_weight,
             kl_temperature=args.lora_kl_temperature,
+            microbatch_size=args.lora_microbatch_size,
+            gradient_accumulation_steps=args.lora_gradient_accumulation_steps,
         )
         if use_wandb:
             wandb.log({
@@ -3559,6 +3653,14 @@ def main():
                 "lora_targets":          list(args.lora_target_modules),
                 "lora_epochs":           args.lora_epochs,
                 "lora_loss":             args.lora_loss,
+                "lora_microbatch_size":  args.lora_microbatch_size,
+                "lora_gradient_accumulation_steps": (
+                    args.lora_gradient_accumulation_steps
+                ),
+                "lora_effective_batch_size": (
+                    (args.lora_microbatch_size or args.calibration_batch_size)
+                    * args.lora_gradient_accumulation_steps
+                ),
                 "adc_mult_noise_std":    getattr(args, "adc_mult_noise_std", 0.0),
                 "fq_stage_b_noise_std":  getattr(args, "fq_stage_b_noise_std", 0.0),
                 "fq_stage_b_epochs":     args.fq_stage_b_epochs,

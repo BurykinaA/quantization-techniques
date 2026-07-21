@@ -21,7 +21,8 @@ The historical `run_perplexity_all_models.sh` and
 - propagated Stage B: 10 epochs, `alpha=0.5`, attention diagonal training
 - ADC scale calibration batch size 4
 - post-ADC LoRA: rank 4, all seven projections, 5 epochs, CE + KL,
-  calibration batch size 16
+  effective batch size 4. Qwen uses microbatch 2 with two gradient-accumulation
+  steps because physical batch 4 exceeds an 80 GB GPU after ADC expansion.
 - WikiText-2 `test` and the existing C4 `test` to `validation` mapping
 - context 2048, stride 1024, 1000 C4 samples
 - downstream: HellaSwag, MMLU, WinoGrande, ARC-Easy, ARC-Challenge,
@@ -100,6 +101,20 @@ Each model produces one BF16 record and one quantized record. The quantized
 record includes bypass, pre-LoRA ADC-PTQ, and post-LoRA ADC metrics. A run is
 skipped only when the shared JSON contains a successful record with the same
 run name.
+
+If a run fails after `flat_quant_transforms.pt` was written, rerunning the same
+command reloads those final transforms and skips both FlatQuant stages. When the
+old log contains the complete pre-LoRA PPL and downstream results, the runner
+copies and reuses them instead of repeating the long MMLU evaluation.
+
+The LoRA microbatch can be reduced further while retaining the fixed effective
+batch size 4:
+
+```bash
+ONLY=qwen25_15b SKIP_COMPLETED=1 \
+LORA_MICROBATCH_SIZE=1 LORA_GRADIENT_ACCUMULATION_STEPS=4 \
+  bash ADC/llama/run_multi_arch_transfer.sh
+```
 
 ## Validate and format results
 

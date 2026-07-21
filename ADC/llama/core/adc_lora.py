@@ -255,6 +255,8 @@ def calibrate_adc_lora(
     teacher_name_or_path: str | None = None,
     kl_weight: float = 0.5,
     kl_temperature: float = 2.0,
+    microbatch_size: int | None = None,
+    gradient_accumulation_steps: int = 1,
 ) -> nn.Module:
     """
     Fine-tune LoRA adapters.
@@ -297,61 +299,114 @@ def calibrate_adc_lora(
             for p in teacher.parameters():
                 p.requires_grad_(False)
 
-    # Collect calibration batches
+    if microbatch_size is not None and microbatch_size < 1:
+        raise ValueError("microbatch_size must be at least 1")
+    if gradient_accumulation_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be at least 1")
+
+    # Collect calibration batches on CPU. Moving one microbatch at a time to
+    # CUDA avoids retaining the entire LoRA calibration set on the GPU.
     samples = []
     for batch in dataloader:
         if len(samples) * cali_bsz >= nsamples:
             break
-        input_ids = batch["input_ids"].to(device)
+        input_ids = batch["input_ids"].cpu()
         attention_mask = batch.get("attention_mask")
         if attention_mask is not None:
-            attention_mask = attention_mask.to(device)
+            attention_mask = attention_mask.cpu()
         samples.append((input_ids, attention_mask))
 
-    print(f"[ADC-LoRA] Training {epochs} epochs on {len(samples)} batches  "
-          f"lr={lora_lr}  loss={lora_loss}")
+    if not samples:
+        raise ValueError("LoRA calibration dataloader produced no samples")
 
+    physical_batch_size = samples[0][0].shape[0]
+    if microbatch_size is not None and microbatch_size > physical_batch_size:
+        raise ValueError(
+            f"microbatch_size={microbatch_size} exceeds calibration loader batch "
+            f"size {physical_batch_size}"
+        )
+    effective_microbatch_size = microbatch_size or physical_batch_size
+    effective_batch_size = effective_microbatch_size * gradient_accumulation_steps
+    print(f"[ADC-LoRA] Training {epochs} epochs on {len(samples)} batches  "
+          f"lr={lora_lr}  loss={lora_loss}  "
+          f"microbatch={effective_microbatch_size}  "
+          f"grad_accum={gradient_accumulation_steps}  "
+          f"effective_batch={effective_batch_size}")
+
+    use_cache = getattr(model.config, "use_cache", None)
+    if use_cache is not None:
+        model.config.use_cache = False
     model.train()
     for epoch in range(epochs):
         total_loss = 0.0
-        for input_ids, attention_mask in samples:
-            labels = input_ids.clone()
-            if attention_mask is not None:
-                labels[attention_mask == 0] = -100
+        microbatch_count = 0
+        optimizer.zero_grad(set_to_none=True)
+        for batch_input_ids, batch_attention_mask in samples:
+            for start in range(0, batch_input_ids.shape[0], effective_microbatch_size):
+                end = start + effective_microbatch_size
+                input_ids = batch_input_ids[start:end].to(device)
+                attention_mask = (
+                    batch_attention_mask[start:end].to(device)
+                    if batch_attention_mask is not None
+                    else None
+                )
+                labels = input_ids.clone()
+                if attention_mask is not None:
+                    labels[attention_mask == 0] = -100
 
-            outputs = model(input_ids=input_ids,
-                            attention_mask=attention_mask,
-                            labels=labels)
-            ce_loss = outputs.loss
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                    use_cache=False,
+                )
+                ce_loss = outputs.loss
 
-            if lora_loss == "ce_kl" and teacher is not None:
-                with torch.no_grad():
-                    t_out = teacher(
-                        input_ids=input_ids.cpu(),
-                        attention_mask=attention_mask.cpu() if attention_mask is not None else None,
-                    )
-                    teacher_logits = t_out.logits.to(device).float()
-                student_logits = outputs.logits.float()
-                kl = F.kl_div(
-                    F.log_softmax(student_logits / kl_temperature, dim=-1),
-                    F.softmax(teacher_logits  / kl_temperature, dim=-1),
-                    reduction="batchmean",
-                ) * (kl_temperature ** 2)
-                loss = ce_loss + kl_weight * kl
-            else:
-                loss = ce_loss
+                if lora_loss == "ce_kl" and teacher is not None:
+                    with torch.no_grad():
+                        t_out = teacher(
+                            input_ids=batch_input_ids[start:end],
+                            attention_mask=(
+                                batch_attention_mask[start:end]
+                                if batch_attention_mask is not None
+                                else None
+                            ),
+                            use_cache=False,
+                        )
+                        teacher_logits = t_out.logits.to(device).float()
+                    student_logits = outputs.logits.float()
+                    kl = F.kl_div(
+                        F.log_softmax(student_logits / kl_temperature, dim=-1),
+                        F.softmax(teacher_logits / kl_temperature, dim=-1),
+                        reduction="batchmean",
+                    ) * (kl_temperature ** 2)
+                    loss = ce_loss + kl_weight * kl
+                else:
+                    loss = ce_loss
 
-            optimizer.zero_grad()
-            loss.backward()
+                total_loss += loss.detach().item()
+                (loss / gradient_accumulation_steps).backward()
+                microbatch_count += 1
+                if microbatch_count % gradient_accumulation_steps == 0:
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+
+                del input_ids, attention_mask, labels, outputs, ce_loss, loss
+                if lora_loss == "ce_kl" and teacher is not None:
+                    del t_out, teacher_logits, student_logits, kl
+
+        if microbatch_count % gradient_accumulation_steps != 0:
             optimizer.step()
-            total_loss += loss.item()
+            optimizer.zero_grad(set_to_none=True)
 
         print(f"[ADC-LoRA] Epoch {epoch + 1}/{epochs}  "
-              f"avg loss={total_loss / len(samples):.4f}")
+              f"avg loss={total_loss / max(microbatch_count, 1):.4f}")
 
     if teacher is not None:
         del teacher
         torch.cuda.empty_cache()
 
+    if use_cache is not None:
+        model.config.use_cache = use_cache
     model.eval()
     return model
