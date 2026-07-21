@@ -208,7 +208,7 @@ run_adc_transfer() {
     return
   fi
 
-  if [[ "${SMOKE}" != "1" && "${FQ_START_STAGE_B}" == "1" ]]; then
+  if [[ "${FQ_START_STAGE_B}" == "1" ]]; then
     if [[ -n "${FQ_STAGE_A_PATH}" ]]; then
       stage_a_transforms_path="${FQ_STAGE_A_PATH}"
     fi

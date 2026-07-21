@@ -134,6 +134,18 @@ SKIP_COMPLETED=0 \
 Use `FORCE_FQ_RETRAIN=1` to ignore an existing final transform checkpoint and
 train a fresh Stage A.
 
+The save-and-resume path can be checked quickly with TinyLlama. The first
+command creates a new Stage A checkpoint using two samples; the second command
+loads that checkpoint, skips Stage A, and runs the one-epoch smoke Stage B:
+
+```bash
+SMOKE=1 ONLY=tinyllama_11b FORCE_FQ_RETRAIN=1 SKIP_COMPLETED=0 \
+  bash ADC/llama/run_multi_arch_transfer.sh
+
+SMOKE=1 ONLY=tinyllama_11b FQ_START_STAGE_B=1 SKIP_COMPLETED=0 \
+  bash ADC/llama/run_multi_arch_transfer.sh
+```
+
 The first Qwen transforms produced before best-epoch selection are intentionally
 ignored. Qwen retrains into `adc_transfer_best_epoch_v2`. Before the expensive
 downstream suite and LoRA, the full runner aborts if pre-LoRA perplexity exceeds
