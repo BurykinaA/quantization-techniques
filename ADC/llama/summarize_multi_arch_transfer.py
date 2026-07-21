@@ -136,6 +136,7 @@ def validate_adc_config(record: dict) -> list[str]:
         "max_length": 2048,
         "stride": 1024,
         "max_eval_samples": 1000,
+        "pre_lora_ppl_threshold": 500.0,
     }
     mismatches = []
     for name, value in expected.items():

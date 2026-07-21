@@ -2223,6 +2223,9 @@ def main():
                              "(measures perplexity before vs after LoRA in one run)")
     parser.add_argument("--pre_lora_metrics_log", type=str, default=None,
                         help="Reuse completed pre-LoRA metrics from a prior failed run log")
+    parser.add_argument("--pre_lora_ppl_threshold", type=float, default=None,
+                        help="Abort before downstream evaluation/LoRA when pre-LoRA PPL "
+                             "exceeds this quality guard")
 
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
@@ -3212,17 +3215,29 @@ def main():
                         f"eval/prelora/{_pre_ds}/perplexity": _pre_m["perplexity"],
                         f"eval/prelora/{_pre_ds}/avg_loss": _pre_m["avg_loss"],
                     })
-            if args.run_lm_eval:
-                pre_lora_downstream_metrics = run_lm_evaluation(
-                    model,
-                    tokenizer,
-                    device,
-                    tasks=args.lm_eval_tasks,
-                    batch_size=args.lm_eval_batch_size,
-                    limit=args.lm_eval_limit,
-                    stage="adc_ptq",
+        if args.pre_lora_ppl_threshold is not None:
+            failed_quality = {
+                dataset_name: metrics["perplexity"]
+                for dataset_name, metrics in pre_lora_eval_metrics.items()
+                if metrics["perplexity"] > args.pre_lora_ppl_threshold
+            }
+            if failed_quality:
+                raise RuntimeError(
+                    "Pre-LoRA quality guard failed; refusing to spend time on "
+                    f"downstream evaluation/LoRA: threshold="
+                    f"{args.pre_lora_ppl_threshold}, measured={failed_quality}"
                 )
-            logger.info("=" * 80)
+        if args.run_lm_eval and not pre_lora_downstream_metrics:
+            pre_lora_downstream_metrics = run_lm_evaluation(
+                model,
+                tokenizer,
+                device,
+                tasks=args.lm_eval_tasks,
+                batch_size=args.lm_eval_batch_size,
+                limit=args.lm_eval_limit,
+                stage="adc_ptq",
+            )
+        logger.info("=" * 80)
 
     # =========================================================================
     # STEP 2.4 (optional): ADC-LoRA post-correction
@@ -3681,6 +3696,7 @@ def main():
                 "stride":                args.stride or args.max_length // 2,
                 "max_eval_samples":      args.max_eval_samples,
                 "max_eval_windows":      args.max_eval_windows,
+                "pre_lora_ppl_threshold": args.pre_lora_ppl_threshold,
             },
             "results": {
                 "ppl_bypass":            float(_diag_metrics["perplexity"]) if _diag_metrics else None,

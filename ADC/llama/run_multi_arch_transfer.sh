@@ -157,6 +157,7 @@ run_adc_transfer() {
   local lora_microbatch_size="${LORA_MICROBATCH_SIZE:-4}"
   local lora_gradient_accumulation_steps="${LORA_GRADIENT_ACCUMULATION_STEPS:-1}"
   local -a eval_limit_args=()
+  local -a quality_guard_args=(--pre_lora_ppl_threshold 500)
   local -a resume_args=()
   local -a optional_args=(
     --fq_save_transforms
@@ -166,6 +167,7 @@ run_adc_transfer() {
   )
 
   if [[ "${key}" == "qwen25_15b" && -z "${LORA_MICROBATCH_SIZE+x}" ]]; then
+    output_suffix="adc_transfer_best_epoch_v2"
     lora_microbatch_size=2
     lora_gradient_accumulation_steps=2
   fi
@@ -188,6 +190,7 @@ run_adc_transfer() {
     lora_microbatch_size=1
     lora_gradient_accumulation_steps=1
     eval_limit_args=(--max_eval_windows 8 --skip_model_save)
+    quality_guard_args=()
     optional_args=()
   fi
 
@@ -259,6 +262,7 @@ run_adc_transfer() {
     --wandb_run_name "${run_name}" \
     --results_json_path "${RESULTS_JSON}" \
     "${eval_limit_args[@]}" \
+    "${quality_guard_args[@]}" \
     "${optional_args[@]}" \
     "${resume_args[@]}"
 }

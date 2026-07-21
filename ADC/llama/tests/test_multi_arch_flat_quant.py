@@ -8,8 +8,12 @@ import torch.nn as nn
 
 from ADC.llama.core.adc_layers import TiledLinearADC
 from ADC.llama.core.flat_quant import (
+    FlatQuantLinear,
     KroneckerTransform,
+    _project_flatquant_parameters,
     _reparameterize_ln,
+    apply_flatquant_to_model,
+    reparameterize_model,
     validate_model_layout,
 )
 
@@ -82,6 +86,19 @@ def test_non_affine_norm_keeps_diagonal_active() -> None:
     torch.testing.assert_close(transform.diag_scale, diagonal_before)
 
 
+def test_transform_projection_bounds_both_directions() -> None:
+    transform = KroneckerTransform(8, add_diag=True)
+    transform.diag_left.data.fill_(0.001)
+    transform.diag_right.data.fill_(100.0)
+    transform.diag_scale.data[0] = 100.0
+
+    _project_flatquant_parameters(transform)
+
+    assert transform.diag_left.min().item() == pytest.approx(0.1)
+    assert transform.diag_right.max().item() == pytest.approx(10.0)
+    assert transform.diag_scale.max().item() == pytest.approx(10.0)
+
+
 @pytest.mark.parametrize(
     ("model_type", "affine_norm", "attention_bias"),
     [
@@ -140,3 +157,93 @@ def test_tiled_adc_preserves_qwen_style_linear_bias() -> None:
     assert tiled.tiles[1].bias is None
     torch.testing.assert_close(tiled.tiles[0].bias, linear.bias)
     torch.testing.assert_close(tiled(inputs), linear(inputs))
+
+
+def test_qwen_style_adc_training_path_matches_tiled_inference() -> None:
+    torch.manual_seed(7)
+    linear = nn.Linear(12, 8, bias=True)
+    adc_config = {
+        "bx": 4,
+        "bw": 4,
+        "ba": 8,
+        "k": 16,
+        "mvm_limit": 3,
+        "signed_activations": True,
+    }
+    flat_linear = FlatQuantLinear(
+        linear,
+        w_bits=4,
+        a_bits=4,
+        lwc=False,
+        lac=False,
+        adc_config=adc_config,
+    )
+    tiled = TiledLinearADC(
+        in_features=12,
+        out_features=8,
+        bias=True,
+        bx=4,
+        bw=4,
+        ba=8,
+        k=16,
+        signed_activations=True,
+        mvm_limit=3,
+    )
+    tiled.load_weights(linear)
+    for tile in tiled.tiles:
+        scales = tile.weight.detach().abs().amax(dim=1).clamp(min=1e-8) / 7.0
+        tile.weight_quantizer.scale.data = scales.clone()
+        tile.weight_quantizer._scale_initialized = True
+
+    inputs = torch.randn(2, 5, 12)
+    expected = flat_linear.train_forward(inputs)
+    actual = tiled(inputs)
+
+    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-5)
+
+
+def test_tiny_qwen_reparameterization_preserves_fp_logits() -> None:
+    transformers = pytest.importorskip("transformers")
+    qwen_config_class = getattr(transformers, "Qwen2Config", None)
+    qwen_model_class = getattr(transformers, "Qwen2ForCausalLM", None)
+    if qwen_config_class is None or qwen_model_class is None:
+        pytest.skip("Installed transformers does not expose Qwen2")
+
+    torch.manual_seed(11)
+    config = qwen_config_class(
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        max_position_embeddings=64,
+        attention_dropout=0.0,
+    )
+    model = qwen_model_class(config).eval()
+    input_ids = torch.randint(0, config.vocab_size, (2, 12))
+    attention_mask = torch.ones_like(input_ids)
+
+    with torch.no_grad():
+        expected = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        ).logits
+
+    apply_flatquant_to_model(
+        model,
+        w_bits=16,
+        a_bits=16,
+        add_diag=True,
+        lwc=False,
+        lac=False,
+    )
+    reparameterize_model(model)
+
+    with torch.no_grad():
+        actual = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        ).logits
+
+    torch.testing.assert_close(actual, expected, rtol=2e-4, atol=2e-4)

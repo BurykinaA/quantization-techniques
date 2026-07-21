@@ -19,6 +19,8 @@ The historical `run_perplexity_all_models.sh` and
 - FlatQuant Stage A: 1024 samples, 30 epochs, calibration batch size 16,
   MLP diagonal training
 - propagated Stage B: 10 epochs, `alpha=0.5`, attention diagonal training
+- each layer restores the checkpoint with the best fixed-batch validation
+  objective; transform singular values are bounded to prevent late-layer drift
 - ADC scale calibration batch size 4
 - post-ADC LoRA: rank 4, all seven projections, 5 epochs, CE + KL,
   effective batch size 4. Qwen uses microbatch 2 with two gradient-accumulation
@@ -106,6 +108,11 @@ If a run fails after `flat_quant_transforms.pt` was written, rerunning the same
 command reloads those final transforms and skips both FlatQuant stages. When the
 old log contains the complete pre-LoRA PPL and downstream results, the runner
 copies and reuses them instead of repeating the long MMLU evaluation.
+
+The first Qwen transforms produced before best-epoch selection are intentionally
+ignored. Qwen retrains into `adc_transfer_best_epoch_v2`. Before the expensive
+downstream suite and LoRA, the full runner aborts if pre-LoRA perplexity exceeds
+500, so a collapsed PTQ checkpoint cannot consume another multi-hour evaluation.
 
 The LoRA microbatch can be reduced further while retaining the fixed effective
 batch size 4:

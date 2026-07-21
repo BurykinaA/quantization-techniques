@@ -1171,6 +1171,19 @@ def strip_flatquant_wrappers(model: nn.Module) -> nn.Module:
 # Part 5b — Layer-by-layer MSE Calibration  (core training loop)
 # =========================================================================
 
+
+def _project_flatquant_parameters(module: nn.Module) -> None:
+    """Bound transform scales after an optimizer step."""
+    with torch.no_grad():
+        for name, parameter in module.named_parameters():
+            if "diag_left" in name or "diag_right" in name:
+                parameter.data.clamp_(min=0.1, max=10.0)
+            elif "diag_scale" in name:
+                parameter.data.clamp_(min=1e-4, max=10.0)
+            elif "raw_alpha_adc" in name:
+                parameter.data.clamp_(min=-2.25, max=100.0)
+
+
 def calibrate_flat_quant(
     model: nn.Module,
     dataloader,
@@ -1502,6 +1515,69 @@ def calibrate_flat_quant(
             _layer_alpha = prop_alpha_early
 
         n_batches = actual_nsamples // cali_bsz
+        validation_batches = min(4, n_batches)
+
+        def _validation_objective() -> float:
+            """Evaluate fixed clean/propagated batches without updating parameters."""
+            total = 0.0
+            with torch.no_grad():
+                for validation_index in range(validation_batches):
+                    start = validation_index * cali_bsz
+                    reference = fp_outs[start:start + cali_bsz]
+                    with traincast():
+                        if propagate_quant_inputs and 0.0 < _layer_alpha < 1.0:
+                            clean_output = layer(
+                                fp_inps[start:start + cali_bsz],
+                                **batch_kwargs,
+                            )
+                            clean_hidden = (
+                                clean_output[0]
+                                if isinstance(clean_output, tuple)
+                                else clean_output
+                            )
+                            quant_output = layer(
+                                quant_inps[start:start + cali_bsz],
+                                **batch_kwargs,
+                            )
+                            quant_hidden = (
+                                quant_output[0]
+                                if isinstance(quant_output, tuple)
+                                else quant_output
+                            )
+                            objective = (
+                                (1.0 - _layer_alpha)
+                                * loss_func(reference, clean_hidden)
+                                + _layer_alpha
+                                * loss_func(reference, quant_hidden)
+                            )
+                        else:
+                            validation_inputs = (
+                                quant_inps[start:start + cali_bsz]
+                                if propagate_quant_inputs and _layer_alpha > 0.0
+                                else fp_inps[start:start + cali_bsz]
+                            )
+                            output = layer(validation_inputs, **batch_kwargs)
+                            hidden = output[0] if isinstance(output, tuple) else output
+                            objective = loss_func(reference, hidden)
+                    total += objective.float().item()
+            return total / max(validation_batches, 1)
+
+        trainable_parameters = {
+            name: parameter
+            for name, parameter in layer.named_parameters()
+            if parameter.requires_grad
+        }
+        best_validation = _validation_objective()
+        best_parameters = {
+            name: parameter.detach().clone()
+            for name, parameter in trainable_parameters.items()
+        }
+        best_epoch = -1
+        logger.info(
+            "  layer %d initial validation objective=%.4e",
+            i,
+            best_validation,
+        )
 
         # Attach forward hooks to catch the first NaN-producing tensor (only
         # on the first NaN batch so we don't spam the log).
@@ -1655,27 +1731,14 @@ def calibrate_flat_quant(
                 torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
                 optimizer.step()
                 # Project diag parameters to stay in safe range.
-                # diag_left/diag_right: ≥ 0.1 → T⁻¹ amplifies weights ≤ 10×.
+                # diag_left/diag_right: [0.1, 10] bounds both forward and inverse
+                # amplification. This matters in deep decoders where a few late-layer
+                # transforms can otherwise dominate the accumulated W4A4 error.
                 # diag_scale: absorbed into LayerNorm at reparameterize time,
                 #   so large values create large inference activations → huge
                 #   per-tile act_scale → typical activations round to 0.
                 #   Clamp to [1e-4, 10] to keep inference activation scales sane.
-                # Project diag parameters to stay in safe range.
-                # diag_left/diag_right: ≥ 0.1 → T⁻¹ amplifies weights ≤ 10×.
-                # diag_scale: absorbed into LayerNorm at reparameterize time,
-                #   so large values create large inference activations → huge
-                #   per-tile act_scale → typical activations round to 0.
-                #   Clamp to [1e-4, 10] to keep inference activation scales sane.
-                with torch.no_grad():
-                    for name, param in layer.named_parameters():
-                        if "diag_left" in name or "diag_right" in name:
-                            param.data.clamp_(min=0.1)
-                        elif "diag_scale" in name:
-                            param.data.clamp_(min=1e-4, max=10.0)
-                        elif "raw_alpha_adc" in name:
-                            # Keep alpha = softplus(raw) in [0.1, 100]
-                            # softplus^{-1}(0.1) ≈ -2.25, softplus^{-1}(100) ≈ 100
-                            param.data.clamp_(min=-2.25, max=100.0)
+                _project_flatquant_parameters(layer)
                 scheduler.step()
                 _pf: dict = dict(
                     loss=f"{loss.item():.3e}",
@@ -1715,6 +1778,29 @@ def calibrate_flat_quant(
                 f"  layer {i} epoch {epoch}, lr={lr:.8f}, "
                 f"mse={epoch_mse:.4e}, ok_batches={ok}/{n_batches}{_log_extra}"
             )
+            validation_objective = _validation_objective()
+            logger.info(
+                "  layer %d epoch %d validation objective=%.4e",
+                i,
+                epoch,
+                validation_objective,
+            )
+            if math.isfinite(validation_objective) and validation_objective < best_validation:
+                best_validation = validation_objective
+                best_epoch = epoch
+                with torch.no_grad():
+                    for name, parameter in trainable_parameters.items():
+                        best_parameters[name].copy_(parameter)
+
+        with torch.no_grad():
+            for name, parameter in trainable_parameters.items():
+                parameter.copy_(best_parameters[name])
+        logger.info(
+            "  layer %d restored best checkpoint: epoch=%s validation=%.4e",
+            i,
+            "initial" if best_epoch < 0 else best_epoch,
+            best_validation,
+        )
         # Log diag parameter ranges to catch blow-up early
         for name, param in layer.named_parameters():
             if "diag_scale" in name or "diag_left" in name or "diag_right" in name:
