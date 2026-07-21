@@ -13,7 +13,9 @@ from ADC.llama.core.flat_quant import (
     _project_flatquant_parameters,
     _reparameterize_ln,
     apply_flatquant_to_model,
+    load_flat_transforms,
     reparameterize_model,
+    save_flat_transforms,
     validate_model_layout,
 )
 
@@ -134,6 +136,28 @@ def test_layout_validation_rejects_missing_projection() -> None:
 
     with pytest.raises(ValueError, match="q_proj"):
         validate_model_layout(model)
+
+
+def test_stage_a_transform_checkpoint_roundtrip(tmp_path) -> None:
+    model = DummyCausalLM(DummyDecoderLayer(), model_type="llama")
+    apply_flatquant_to_model(
+        model,
+        w_bits=4,
+        a_bits=4,
+        add_diag=True,
+        lwc=True,
+        lac=True,
+    )
+    expected = torch.linspace(0.5, 1.5, 8)
+    transform = model.model.layers[0].self_attn.ln_trans
+    transform.diag_scale.data.copy_(expected)
+    checkpoint_path = tmp_path / "flat_quant_transforms_stage_a.pt"
+
+    save_flat_transforms(model, str(checkpoint_path))
+    transform.diag_scale.data.fill_(1.0)
+    load_flat_transforms(model, str(checkpoint_path))
+
+    torch.testing.assert_close(transform.diag_scale, expected)
 
 
 def test_tiled_adc_preserves_qwen_style_linear_bias() -> None:

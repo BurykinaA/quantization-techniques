@@ -109,6 +109,31 @@ command reloads those final transforms and skips both FlatQuant stages. When the
 old log contains the complete pre-LoRA PPL and downstream results, the runner
 copies and reuses them instead of repeating the long MMLU evaluation.
 
+Every newly trained Stage A is saved immediately, before Stage B starts:
+
+```text
+<output_dir>/flat_quant_transforms_stage_a.pt
+```
+
+To restart at Stage B without repeating Stage A:
+
+```bash
+ONLY=tinyllama_11b FQ_START_STAGE_B=1 SKIP_COMPLETED=0 \
+  bash ADC/llama/run_multi_arch_transfer.sh
+```
+
+For a Stage A checkpoint outside the runner's standard output directory:
+
+```bash
+ONLY=tinyllama_11b FQ_START_STAGE_B=1 \
+FQ_STAGE_A_PATH=/remote/checkpoints/flat_quant_transforms_stage_a.pt \
+SKIP_COMPLETED=0 \
+  bash ADC/llama/run_multi_arch_transfer.sh
+```
+
+Use `FORCE_FQ_RETRAIN=1` to ignore an existing final transform checkpoint and
+train a fresh Stage A.
+
 The first Qwen transforms produced before best-epoch selection are intentionally
 ignored. Qwen retrains into `adc_transfer_best_epoch_v2`. Before the expensive
 downstream suite and LoRA, the full runner aborts if pre-LoRA perplexity exceeds

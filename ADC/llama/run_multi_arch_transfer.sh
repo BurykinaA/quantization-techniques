@@ -8,6 +8,9 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 SMOKE="${SMOKE:-0}"
 ONLY="${ONLY:-}"
 SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
+FQ_START_STAGE_B="${FQ_START_STAGE_B:-0}"
+FQ_STAGE_A_PATH="${FQ_STAGE_A_PATH:-}"
+FORCE_FQ_RETRAIN="${FORCE_FQ_RETRAIN:-0}"
 RESULTS_JSON="${RESULTS_JSON:-${SCRIPT_DIR}/transfer_results/multi_arch_transfer.json}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-${SCRIPT_DIR}/transfer_results/checkpoints}"
 LOG_ROOT="${LOG_ROOT:-${SCRIPT_DIR}/transfer_results/logs}"
@@ -198,13 +201,23 @@ run_adc_transfer() {
   local output_dir="${CHECKPOINT_ROOT}/${key}/${output_suffix}"
   local log_path="${LOG_ROOT}/${run_name}.log"
   local transforms_path="${output_dir}/flat_quant_transforms.pt"
+  local stage_a_transforms_path="${output_dir}/flat_quant_transforms_stage_a.pt"
 
   if is_completed "${run_name}"; then
     echo "Skipping completed run: ${run_name}"
     return
   fi
 
-  if [[ "${SMOKE}" != "1" && -f "${transforms_path}" ]]; then
+  if [[ "${SMOKE}" != "1" && "${FQ_START_STAGE_B}" == "1" ]]; then
+    if [[ -n "${FQ_STAGE_A_PATH}" ]]; then
+      stage_a_transforms_path="${FQ_STAGE_A_PATH}"
+    fi
+    if [[ ! -f "${stage_a_transforms_path}" ]]; then
+      echo "Stage A checkpoint not found: ${stage_a_transforms_path}" >&2
+      return 1
+    fi
+    resume_args=(--fq_start_stage_b_from "${stage_a_transforms_path}")
+  elif [[ "${SMOKE}" != "1" && "${FORCE_FQ_RETRAIN}" != "1" && -f "${transforms_path}" ]]; then
     resume_args=(--fq_reload_path "${transforms_path}" --fq_skip_stage_b_on_reload)
     if [[ -f "${log_path}" ]] && has_complete_pre_lora_metrics "${log_path}"; then
       local pre_lora_resume_log="${log_path%.log}.pre_lora_resume.log"
@@ -268,7 +281,7 @@ run_adc_transfer() {
 }
 
 echo "Results: ${RESULTS_JSON}"
-echo "Mode: SMOKE=${SMOKE} ONLY=${ONLY:-all} SKIP_COMPLETED=${SKIP_COMPLETED}"
+echo "Mode: SMOKE=${SMOKE} ONLY=${ONLY:-all} SKIP_COMPLETED=${SKIP_COMPLETED} FQ_START_STAGE_B=${FQ_START_STAGE_B} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN}"
 
 for index in "${!MODEL_KEYS[@]}"; do
   key="${MODEL_KEYS[${index}]}"

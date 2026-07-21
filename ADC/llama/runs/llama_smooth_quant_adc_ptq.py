@@ -2231,6 +2231,9 @@ def main():
                         help="Save trained FlatQuant transforms to output_dir")
     parser.add_argument("--fq_reload_path", type=str, default=None,
                         help="Path to pre-trained FlatQuant transforms .pt file")
+    parser.add_argument("--fq_start_stage_b_from", type=str, default=None,
+                        help="Load a Stage A transform checkpoint, skip Stage A, "
+                             "and continue with Stage B")
     parser.add_argument("--fq_skip_stage_b_on_reload", action="store_true",
                         help="Treat reloaded transforms as final and skip Stage B")
 
@@ -2336,6 +2339,17 @@ def main():
                              "type is the bottleneck. Reuses layer_ablation_max_windows.")
 
     args = parser.parse_args()
+    if args.fq_start_stage_b_from:
+        if args.fq_reload_path:
+            parser.error("--fq_start_stage_b_from and --fq_reload_path are mutually exclusive")
+        if args.fq_skip_stage_b_on_reload:
+            parser.error(
+                "--fq_start_stage_b_from cannot be combined with "
+                "--fq_skip_stage_b_on_reload"
+            )
+        if args.fq_stage_b_epochs <= 0:
+            parser.error("--fq_start_stage_b_from requires --fq_stage_b_epochs > 0")
+        args.fq_reload_path = args.fq_start_stage_b_from
     set_seed(args.seed)
 
     if args.enforce_transfer_quant_config:
@@ -2490,6 +2504,7 @@ def main():
                 "fq_lwc": args.fq_lwc,
                 "fq_lac": args.fq_lac,
                 "fq_reload_path": args.fq_reload_path,
+                "fq_start_stage_b_from": args.fq_start_stage_b_from,
                 "bx": args.bx,
                 "bw": args.bw,
                 "ba": args.ba,
@@ -2883,6 +2898,20 @@ def main():
                     stochastic_mode=args.fq_stochastic_mode,
                     beta_param=args.fq_beta_param,
                 )
+                os.makedirs(args.output_dir, exist_ok=True)
+                stage_a_transforms_path = os.path.join(
+                    args.output_dir,
+                    "flat_quant_transforms_stage_a.pt",
+                )
+                save_flat_transforms(model, stage_a_transforms_path)
+                logger.info(
+                    "Stage A transforms saved before Stage B: %s",
+                    stage_a_transforms_path,
+                )
+                if use_wandb:
+                    wandb.run.summary["fq_stage_a_transforms_path"] = (
+                        stage_a_transforms_path
+                    )
 
             if args.fq_reload_path and args.fq_skip_stage_b_on_reload:
                 logger.info("Reloaded transforms marked final; skipping FlatQuant Stage B")
@@ -3690,6 +3719,7 @@ def main():
                 "fq_lambda_center":      getattr(args, "fq_lambda_center", 0.0),
                 "fq_propagate_quant":    getattr(args, "fq_propagate_quant", False),
                 "fq_kronecker_init":     getattr(args, "fq_kronecker_init", "random"),
+                "fq_start_stage_b_from": args.fq_start_stage_b_from,
                 "calibration_batch_size": args.calibration_batch_size,
                 "eval_datasets":         list(args.eval_datasets),
                 "max_length":            args.max_length,
