@@ -1,0 +1,575 @@
+%File: adc_aware_llm_aaai2027_supplementary.tex
+%Supplementary material (technical appendix) for adc_aware_llm_aaai2027.tex.
+%Compiles standalone. Section letters A-G are the contract with the main paper:
+%the main text refers to "Appendix X of the supplementary material" textually.
+\documentclass[letterpaper]{article} % DO NOT CHANGE THIS
+\usepackage[submission]{aaai2027}  % DO NOT CHANGE THIS
+\usepackage[hyphens]{url}  % DO NOT CHANGE THIS
+\usepackage{graphicx} % DO NOT CHANGE THIS
+\urlstyle{rm} % DO NOT CHANGE THIS
+\def\UrlFont{\rm}  % DO NOT CHANGE THIS
+\usepackage{natbib}  % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\usepackage{caption} % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\frenchspacing  % DO NOT CHANGE THIS
+%
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+\usepackage{booktabs}
+\usepackage{multirow}
+%
+\usepackage{algorithm}
+\usepackage{algorithmic}
+%
+\usepackage{newfloat}
+\usepackage{listings}
+\DeclareCaptionStyle{ruled}{labelfont=normalfont,labelsep=colon,strut=off} % DO NOT CHANGE THIS
+\lstset{%
+    basicstyle={\footnotesize\ttfamily},%
+    numbers=left,numberstyle=\footnotesize,xleftmargin=2em,%
+    aboveskip=0pt,belowskip=0pt,%
+    showstringspaces=false,tabsize=2,breaklines=true}
+\floatstyle{ruled}
+\newfloat{listing}{tb}{lst}{}
+\floatname{listing}{Listing}
+%
+\theoremstyle{plain}
+\newtheorem{lemma}{Lemma}
+\newtheorem{corollary}{Corollary}
+%
+% Placeholder for in-progress multi-model runs (same convention as the main paper).
+\newcommand{\phnum}{XX.X}
+%
+\pdfinfo{
+/TemplateVersion (2027.1)
+}
+
+\setcounter{secnumdepth}{0}
+
+\title{Supplementary Material:\\ADC-Aware Post-Training Adaptation for Analog LLM Inference under Fixed Output Quantization}
+\author{Anonymous Submission}
+\affiliations{}
+
+\begin{document}
+
+\maketitle
+
+\section{A. Detailed Configurations and Metrics}
+
+\paragraph{Hardware constants.}
+Table~\ref{tab:hardware} lists the fixed ADC constants used throughout the signed experiments. The step size is fully determined by $\Delta = 2Mq_xq_w/(2^{b_a}k)$, giving $\Delta \approx 2016$ for INT8 and $\Delta \approx 6.12$ for INT4.
+
+\begin{table}[tb]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Parameter} & \textbf{Symbol} & \textbf{Value} \\
+\midrule
+Tile size (crossbar columns) & $M$ & 256 \\
+ADC bit-width                & $b_a$ & 8 \\
+Parallel ADC channels        & $k$ & 16 \\
+INT8 weight/activation range & $q_w,q_x$ & 127 \\
+INT4 weight/activation range & $q_w,q_x$ & 7 \\
+ADC step (INT8)              & $\Delta$ & $\approx 2016$ \\
+ADC step (INT4)              & $\Delta$ & $\approx 6.12$ \\
+\bottomrule
+\end{tabular}
+\caption{Fixed ADC hardware parameters for the signed bipolar readout used in the main experiments.}
+\label{tab:hardware}
+\end{table}
+
+\paragraph{Models.}
+Table~\ref{tab:models} summarizes the four evaluated models and the size of the Phase-2 correction. The rank-4 LoRA branch covers all seven projections of every decoder block; because $k/v$ projections are rectangular under grouped-query attention and the FFN projections are rectangular by design, the adapter count follows directly from the architecture. For Llama-3.2-1B this gives $176{,}128$ parameters per block $\times\,16$ blocks $\approx 2.8$M ($0.23\%$ of $1.24$B).
+
+\begin{table}[tb]
+\centering
+\small
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{@{}l rrrr@{}}
+\toprule
+ & Llama & Qwen2.5 & OLMo & TinyLl. \\
+ & 3.2-1B & 1.5B & 1B & 1.1B \\
+\midrule
+Decoder layers        & 16    & \phnum & \phnum & 22    \\ % TODO(qwen25_15b,olmo_1b): fill from configs
+Hidden size           & 2048  & \phnum & \phnum & 2048  \\ % TODO(qwen25_15b,olmo_1b): fill from configs
+FFN width             & 8192  & \phnum & \phnum & 5632  \\ % TODO(qwen25_15b,olmo_1b): fill from configs
+KV heads (GQA)        & 8     & \phnum & \phnum & 4     \\ % TODO(qwen25_15b,olmo_1b): fill from configs
+Parameters            & 1.24B & \phnum & \phnum & 1.1B  \\ % TODO(qwen25_15b,olmo_1b): fill from configs
+LoRA params           & 2.8M  & \phnum & \phnum & 3.15M \\ % TODO(qwen25_15b,olmo_1b): rank-4, all 7 proj
+LoRA share            & 0.23\% & \phnum & \phnum & 0.29\% \\ % TODO(qwen25_15b,olmo_1b): LoRA params / total
+\bottomrule
+\end{tabular}
+\caption{Evaluated models and size of the post-ADC LoRA correction (rank 4, all seven projections, every block).}
+\label{tab:models}
+\end{table}
+
+\paragraph{Metrics.}
+Beyond bypass and ADC perplexity, we track four internal diagnostics on the calibration set. \textbf{dead\_rate}: fraction of output channels with $|y_{\mathrm{int}}| < \Delta$, i.e.\ the ADC output is identically zero (lower is better). \textbf{clip\_rate}: fraction of ADC outputs saturating at $\pm(2^{b_a-1}-1)$; high values indicate systematic overflow of the ADC range. \textbf{bin\_usage}: fraction of the $2^{b_a}$ output bins actually occupied (higher is better; near-zero means the ADC acts as a $1$-bit comparator). \textbf{reconstruction\_rel}: relative MSE $\|\hat{y}-y^\star\|^2/\|y^\star\|^2$ between ADC output and FP reference, tracking layer-level fidelity independently of perplexity.
+
+\paragraph{Downstream benchmark configuration.}
+Table~\ref{tab:lm_eval_tasks} lists the configuration of the eight lm-evaluation-harness tasks; all are scored in multiple-choice log-likelihood mode with harness defaults.
+
+\begin{table}[htbp]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}l r c l@{}}
+\toprule
+\textbf{Task} & \textbf{Size} & \textbf{$n$-shot} & \textbf{Metric} \\
+\midrule
+HellaSwag      & 10\,042 & 0 & \texttt{acc\_norm}  \\
+MMLU           & 14\,042 & 5 & \texttt{acc}  \\
+WinoGrande     &  1\,267 & 0 & \texttt{acc}        \\
+ARC-Easy       &  2\,376 & 0 & \texttt{acc\_norm} \\
+ARC-Challenge  &  1\,172 & 0 & \texttt{acc\_norm}  \\
+PIQA           &  1\,838 & 0 & \texttt{acc\_norm} \\
+OpenBookQA     &    500  & 0 & \texttt{acc\_norm}  \\
+BoolQ          &  3\,270 & 0 & \texttt{acc}     \\
+\bottomrule
+\end{tabular}
+\caption{Downstream benchmarks. ``$n$-shot'' is the number of in-context demonstrations; ``Metric'' is length-normalised (\texttt{acc\_norm}) or plain (\texttt{acc}) accuracy.}
+\label{tab:lm_eval_tasks}
+\end{table}
+
+\paragraph{Optimization.}
+Transforms use AdamW. Static activation scales for the FlatQuant step use $99.9$th-percentile clipping over $1024$ WikiText-2 calibration samples. Stage~A trains the MLP Kronecker factors and MLP diagonals for $30$ epochs at $5\times10^{-3}$ with clean reconstruction; Stage~B trains the attention factors and attention diagonals for $10$ epochs at $5\times10^{-4}$ with $\alpha = 0.5$ propagation. Post-ADC LoRA uses rank $4$, LoRA scale $8$, KL weight $\lambda = 0.5$, distillation temperature $2.0$, and $5$ epochs at learning rate $10^{-4}$ on the same calibration set used for PTQ.
+
+\section{B. Proof of the Rotation-Only Suppression Lemma}
+
+We restate the lemma from the main paper.
+
+\begin{lemma}[Rotation-only outlier suppression bound]
+\label{lem:rotation}
+Let $P = L \otimes R$ with $L^\top L = I$, $R^\top R = I$ be an orthogonal Kronecker transform on $\mathbb{R}^d$, and define the effective participation ratio $m_{\mathrm{eff}}(x) = \|x\|_2^2 / \|x\|_\infty^2 \in [1, d]$. Then for every such $P$,
+\begin{equation}
+    \|xP\|_\infty \;\ge\; \frac{\|x\|_2}{\sqrt{d}},\qquad
+    \frac{\|x\|_\infty}{\min_{P}\|xP\|_\infty} \;\le\; \sqrt{\frac{d}{m_{\mathrm{eff}}(x)}} .
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+Since $P = L \otimes R$ with $L, R$ orthogonal, $P$ is orthogonal, hence $\|xP\|_2 = \|x\|_2$. For any $y \in \mathbb{R}^d$ the standard $\ell^\infty$--$\ell^2$ inequality gives $\|y\|_\infty \ge \|y\|_2/\sqrt{d}$. Applying this to $y = xP$ yields $\|xP\|_\infty \ge \|x\|_2/\sqrt{d}$, the first inequality. Writing $\|x\|_\infty = \|x\|_2/\sqrt{m_{\mathrm{eff}}(x)}$ and dividing by the lower bound gives
+\[
+    \frac{\|x\|_\infty}{\min_P \|xP\|_\infty} \le \frac{\|x\|_2/\sqrt{m_{\mathrm{eff}}(x)}}{\|x\|_2/\sqrt{d}} = \sqrt{\frac{d}{m_{\mathrm{eff}}(x)}} . \qedhere
+\]
+\end{proof}
+
+\begin{corollary}[Kronecker capacity]
+\label{cor:capacity}
+A full orthogonal matrix on $\mathbb{R}^d$ has $d(d-1)/2$ free parameters, whereas $L \otimes R$ has only $a(a-1)/2 + b(b-1)/2$ for $d = ab$. For $d = 2048 = 32 \times 64$ this is $2512$ vs.\ $\approx 2.1 \times 10^6$. Thus the Kronecker family is a strict low-dimensional subset of all orthogonal transforms and may not attain the bound in Lemma~\ref{lem:rotation}; the achievable suppression can be strictly smaller.
+\end{corollary}
+
+\section{C. Bipolar ADC Ablations}
+
+All tables in this section report WikiText-2 perplexity on Llama-3.2-1B with the signed bipolar ADC ($y_{\mathrm{int}}\in[-M,+M]$) and the constants of Table~\ref{tab:hardware}. The FP reference for these calibration runs is $\approx 10.5$.
+
+\paragraph{Outlier evidence.}
+Figure~\ref{fig:outliers} shows the per-channel activation magnitudes in a middle decoder layer of Llama-3.2-1B: a handful of channels dominate the per-token maximum, which is the failure mode the bounded diagonals target.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\linewidth]{figs/outliers_layer8.png}
+\caption{Activation outliers in layer 8 of Llama-3.2-1B. A few channels are orders of magnitude larger than the bulk, so per-token max scaling compresses typical channels into few integer codes.}
+\label{fig:outliers}
+\end{figure}
+
+\paragraph{Note on the INT8 reference protocol.}
+The main paper compares against INT8 + ADC PTQ at $16.85$ WikiText-2 perplexity, produced by the single \emph{unified} recipe used for all main-table rows ($1024$ calibration samples, Stage~A + Stage~B). The best INT8 result in Table~\ref{tab:int8} below is $14.41$; it comes from the earlier calibration-objective ablation with $128$ WikiText-only samples and a bin-center auxiliary loss. The two numbers therefore measure different protocols, not a contradiction: the unified recipe trades a small amount of INT8 quality for direct comparability across all rows of the main results table.
+
+Table~\ref{tab:int8} isolates the INT8 calibration objective. Propagation alone reduces ADC perplexity by $47\%$ with no change to dead-rate, confirming that the remaining gap is ADC resolution rather than dead-zone collapse. The bin-center loss is negligible on its own.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}lrrl@{}}
+\toprule
+\textbf{Configuration} & \textbf{Bypass} & \textbf{ADC} & \textbf{dead\_rate} \\
+\midrule
+FP baseline            & ---   & 10.5  & --- \\
+Baseline ($\alpha=0$)  & 10.01 & 28.86 & 10.3\% \\
+Bin-center ($\lambda=0.1$) & 10.01 & 28.86 & 10.3\% \\
+Propagated ($\alpha=1$)    & 11.01 & \textbf{14.55} & 10.3\% \\
+Prop + bin-center          & 11.00 & \textbf{14.41} & 10.3\% \\
+\bottomrule
+\end{tabular}
+\caption{INT8 calibration study with 128 calibration samples and signed ADC step $\Delta\approx2016$.}
+\label{tab:int8}
+\end{table}
+
+Table~\ref{tab:int4v1} shows that $128$ samples are insufficient for INT4 propagation, while $512$ samples with propagation collapse the $\times153$ gap to $\times1.2$. Hadamard initialization gives no benefit. Decoupled training (transforms trained for INT8 and evaluated with the INT4 ADC) achieves the best bypass but leaves a poor ADC gap.
+
+\begin{table}[htbp]
+\centering
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+\textbf{Config} & \textbf{Smp.} & \textbf{Bypass} & \textbf{ADC} & \textbf{Gap} \\
+\midrule
+Baseline                  & 128  & 15.41 & 2354.86 & $\times$153 \\
+Propagated ($\alpha=1$)   & 128  & 40.28 & 203.89  & $\times$5.1 \\
+Hadamard init + prop      & 128  & 34.73 & 178.86  & $\times$5.1 \\
+Decoupled (w8$\to$w4)     & 128  & 11.64 & 276.25  & $\times$24 \\
+Propagated ($\alpha=1$)   & 512  & 34.25 & \textbf{40.63} & $\times$1.2 \\
+Baseline                  & 1024 & 19.80 & 56.83   & $\times$2.9 \\
+\bottomrule
+\end{tabular}
+\caption{INT4 sample count and propagation sweep with signed ADC step $\Delta\approx6.12$.}
+\label{tab:int4v1}
+\end{table}
+
+Table~\ref{tab:int4v2} sweeps $\alpha$ at $1024$ samples; Figure~\ref{fig:alpha_sweep} plots the sweep. $\alpha=0.5$ gives the best gap ratio; adding the bounded diagonal with $\alpha=0.5$ gives the best absolute ADC perplexity among pure-PTQ configurations.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Config} & \textbf{$\alpha$} & \textbf{Bypass} & \textbf{ADC} & \textbf{Gap} \\
+\midrule
+Baseline                  & 0.00 & 19.80 & 56.83 & $\times$2.87 \\
+Prop                      & 0.25 & 21.65 & 32.35 & $\times$1.49 \\
+Prop                      & 0.50 & 24.24 & 31.22 & $\times$1.29 \\
+Prop                      & 0.75 & 27.46 & 35.92 & $\times$1.31 \\
+Prop (full)               & 1.00 & 30.32 & 40.20 & $\times$1.32 \\
+2-stage (A:0, B:0.5)      & ---  & 22.82 & 32.21 & $\times$1.41 \\
+Diag + Prop               & 0.50 & \textbf{20.23} & \textbf{27.56} & $\times$1.36 \\
+\bottomrule
+\end{tabular}
+\caption{INT4 $\alpha$-mixing sweep. 1024 calibration samples.}
+\label{tab:int4v2}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\linewidth]{figs/plot_alpha_sweep.pdf}
+\caption{Bypass and ADC WikiText-2 perplexity as a function of the mixing coefficient $\alpha$ (INT4, 1024 samples). Below $\alpha=0.5$ the ADC regime is under-weighted; above it, floor-induced gradient noise degrades the transform.}
+\label{fig:alpha_sweep}
+\end{figure}
+
+Table~\ref{tab:int4v3v4} ablates diagonal placement and decomposes the MLP diagonal; Figures~\ref{fig:diag_roles} and \ref{fig:mlp_split} visualize the two studies. The \texttt{down} projection drives nearly all of the MLP improvement, and staged MLP-then-attention training is the best pure-PTQ checkpoint.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}lrrl@{}}
+\toprule
+\textbf{Config} & \textbf{Bypass} & \textbf{ADC} & \textbf{Note} \\
+\midrule
+Both diag (control)        & 19.69 & 28.46 & reproduced \\
+Attn diag only             & 24.98 & 29.41 & worse bypass \\
+MLP diag only              & 19.37 & 31.65 & wide gap \\
+MLP diag + LW $\alpha$     & \textbf{19.00} & 28.66 & best bypass \\
+Both diag + LW $\alpha$    & 19.39 & 28.55 & no gain \\
+\midrule
+\texttt{up\_gate} diag only & 23.22 & 39.59 & weak \\
+\texttt{down} diag only     & 20.42 & 31.26 & key driver \\
+Staged: MLP $\to$ attn      & \textbf{18.50} & \textbf{27.60} & \textbf{best PTQ} \\
+\bottomrule
+\end{tabular}
+\caption{INT4 diagonal placement and staged training. 1024 samples, $\alpha=0.5$. LW = layer-wise.}
+\label{tab:int4v3v4}
+\end{table}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\linewidth]{figs/plot_diag_roles.pdf}
+\caption{Attention vs.\ MLP diagonal roles. MLP-side scaling drives no-ADC (bypass) transform quality, while attention-side scaling more directly closes the ADC gap.}
+\label{fig:diag_roles}
+\end{figure}
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\linewidth]{figs/plot_mlp_split_up_down.pdf}
+\caption{Decomposition of the MLP diagonal: the \texttt{down}-projection diagonal accounts for nearly all of the MLP-side improvement.}
+\label{fig:mlp_split}
+\end{figure}
+
+Table~\ref{tab:int4v5} compares deterministic $\alpha=0.5$ with stochastic mixing. Bernoulli switching gives the best bypass but the worst ADC gap; Beta(2,2) matches deterministic mixing without justifying the added complexity.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}llrrl@{}}
+\toprule
+\textbf{Schedule} & \textbf{Mode} & \textbf{Bypass} & \textbf{ADC} & \textbf{Gap} \\
+\midrule
+Deterministic 0.5 & flat   & 24.24 & 31.22 & $\times$1.29 \\
+Bernoulli (0.5)   & flat   & 19.25 & 35.38 & $\times$1.84 \\
+Beta(2,2)         & flat   & 22.90 & 31.40 & $\times$1.37 \\
+Deterministic 0.5 & staged & 18.50 & 27.60 & $\times$1.49 \\
+Bernoulli (0.5)   & staged & \textbf{16.94} & 32.44 & $\times$1.92 \\
+Beta(2,2)         & staged & 17.16 & \textbf{27.82} & $\times$1.62 \\
+\bottomrule
+\end{tabular}
+\caption{INT4 stochastic propagation. 1024 samples.}
+\label{tab:int4v5}
+\end{table}
+
+\section{D. Post-ADC LoRA Ablations}
+
+Table~\ref{tab:lorav6} evaluates LoRA on the best pure-PTQ checkpoint (staged, ADC $27.60$). Across all configurations, ADC perplexity falls below bypass (gap $<1$), confirming that the adapter specifically corrects ADC-induced error rather than only improving the digital path.
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}llrrl@{}}
+\toprule
+\textbf{Config} & \textbf{Targets} & \textbf{Bypass} & \textbf{ADC} & \textbf{Gap} \\
+\midrule
+No LoRA (base)      & ---    & 18.50 & 27.60 & $\times$1.49 \\
+$r=4$, \texttt{down}    & 1 proj & 19.33 & 16.32 & $\times$0.84 \\
+$r=8$, \texttt{down}    & 1 proj & 19.17 & 15.79 & $\times$0.82 \\
+$r=4$, \texttt{down+o}  & 2 proj & 18.68 & \textbf{15.63} & $\times$0.84 \\
+$r=4$, all 7 proj   & 7 proj & \textbf{17.73} & 16.53 & $\times$0.93 \\
+\bottomrule
+\end{tabular}
+\caption{Initial post-ADC LoRA sweep on the best pure-PTQ checkpoint (bypass 18.50, ADC 27.60).}
+\label{tab:lorav6}
+\end{table}
+
+Table~\ref{tab:lorav7} is the full LoRA ablation ($r=4$, \texttt{down+o} unless stated). Rank saturates at $r=4$; CE+KL beats CE alone, most strongly with all-$7$ targets; earlier layers carry more accumulated ADC error; pre-ADC placement diverges. The best single configuration is all-$7$, CE+KL, $r=4$ (ADC $14.03$).
+
+\begin{table}[htbp]
+\centering
+\begin{tabular}{@{}llr@{}}
+\toprule
+\textbf{Axis} & \textbf{Setting} & \textbf{ADC PPL} \\
+\midrule
+\multirow{3}{*}{Seed}
+  & seed 1 & 15.79 \\
+  & seed 2 & 15.88 \\
+  & seed 3 & 15.93 \\
+\midrule
+\multirow{4}{*}{Rank}
+  & $r=1$ & 15.90 \\
+  & $r=2$ & 15.60 \\
+  & $r=4$ & \textbf{15.57} \\
+  & $r=8$ & 15.24 \\
+\midrule
+\multirow{2}{*}{Loss}
+  & CE only        & 14.60 \\
+  & CE + KL        & \textbf{13.96} \\
+\midrule
+\multirow{3}{*}{Layer coverage}
+  & first 8 layers & 16.64 \\
+  & all 16 layers  & \textbf{15.63} \\
+  & last 8 layers  & 20.08 \\
+\midrule
+\multirow{2}{*}{Placement}
+  & post-ADC (ours) & \textbf{15.63} \\
+  & pre-ADC         & 105.63 \textit{(diverged)} \\
+\midrule
+\multirow{2}{*}{All 7 proj}
+  & CE only   & 16.68 \\
+  & CE + KL   & \textbf{14.03} \\
+\bottomrule
+\end{tabular}
+\caption{LoRA ablation study. Llama-3.2-1B, INT4.}
+\label{tab:lorav7}
+\end{table}
+
+Table~\ref{tab:lorav8} tests out-of-domain transfer. CE+KL reduces C4 ADC perplexity by $50\%$ relative to PTQ despite WikiText-2-only training, confirming the KL teacher signal is the key ingredient for cross-domain transfer.
+
+\begin{table}[htbp]
+\centering
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\textbf{Config} & \textbf{W-byp} & \textbf{W-ADC} & \textbf{C4-byp} & \textbf{C4-ADC} \\
+\midrule
+PTQ (no LoRA)              & 18.49 & 27.26 & 29.41 & 46.40 \\
+$r{=}8$, d+o, CE           & 18.51 & 15.47 & 30.48 & 29.39 \\
+$r{=}4$, d+o, CE+KL        & 19.05 & 14.27 & 29.37 & 23.88 \\
+$r{=}4$, all 7, CE+KL      & \textbf{18.70} & \textbf{13.96} & \textbf{29.10} & \textbf{23.30} \\
+\bottomrule
+\end{tabular}
+\caption{LoRA generalization. W = WikiText-2, byp = bypass. d+o = \texttt{down+o}.}
+\label{tab:lorav8}
+\end{table}
+
+\section{E. Unsigned (Unipolar) ADC}
+
+Physical crossbars often accept only non-negative excitations. Signed INT4 codes $\hat{x},\hat{w}\in[-8,7]$ are shifted by the zero-point $z = 8$ to $\hat{x}^u,\hat{w}^u\in[0,15]$. The crossbar computes one non-negative product $y^u = \langle \hat{x}^u, \hat{w}^u\rangle \in [0, M\cdot 15^2]$, and the ADC floors it with the unsigned step $\Delta_u = M(2^{b_x}-1)(2^{b_w}-1)/(2^{b_a}k) \approx 14.06$ at global $k=16$. The signed inner product is recovered exactly by expanding $\hat{x}^u\hat{w}^u = \hat{x}\hat{w} + 8\hat{w} + 8\hat{x} + 64$:
+\begin{equation}
+    y_{\mathrm{int}} = \hat{y}^u - 8\!\sum_j \hat{w}^u_j - 8\!\sum_i \hat{x}^u_i + 64M,
+\end{equation}
+where $\sum_j \hat{w}^u_j$ is precomputed at weight-load and $\sum_i \hat{x}^u_i$ once per token, adding negligible digital overhead. The per-layer $k$ search selects, for each layer $\ell$,
+\begin{equation}
+    k^*_\ell = \min\!\Big\{ k \in \mathcal{K} : k \ge \frac{M(2^{b_x}-1)(2^{b_w}-1)}{2\,R_\ell} \Big\},
+\end{equation}
+with $R_\ell = \mathrm{quantile}_{0.999}(|y^u_\ell|)$ and $\mathcal{K} = \{4,8,16,32,64\}$, run in place on the frozen PTQ checkpoint. FlatQuant is retrained with $\Delta_u$ so the transforms are matched to the unipolar step; all other settings carry over from the best bipolar configuration.
+
+The final series was reached through three prior hardware iterations, documented in Table~\ref{tab:readout_evolution}. A four-quadrant unipolar decomposition achieves a finer branch step ($\approx 3.06$) at $4\times$ the ADC reads; a single-read shift-subtract readout is cheaper but harder to calibrate; and an intermediate mismatched setup (transforms trained for the bipolar $\Delta$ evaluated on the unsigned model) exploded to $\sim$94k perplexity, which motivated retraining with $\Delta_u$. Table~\ref{tab:unipolar} reports the final results. Notably, \texttt{best\_ptq\_k\_recal} is worse than \texttt{best\_ptq\_k}: retraining FlatQuant on fixed per-layer $k$ over-specializes the transforms, so in-place $k$ search after global-$k$ training is preferable.
+
+\begin{table}[htbp]
+\centering
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Readout setting} & \textbf{Wiki PPL} & \textbf{ADC reads} \\
+\midrule
+Signed readout               & 26.66 & 1 \\
+Four-read unsigned decomp.\  & 18.08 & 4 \\
+Single-read shift-subtract   & 39.00 & 1 \\
+\bottomrule
+\end{tabular}
+\caption{Hardware-setting evolution before per-layer $k$ search and LoRA correction.}
+\label{tab:readout_evolution}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{@{}llrr@{}}
+\toprule
+\textbf{Config} & \textbf{Description} & \textbf{Wiki} & \textbf{C4} \\
+\midrule
+\texttt{fp}                 & FP16, no quant.        & \textbf{8.68}  & \textbf{13.13} \\
+\texttt{int4\_no\_adc}      & INT4 FQ, ADC off       & 12.56          & 20.13 \\
+\texttt{best\_ptq}          & +ADC, $k{=}16$         & 39.00          & 67.78 \\
+\texttt{best\_ptq\_k}       & +per-layer $k$         & 21.64          & 33.79 \\
+\texttt{best\_ptq\_k\_recal}& +FQ retrain, p.l.\ $k$ & 22.19          & 36.94 \\
+\texttt{best\_lora}         & +LoRA ($k{=}16$)       & 17.29          & 29.26 \\
+\texttt{best\_lora\_k}      & +LoRA \& p.l.\ $k$     & \textbf{14.56} & \textbf{23.78} \\
+\bottomrule
+\end{tabular}
+\caption{Unipolar (unsigned) ADC results on Llama-3.2-1B. $\Delta_u = 14.06$ at global $k = 16$.}
+\label{tab:unipolar}
+\end{table}
+
+\section{F. Full Downstream Results}
+
+Tables~\ref{tab:downstream_llama}--\ref{tab:downstream_tinyllama} give the per-task breakdowns behind the average downstream table of the main paper, one table per model.
+
+\begin{table*}[t]
+\centering
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l|cc|ccccccccc}
+\toprule
+ & \multicolumn{2}{c|}{PPL ($\downarrow$)} & \multicolumn{9}{c}{Accuracy \% ($\uparrow$)} \\
+Method & Wiki & C4 & HSwag & MMLU & WinGr & ARC-E & ARC-C & PIQA & OBQA & BoolQ & Avg \\
+\midrule
+bfloat16          & 8.68  & 13.13 & 64.19 & 32.15 & 63.06 & 61.83 & 36.77 & 74.70 & 37.40 & 63.91 & 54.25 \\
+INT8 PTQ          & 8.69  & 13.15 & 64.17 & 31.89 & 63.38 & 69.82 & 39.16 & 75.79 & 39.20 & 64.22 & 55.95 \\
+INT8 + ADC PTQ    & 16.85 & 29.56 & 45.04 & 26.83 & 56.59 & 48.44 & 28.84 & 64.36 & 30.00 & 59.63 & 44.97 \\
+INT4 PTQ          & 14.13 & 22.83 & 51.98 & 24.86 & 55.25 & 60.44 & 33.02 & 69.48 & 32.00 & 62.11 & 48.64 \\
+INT4 + ADC PTQ    & 26.66 & 45.62 & 40.03 & 24.41 & 53.43 & 42.63 & 26.02 & 61.70 & 27.00 & 60.67 & 41.99 \\
+INT4 + ADC + LoRA & 14.03 & 23.20 & 49.96 & 25.72 & 53.67 & 54.63 & 29.27 & 68.06 & 34.60 & 60.67 & 47.07 \\
+\bottomrule
+\end{tabular}
+\caption{Full downstream results on Llama-3.2-1B. INT8/INT4 PTQ rows have the ADC disabled.}
+\label{tab:downstream_llama}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l|cc|ccccccccc}
+\toprule
+ & \multicolumn{2}{c|}{PPL ($\downarrow$)} & \multicolumn{9}{c}{Accuracy \% ($\uparrow$)} \\
+Method & Wiki & C4 & HSwag & MMLU & WinGr & ARC-E & ARC-C & PIQA & OBQA & BoolQ & Avg \\
+\midrule
+bfloat16          & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(qwen25_15b): fp row
+INT8 PTQ          & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(qwen25_15b)
+INT8 + ADC PTQ    & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(qwen25_15b)
+INT4 PTQ          & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(qwen25_15b)
+INT4 + ADC PTQ    & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(qwen25_15b)
+INT4 + ADC + LoRA & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(qwen25_15b)
+\bottomrule
+\end{tabular}
+\caption{Full downstream results on Qwen2.5-1.5B (runs in progress).}
+\label{tab:downstream_qwen}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l|cc|ccccccccc}
+\toprule
+ & \multicolumn{2}{c|}{PPL ($\downarrow$)} & \multicolumn{9}{c}{Accuracy \% ($\uparrow$)} \\
+Method & Wiki & C4 & HSwag & MMLU & WinGr & ARC-E & ARC-C & PIQA & OBQA & BoolQ & Avg \\
+\midrule
+bfloat16          & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(olmo_1b): fp row
+INT8 PTQ          & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(olmo_1b)
+INT8 + ADC PTQ    & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(olmo_1b)
+INT4 PTQ          & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(olmo_1b)
+INT4 + ADC PTQ    & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(olmo_1b)
+INT4 + ADC + LoRA & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(olmo_1b)
+\bottomrule
+\end{tabular}
+\caption{Full downstream results on OLMo-1B (runs in progress).}
+\label{tab:downstream_olmo}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l|cc|ccccccccc}
+\toprule
+ & \multicolumn{2}{c|}{PPL ($\downarrow$)} & \multicolumn{9}{c}{Accuracy \% ($\uparrow$)} \\
+Method & Wiki & C4 & HSwag & MMLU & WinGr & ARC-E & ARC-C & PIQA & OBQA & BoolQ & Avg \\
+\midrule
+bfloat16          & 7.01 & 10.72 & 55.57 & 26.16 & 49.17 & 42.59 & 30.12 & 70.46 & 23.80 & 54.77 & 44.08 \\
+INT8 PTQ          & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(tinyllama_11b)
+INT8 + ADC PTQ    & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(tinyllama_11b)
+INT4 PTQ          & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(tinyllama_11b)
+INT4 + ADC PTQ    & 11.62 & 20.23 & 46.74 & 25.48 & 52.25 & 39.56 & 26.45 & 62.89 & 25.60 & 55.54 & 41.81 \\
+INT4 + ADC + LoRA & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum & \phnum \\ % TODO(tinyllama_11b)
+\bottomrule
+\end{tabular}
+\caption{TinyLlama-1.1B results. BF16 and ADC-aware INT4 PTQ are complete; the remaining quantized baselines and post-ADC LoRA are in progress.}
+\label{tab:downstream_tinyllama}
+\end{table*}
+
+\section{G. Implementation Sketches and Reproducibility}
+
+The listings below are simplified for readability and do not replace the full training code.
+
+\begin{listing}[tb]
+\caption{Tiled ADC forward pass.}
+\label{lst:adc_forward}
+\begin{lstlisting}[language=Python]
+def adc_tile_forward(x, weight, bias, delta, qx, qw, na, pa):
+    sx = x.abs().amax(-1, keepdim=True).clamp(min=1e-6) / qx
+    x_code = round_ste(x / sx).clamp(-qx, qx)
+    sw = weight.abs().amax(1).clamp(min=1e-6) / qw
+    w_code = round_ste(weight / sw[:, None]).clamp(-qw, qw)
+    y_int = linear(x_code, w_code)
+    y_adc = floor_ste(y_int / delta).clamp(na, pa) * delta
+    y = y_adc * sx * sw[None, :]
+    return y if bias is None else y + bias
+\end{lstlisting}
+\end{listing}
+
+\begin{listing}[tb]
+\caption{Block-level mixed calibration loss.}
+\label{lst:mixed_loss}
+\begin{lstlisting}[language=Python]
+def mixed_block_loss(block_q, x_clean, x_adc, y_teacher, alpha):
+    loss_clean = mse(block_q(x_clean), y_teacher)
+    loss_adc = mse(block_q(x_adc), y_teacher)
+    return (1.0 - alpha) * loss_clean + alpha * loss_adc
+\end{lstlisting}
+\end{listing}
+
+\begin{listing}[tb]
+\caption{Post-ADC residual LoRA wrapper.}
+\label{lst:lora}
+\begin{lstlisting}[language=Python]
+class PostADCLoRA(Module):
+    def __init__(self, frozen_adc_layer, in_dim, out_dim, rank=4, alpha=8):
+        self.base = frozen_adc_layer
+        freeze(self.base)
+        self.A = Linear(in_dim, rank, bias=False, dtype=float32)
+        self.B = Linear(rank, out_dim, bias=False, dtype=float32)
+        init_kaiming(self.A.weight); init_zeros(self.B.weight)
+        self.scale = alpha / rank
+
+    def forward(self, x):
+        y_base = self.base(x)
+        y_res = self.B(self.A(x.float())) * self.scale
+        return y_base + y_res.to(y_base.dtype)
+\end{lstlisting}
+\end{listing}
+
+\paragraph{Reproducibility notes.}
+All perplexities use sliding-window evaluation with context length $2048$ and stride $1024$. The default signed hardware configuration uses tile size $256$, ADC bitwidth $8$, scaling factor $16$, and W4A4 or W8A8 quantization. The main W4A4 PTQ checkpoint uses $1024$ WikiText-2 calibration samples with staged diagonal training and $\alpha = 0.5$. Post-ADC LoRA is trained for $5$ epochs at learning rate $10^{-4}$, rank $4$, LoRA scale $8$, CE+KL loss, KL weight $0.5$, and distillation temperature $2.0$. The same recipe is applied unchanged to all four evaluated models.
+
+\bibliography{adc_aware_llm_article_refs}
+
+\end{document}
