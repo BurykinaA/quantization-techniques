@@ -24,8 +24,8 @@ The historical `run_perplexity_all_models.sh` and
 - ADC scale calibration batch size 4
 - post-ADC LoRA: rank 4, all seven projections, 5 epochs, CE + KL,
   effective batch size 4. Qwen uses microbatch 2 with two gradient-accumulation
-  steps. TinyLlama uses microbatch 1 with four accumulation steps because its
-  22 tiled decoder layers exceed an 80 GB GPU at physical batch 4.
+  steps. TinyLlama also uses microbatch 2 with two accumulation steps because
+  its 22 tiled decoder layers exceed an 80 GB GPU at physical batch 4.
 - WikiText-2 `test` and the existing C4 `test` to `validation` mapping
 - context 2048, stride 1024, 1000 C4 samples
 - downstream: HellaSwag, MMLU, WinoGrande, ARC-Easy, ARC-Challenge,

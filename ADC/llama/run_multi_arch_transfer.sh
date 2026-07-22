@@ -31,6 +31,7 @@ MODEL_IDS=(
 mkdir -p "$(dirname "${RESULTS_JSON}")" "${CHECKPOINT_ROOT}" "${LOG_ROOT}"
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 
 is_selected() {
   local key="$1"
@@ -175,8 +176,8 @@ run_adc_transfer() {
     lora_gradient_accumulation_steps=2
   fi
   if [[ "${key}" == "tinyllama_11b" && -z "${LORA_MICROBATCH_SIZE+x}" ]]; then
-    lora_microbatch_size=1
-    lora_gradient_accumulation_steps=4
+    lora_microbatch_size=2
+    lora_gradient_accumulation_steps=2
   fi
 
   if [[ "${SMOKE}" == "1" ]]; then
@@ -223,9 +224,11 @@ run_adc_transfer() {
     resume_args=(--fq_start_stage_b_from "${stage_a_transforms_path}")
   elif [[ "${SMOKE}" != "1" && "${FORCE_FQ_RETRAIN}" != "1" && -f "${transforms_path}" ]]; then
     resume_args=(--fq_reload_path "${transforms_path}" --fq_skip_stage_b_on_reload)
+    local pre_lora_resume_log="${log_path%.log}.pre_lora_resume.log"
     if [[ -f "${log_path}" ]] && has_complete_pre_lora_metrics "${log_path}"; then
-      local pre_lora_resume_log="${log_path%.log}.pre_lora_resume.log"
       cp "${log_path}" "${pre_lora_resume_log}"
+      resume_args+=(--pre_lora_metrics_log "${pre_lora_resume_log}")
+    elif [[ -f "${pre_lora_resume_log}" ]] && has_complete_pre_lora_metrics "${pre_lora_resume_log}"; then
       resume_args+=(--pre_lora_metrics_log "${pre_lora_resume_log}")
     fi
   fi
