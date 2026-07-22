@@ -174,6 +174,10 @@ run_adc_transfer() {
     lora_microbatch_size=2
     lora_gradient_accumulation_steps=2
   fi
+  if [[ "${key}" == "tinyllama_11b" && -z "${LORA_MICROBATCH_SIZE+x}" ]]; then
+    lora_microbatch_size=1
+    lora_gradient_accumulation_steps=4
+  fi
 
   if [[ "${SMOKE}" == "1" ]]; then
     run_suffix="adc_transfer_smoke"

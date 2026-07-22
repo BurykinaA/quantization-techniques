@@ -336,6 +336,8 @@ def calibrate_adc_lora(
     use_cache = getattr(model.config, "use_cache", None)
     if use_cache is not None:
         model.config.use_cache = False
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     model.train()
     for epoch in range(epochs):
         total_loss = 0.0
