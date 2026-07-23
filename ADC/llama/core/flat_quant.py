@@ -1184,6 +1184,20 @@ def _project_flatquant_parameters(module: nn.Module) -> None:
                 parameter.data.clamp_(min=-2.25, max=100.0)
 
 
+def _capture_calibration_batch(
+    storage: torch.Tensor,
+    batch: torch.Tensor,
+    start: int,
+    limit: int,
+) -> int:
+    """Copy every available batch element into calibration storage."""
+    count = min(batch.shape[0], limit - start)
+    if count <= 0:
+        return start
+    storage[start:start + count].copy_(batch[:count])
+    return start + count
+
+
 def calibrate_flat_quant(
     model: nn.Module,
     dataloader,
@@ -1311,8 +1325,12 @@ def calibrate_flat_quant(
                         (nsamples, inp.shape[1], hidden_size),
                         dtype=dtype, device=device,
                     )
-                inps[cache["i"]] = inp[0]
-                cache["i"] += 1
+                cache["i"] = _capture_calibration_batch(
+                    inps,
+                    inp,
+                    cache["i"],
+                    nsamples,
+                )
                 if cache["layer_kwargs"] is None:
                     cache["layer_kwargs"] = kwargs
             raise ValueError("catch")

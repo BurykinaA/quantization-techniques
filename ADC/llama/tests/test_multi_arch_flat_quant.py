@@ -10,6 +10,7 @@ from ADC.llama.core.adc_layers import TiledLinearADC
 from ADC.llama.core.flat_quant import (
     FlatQuantLinear,
     KroneckerTransform,
+    _capture_calibration_batch,
     _project_flatquant_parameters,
     _reparameterize_ln,
     apply_flatquant_to_model,
@@ -99,6 +100,21 @@ def test_transform_projection_bounds_both_directions() -> None:
     assert transform.diag_left.min().item() == pytest.approx(0.1)
     assert transform.diag_right.max().item() == pytest.approx(10.0)
     assert transform.diag_scale.max().item() == pytest.approx(10.0)
+
+
+def test_calibration_capture_keeps_every_batch_element() -> None:
+    storage = torch.zeros(6, 2)
+    first_batch = torch.arange(8, dtype=torch.float32).reshape(4, 2)
+    second_batch = torch.arange(8, 16, dtype=torch.float32).reshape(4, 2)
+
+    next_index = _capture_calibration_batch(storage, first_batch, 0, 6)
+    next_index = _capture_calibration_batch(storage, second_batch, next_index, 6)
+
+    assert next_index == 6
+    torch.testing.assert_close(
+        storage,
+        torch.cat((first_batch, second_batch[:2]), dim=0),
+    )
 
 
 @pytest.mark.parametrize(

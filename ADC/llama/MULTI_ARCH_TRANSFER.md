@@ -31,6 +31,14 @@ The historical `run_perplexity_all_models.sh` and
 - downstream: HellaSwag, MMLU, WinoGrande, ARC-Easy, ARC-Challenge,
   PIQA, OpenBookQA, and BoolQ; MMLU is 5-shot and all other tasks are 0-shot
 
+The corrected OLMo transfer run also enables propagation during Stage A. Each
+next decoder layer receives the full quantized-dequantized output of the
+preceding layer, while `fq_prop_alpha=0.5` mixes clean-input and
+propagated-input reconstruction losses. Hidden states themselves are never
+interpolated. OLMo writes to the separate
+`adc_transfer_stage_a_prop_v2` checkpoint directory so the failed clean-input
+Stage A checkpoint remains available for diagnostics.
+
 `--enforce_transfer_quant_config` makes the quantized run fail early if its
 signed W4A4/ADC/LoRA settings differ from this protocol.
 

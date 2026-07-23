@@ -138,6 +138,11 @@ def validate_adc_config(record: dict) -> list[str]:
         "max_eval_samples": 1000,
         "pre_lora_ppl_threshold": 500.0,
     }
+    if record.get("model_name") == "allenai/OLMo-1B-hf":
+        expected.update({
+            "fq_propagate_quant": True,
+            "fq_prop_alpha": 0.5,
+        })
     mismatches = []
     for name, value in expected.items():
         if config.get(name) != value:
@@ -162,7 +167,12 @@ def collect_rows(records: list[dict]) -> tuple[list[dict], list[str]]:
 
     for model_id, model_label, key in MODELS:
         bf16_record = by_run_name.get(f"{key}_bf16")
-        adc_record = by_run_name.get(f"{key}_adc_transfer")
+        adc_run_name = (
+            f"{key}_adc_transfer_stage_a_prop_v2"
+            if key == "olmo_1b"
+            else f"{key}_adc_transfer"
+        )
+        adc_record = by_run_name.get(adc_run_name)
 
         if bf16_record is None:
             problems.append(f"{model_id}: missing successful {key}_bf16 record")
@@ -186,17 +196,17 @@ def collect_rows(records: list[dict]) -> tuple[list[dict], list[str]]:
                 problems.append(f"{key}_bf16: missing {', '.join(missing)}")
 
         if adc_record is None:
-            problems.append(f"{model_id}: missing successful {key}_adc_transfer record")
+            problems.append(f"{model_id}: missing successful {adc_run_name} record")
             continue
         if adc_record.get("model_name") != model_id:
             problems.append(
-                f"{key}_adc_transfer: expected model_name={model_id!r}, "
+                f"{adc_run_name}: expected model_name={model_id!r}, "
                 f"got {adc_record.get('model_name')!r}"
             )
             continue
 
         for mismatch in validate_adc_config(adc_record):
-            problems.append(f"{key}_adc_transfer: {mismatch}")
+            problems.append(f"{adc_run_name}: {mismatch}")
 
         adc_results = adc_record.get("results", {})
         for method, wiki_key, c4_key, downstream_key in (

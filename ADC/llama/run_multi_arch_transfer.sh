@@ -165,6 +165,7 @@ run_adc_transfer() {
   local -a eval_limit_args=()
   local -a quality_guard_args=(--pre_lora_ppl_threshold 500)
   local -a resume_args=()
+  local -a stage_a_propagation_args=()
   local -a optional_args=(
     --fq_save_transforms
     --run_lm_eval
@@ -180,6 +181,11 @@ run_adc_transfer() {
   if [[ "${key}" == "tinyllama_11b" && -z "${LORA_MICROBATCH_SIZE+x}" ]]; then
     lora_microbatch_size=2
     lora_gradient_accumulation_steps=2
+  fi
+  if [[ "${key}" == "olmo_1b" ]]; then
+    run_suffix="adc_transfer_stage_a_prop_v2"
+    output_suffix="adc_transfer_stage_a_prop_v2"
+    stage_a_propagation_args=(--fq_propagate_quant --fq_prop_alpha 0.5)
   fi
 
   if [[ "${SMOKE}" == "1" ]]; then
@@ -315,6 +321,7 @@ run_adc_transfer() {
     --results_json_path "${RESULTS_JSON}" \
     "${eval_limit_args[@]}" \
     "${quality_guard_args[@]}" \
+    "${stage_a_propagation_args[@]}" \
     "${optional_args[@]}" \
     "${resume_args[@]}"
 }

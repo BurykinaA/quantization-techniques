@@ -2390,6 +2390,11 @@ def main():
                 "max_length": 2048,
                 "stride": 1024,
             })
+            if args.model_name == "allenai/OLMo-1B-hf":
+                expected.update({
+                    "fq_propagate_quant": True,
+                    "fq_prop_alpha": 0.5,
+                })
         mismatches = {
             name: {"expected": value, "actual": getattr(args, name)}
             for name, value in expected.items()
@@ -3759,6 +3764,7 @@ def main():
                 "fq_diag_mlp":           args.fq_diag_mlp,
                 "fq_lambda_center":      getattr(args, "fq_lambda_center", 0.0),
                 "fq_propagate_quant":    getattr(args, "fq_propagate_quant", False),
+                "fq_prop_alpha":         getattr(args, "fq_prop_alpha", 1.0),
                 "fq_kronecker_init":     getattr(args, "fq_kronecker_init", "random"),
                 "fq_start_stage_b_from": args.fq_start_stage_b_from,
                 "calibration_batch_size": args.calibration_batch_size,
