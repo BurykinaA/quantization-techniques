@@ -113,6 +113,32 @@ record includes bypass, pre-LoRA ADC-PTQ, and post-LoRA ADC metrics. A run is
 skipped only when the shared JSON contains a successful record with the same
 run name.
 
+To compute the full digital W4A4 PTQ baseline for TinyLlama without repeating
+FlatQuant training or running LoRA:
+
+```bash
+ONLY=tinyllama_11b INT4_ADC_OFF_ONLY=1 SKIP_COMPLETED=1 \
+  bash ADC/llama/run_multi_arch_transfer.sh
+```
+
+This loads
+`transfer_results/checkpoints/tinyllama_11b/adc_transfer/flat_quant_transforms.pt`,
+skips both FlatQuant stages, recalibrates the fixed integer scales, leaves W4A4
+weight/activation quantization enabled, and bypasses only the ADC floor/clamp
+operation. It then runs complete WikiText-2/C4 sliding-window perplexity and all
+eight downstream tasks. LoRA rank is fixed to zero and model serialization is
+disabled. The result is stored separately as
+`tinyllama_11b_int4_ptq_adc_off`, with `ppl_int4_ptq_wikitext2`,
+`ppl_int4_ptq_c4`, and `downstream_int4_ptq` fields.
+
+If the saved transforms are outside the standard checkpoint root:
+
+```bash
+ONLY=tinyllama_11b INT4_ADC_OFF_ONLY=1 SKIP_COMPLETED=0 \
+INT4_ADC_OFF_TRANSFORMS_PATH=/remote/checkpoints/flat_quant_transforms.pt \
+  bash ADC/llama/run_multi_arch_transfer.sh
+```
+
 If a run fails after `flat_quant_transforms.pt` was written, rerunning the same
 command reloads those final transforms and skips both FlatQuant stages. When the
 old log contains the complete pre-LoRA PPL and downstream results, the runner

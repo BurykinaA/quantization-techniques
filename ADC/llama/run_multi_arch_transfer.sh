@@ -13,6 +13,8 @@ FQ_STAGE_A_PATH="${FQ_STAGE_A_PATH:-}"
 FORCE_FQ_RETRAIN="${FORCE_FQ_RETRAIN:-0}"
 FQ_DIAGNOSTIC_STAGE="${FQ_DIAGNOSTIC_STAGE:-}"
 DIAGNOSTIC_WINDOWS="${DIAGNOSTIC_WINDOWS:-8}"
+INT4_ADC_OFF_ONLY="${INT4_ADC_OFF_ONLY:-0}"
+INT4_ADC_OFF_TRANSFORMS_PATH="${INT4_ADC_OFF_TRANSFORMS_PATH:-}"
 RESULTS_JSON="${RESULTS_JSON:-${SCRIPT_DIR}/transfer_results/multi_arch_transfer.json}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-${SCRIPT_DIR}/transfer_results/checkpoints}"
 LOG_ROOT="${LOG_ROOT:-${SCRIPT_DIR}/transfer_results/logs}"
@@ -137,6 +139,79 @@ run_bf16() {
     --run_lm_eval \
     --lm_eval_tasks hellaswag mmlu winogrande arc_easy arc_challenge piqa openbookqa boolq \
     --lm_eval_batch_size auto \
+    --disable_visualizations \
+    --disable_wandb \
+    --wandb_run_name "${run_name}" \
+    --results_json_path "${RESULTS_JSON}"
+}
+
+run_int4_adc_off() {
+  local key="$1"
+  local model_id="$2"
+  local run_name="${key}_int4_ptq_adc_off"
+  local output_dir="${CHECKPOINT_ROOT}/${key}/int4_ptq_adc_off"
+  local log_path="${LOG_ROOT}/${run_name}.log"
+  local source_suffix="adc_transfer"
+
+  if [[ "${key}" == "qwen25_15b" ]]; then
+    source_suffix="adc_transfer_best_epoch_v2"
+  elif [[ "${key}" == "olmo_1b" ]]; then
+    source_suffix="adc_transfer_stage_a_prop_v2"
+  fi
+
+  local transforms_path="${CHECKPOINT_ROOT}/${key}/${source_suffix}/flat_quant_transforms.pt"
+  if [[ -n "${INT4_ADC_OFF_TRANSFORMS_PATH}" ]]; then
+    transforms_path="${INT4_ADC_OFF_TRANSFORMS_PATH}"
+  fi
+
+  if is_completed "${run_name}"; then
+    echo "Skipping completed run: ${run_name}"
+    return
+  fi
+  if [[ ! -f "${transforms_path}" ]]; then
+    echo "Final pre-LoRA FlatQuant checkpoint not found: ${transforms_path}" >&2
+    return 1
+  fi
+
+  run_logged "${log_path}" \
+    "${PYTHON_BIN}" -m ADC.llama.runs.llama_smooth_quant_adc_ptq \
+    --model_name "${model_id}" \
+    --output_dir "${output_dir}" \
+    --no_date_suffix \
+    --torch_dtype bfloat16 \
+    --preprocess_method flat_quant \
+    --fq_w_bits 4 \
+    --fq_a_bits 4 \
+    --fq_nsamples 1024 \
+    --fq_cali_bsz 16 \
+    --fq_epochs 30 \
+    --fq_diag_mlp \
+    --fq_stage_b_epochs 10 \
+    --fq_stage_b_prop_alpha 0.5 \
+    --fq_stage_b_diag_attn \
+    --fq_reload_path "${transforms_path}" \
+    --fq_skip_stage_b_on_reload \
+    --bx 4 \
+    --bw 4 \
+    --ba 8 \
+    --k 16 \
+    --mvm_limit 256 \
+    --activation_quant symmetric \
+    --calibration_dataset wikitext2 \
+    --num_calibration_batches 100 \
+    --calibration_batch_size 4 \
+    --calibration_max_length 512 \
+    --eval_datasets wikitext2 c4 \
+    --eval_split test \
+    --max_eval_samples 1000 \
+    --max_length 2048 \
+    --stride 1024 \
+    --lora_rank 0 \
+    --adc_off_eval_only \
+    --run_lm_eval \
+    --lm_eval_tasks hellaswag mmlu winogrande arc_easy arc_challenge piqa openbookqa boolq \
+    --lm_eval_batch_size auto \
+    --skip_model_save \
     --disable_visualizations \
     --disable_wandb \
     --wandb_run_name "${run_name}" \
@@ -327,7 +402,7 @@ run_adc_transfer() {
 }
 
 echo "Results: ${RESULTS_JSON}"
-echo "Mode: SMOKE=${SMOKE} ONLY=${ONLY:-all} SKIP_COMPLETED=${SKIP_COMPLETED} FQ_START_STAGE_B=${FQ_START_STAGE_B} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN} FQ_DIAGNOSTIC_STAGE=${FQ_DIAGNOSTIC_STAGE:-off}"
+echo "Mode: SMOKE=${SMOKE} ONLY=${ONLY:-all} SKIP_COMPLETED=${SKIP_COMPLETED} FQ_START_STAGE_B=${FQ_START_STAGE_B} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN} FQ_DIAGNOSTIC_STAGE=${FQ_DIAGNOSTIC_STAGE:-off} INT4_ADC_OFF_ONLY=${INT4_ADC_OFF_ONLY}"
 
 for index in "${!MODEL_KEYS[@]}"; do
   key="${MODEL_KEYS[${index}]}"
@@ -339,6 +414,10 @@ for index in "${!MODEL_KEYS[@]}"; do
   echo "======================================================================"
   echo "Model: ${model_id} (${key})"
   echo "======================================================================"
+  if [[ "${INT4_ADC_OFF_ONLY}" == "1" ]]; then
+    run_int4_adc_off "${key}" "${model_id}"
+    continue
+  fi
   if [[ "${SMOKE}" != "1" && -z "${FQ_DIAGNOSTIC_STAGE}" ]]; then
     run_bf16 "${key}" "${model_id}"
   fi

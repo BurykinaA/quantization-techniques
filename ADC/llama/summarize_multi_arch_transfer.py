@@ -156,6 +156,35 @@ def validate_adc_config(record: dict) -> list[str]:
     return mismatches
 
 
+def validate_int4_adc_off_config(record: dict) -> list[str]:
+    config = record.get("config", {})
+    expected = {
+        "torch_dtype": "bfloat16",
+        "preprocess_method": "flat_quant",
+        "fq_w_bits": 4,
+        "fq_a_bits": 4,
+        "bx": 4,
+        "bw": 4,
+        "ba": 8,
+        "k": 16,
+        "mvm_limit": 256,
+        "activation_quant": "symmetric",
+        "ashift": False,
+        "lora_rank": 0,
+        "adc_off_eval_only": True,
+        "fq_skip_stage_b_on_reload": True,
+        "calibration_batch_size": 4,
+        "max_length": 2048,
+        "stride": 1024,
+        "max_eval_samples": 1000,
+    }
+    return [
+        f"config.{name}: expected {value!r}, got {config.get(name)!r}"
+        for name, value in expected.items()
+        if config.get(name) != value
+    ]
+
+
 def collect_rows(records: list[dict]) -> tuple[list[dict], list[str]]:
     by_run_name = {
         record.get("run_name"): record
@@ -173,6 +202,8 @@ def collect_rows(records: list[dict]) -> tuple[list[dict], list[str]]:
             else f"{key}_adc_transfer"
         )
         adc_record = by_run_name.get(adc_run_name)
+        int4_adc_off_run_name = f"{key}_int4_ptq_adc_off"
+        int4_adc_off_record = by_run_name.get(int4_adc_off_run_name)
 
         if bf16_record is None:
             problems.append(f"{model_id}: missing successful {key}_bf16 record")
@@ -194,6 +225,33 @@ def collect_rows(records: list[dict]) -> tuple[list[dict], list[str]]:
                 rows.append(row)
             else:
                 problems.append(f"{key}_bf16: missing {', '.join(missing)}")
+
+        if int4_adc_off_record is None:
+            problems.append(
+                f"{model_id}: missing successful {int4_adc_off_run_name} record"
+            )
+        elif int4_adc_off_record.get("model_name") != model_id:
+            problems.append(
+                f"{int4_adc_off_run_name}: expected model_name={model_id!r}, "
+                f"got {int4_adc_off_record.get('model_name')!r}"
+            )
+        else:
+            for mismatch in validate_int4_adc_off_config(int4_adc_off_record):
+                problems.append(f"{int4_adc_off_run_name}: {mismatch}")
+            row, missing = build_row(
+                model_label,
+                "W4A4 PTQ (ADC off)",
+                int4_adc_off_record.get("results", {}),
+                "ppl_int4_ptq_wikitext2",
+                "ppl_int4_ptq_c4",
+                "downstream_int4_ptq",
+            )
+            if row is not None:
+                rows.append(row)
+            else:
+                problems.append(
+                    f"{int4_adc_off_run_name}: missing {', '.join(missing)}"
+                )
 
         if adc_record is None:
             problems.append(f"{model_id}: missing successful {adc_run_name} record")

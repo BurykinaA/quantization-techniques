@@ -2319,6 +2319,13 @@ def main():
                         help="Run FP16 baseline perplexity BEFORE any changes")
     parser.add_argument("--run_no_adc_eval", action="store_true",
                         help="Run extra evaluation WITHOUT ADC to isolate quantization vs ADC error")
+    parser.add_argument(
+        "--adc_off_eval_only",
+        action="store_true",
+        help="Keep ADC bypassed for the final full PPL/downstream evaluation. "
+             "Use with reloaded pre-LoRA FlatQuant transforms and --lora_rank 0 "
+             "to produce the digital INT4 PTQ baseline.",
+    )
     parser.add_argument("--run_e3_check", action="store_true",
                         help="E3 sanity-check: compare per-layer outputs of calibration path vs "
                              "inference path (after reparameterize + ADC conversion) on one sample")
@@ -2344,6 +2351,27 @@ def main():
     args = parser.parse_args()
     if args.diagnostic_only_after_adc_calibration:
         args.stage_eval = True
+        args.disable_visualizations = True
+        args.skip_model_save = True
+    if args.adc_off_eval_only:
+        if args.lora_rank != 0:
+            parser.error("--adc_off_eval_only requires --lora_rank 0")
+        if args.kd_epochs != 0:
+            parser.error("--adc_off_eval_only requires --kd_epochs 0")
+        if args.eval_pre_lora:
+            parser.error("--adc_off_eval_only cannot be combined with --eval_pre_lora")
+        if args.run_no_adc_eval:
+            parser.error("--adc_off_eval_only already performs the no-ADC evaluation")
+        if args.diagnostic_only_after_adc_calibration:
+            parser.error(
+                "--adc_off_eval_only cannot be combined with "
+                "--diagnostic_only_after_adc_calibration"
+            )
+        if args.enforce_transfer_quant_config:
+            parser.error(
+                "--adc_off_eval_only cannot be combined with "
+                "--enforce_transfer_quant_config"
+            )
         args.disable_visualizations = True
         args.skip_model_save = True
     if args.fq_start_stage_b_from:
@@ -3520,11 +3548,28 @@ def main():
         logger.info("ADC re-enabled for full evaluation.")
         logger.info("=" * 80)
 
+    if args.adc_off_eval_only:
+        logger.info(
+            "ADC-off evaluation mode: retaining W4A4 integer quantization and "
+            "bypassing only the ADC floor/clamp operation"
+        )
+        for _, module in model.named_modules():
+            if isinstance(module, TiledLinearADC):
+                module.set_bypass_adc(True)
+
     # =========================================================================
-    # STEP 3: Evaluate perplexity (Sliding Window) -- WITH ADC
+    # STEP 3: Evaluate perplexity (Sliding Window)
     # =========================================================================
+    final_eval_label = (
+        "WITHOUT ADC (INT4 PTQ)"
+        if args.adc_off_eval_only
+        else "WITH ADC"
+    )
     logger.info("=" * 80)
-    logger.info("STEP 3: PERPLEXITY EVALUATION (Sliding Window) -- WITH ADC")
+    logger.info(
+        "STEP 3: PERPLEXITY EVALUATION (Sliding Window) -- %s",
+        final_eval_label,
+    )
     logger.info("=" * 80)
     logger.info(f"Evaluating on datasets: {args.eval_datasets}")
     logger.info(f"Method: Sliding window (standard for papers like GPTQ, AWQ, FlatQuant)")
@@ -3583,7 +3628,10 @@ def main():
 
     downstream_metrics = {}
     if args.run_lm_eval:
-        final_stage = "adc_lora" if args.lora_rank > 0 else "adc_ptq"
+        if args.adc_off_eval_only:
+            final_stage = "int4_ptq_adc_off"
+        else:
+            final_stage = "adc_lora" if args.lora_rank > 0 else "adc_ptq"
         downstream_metrics = run_lm_evaluation(
             model,
             tokenizer,
@@ -3722,16 +3770,68 @@ def main():
         # Compute mean dead_rate and reconstruction_rel from adc_diag_results
         _dead_vals = [r["dead_rate"] for r in adc_diag_results.values() if "dead_rate" in r]
         _rel_vals  = [r["reconstruction_rel"] for r in adc_diag_results.values() if "reconstruction_rel" in r]
+        if args.adc_off_eval_only:
+            _record_stage = "int4_ptq_adc_off"
+            _record_results = {
+                "ppl_int4_ptq": float(eval_metrics["perplexity"]),
+                **{
+                    f"ppl_int4_ptq_{ds}": float(metrics["perplexity"])
+                    for ds, metrics in all_eval_metrics.items()
+                },
+                "downstream_int4_ptq": downstream_metrics,
+                "dead_rate_mean": float(np.mean(_dead_vals)) if _dead_vals else None,
+                "dead_rate_max": float(np.max(_dead_vals)) if _dead_vals else None,
+                "reconstruction_rel_mean": (
+                    float(np.mean(_rel_vals)) if _rel_vals else None
+                ),
+            }
+        else:
+            _record_stage = "adc_transfer"
+            _record_results = {
+                "ppl_bypass": float(_diag_metrics["perplexity"]) if _diag_metrics else None,
+                "ppl_adc": float(eval_metrics["perplexity"]),
+                **{
+                    f"ppl_bypass_{ds}": float(_all_diag_metrics[ds]["perplexity"])
+                    for ds in _all_diag_metrics
+                },
+                **{
+                    f"ppl_adc_{ds}": float(all_eval_metrics[ds]["perplexity"])
+                    for ds in all_eval_metrics
+                },
+                **{
+                    f"ppl_adc_prelora_{ds}": float(
+                        pre_lora_eval_metrics[ds]["perplexity"]
+                    )
+                    for ds in pre_lora_eval_metrics
+                },
+                "ppl_adc_prelora": (
+                    float(pre_lora_eval_metrics[args.eval_datasets[0]]["perplexity"])
+                    if args.eval_datasets[0] in pre_lora_eval_metrics else None
+                ),
+                "dead_rate_mean": float(np.mean(_dead_vals)) if _dead_vals else None,
+                "dead_rate_max": float(np.max(_dead_vals)) if _dead_vals else None,
+                "reconstruction_rel_mean": (
+                    float(np.mean(_rel_vals)) if _rel_vals else None
+                ),
+                "downstream_adc_ptq": pre_lora_downstream_metrics,
+                **(
+                    {"downstream_adc_lora": downstream_metrics}
+                    if args.lora_rank > 0
+                    else {"downstream_adc_ptq": downstream_metrics}
+                ),
+            }
         _record = {
             "run_name":      getattr(args, "wandb_run_name", None) or args.output_dir,
             "timestamp":     datetime.now().isoformat(),
             "status":        "success",
             "model_name":    args.model_name,
             "model_type":    layout_info["model_type"],
-            "stage":         "adc_transfer",
+            "stage":         _record_stage,
             "config": {
                 "torch_dtype":            args.torch_dtype,
                 "preprocess_method":       args.preprocess_method,
+                "fq_w_bits":              args.fq_w_bits,
+                "fq_a_bits":              args.fq_a_bits,
                 "bx":                    args.bx,
                 "bw":                    args.bw,
                 "ba":                    args.ba,
@@ -3767,6 +3867,8 @@ def main():
                 "fq_prop_alpha":         getattr(args, "fq_prop_alpha", 1.0),
                 "fq_kronecker_init":     getattr(args, "fq_kronecker_init", "random"),
                 "fq_start_stage_b_from": args.fq_start_stage_b_from,
+                "fq_reload_path":        args.fq_reload_path,
+                "fq_skip_stage_b_on_reload": args.fq_skip_stage_b_on_reload,
                 "calibration_batch_size": args.calibration_batch_size,
                 "eval_datasets":         list(args.eval_datasets),
                 "max_length":            args.max_length,
@@ -3774,30 +3876,9 @@ def main():
                 "max_eval_samples":      args.max_eval_samples,
                 "max_eval_windows":      args.max_eval_windows,
                 "pre_lora_ppl_threshold": args.pre_lora_ppl_threshold,
+                "adc_off_eval_only":      args.adc_off_eval_only,
             },
-            "results": {
-                "ppl_bypass":            float(_diag_metrics["perplexity"]) if _diag_metrics else None,
-                "ppl_adc":               float(eval_metrics["perplexity"]),
-                **{f"ppl_bypass_{ds}": float(_all_diag_metrics[ds]["perplexity"])
-                   for ds in _all_diag_metrics},
-                **{f"ppl_adc_{ds}": float(all_eval_metrics[ds]["perplexity"])
-                   for ds in all_eval_metrics},
-                **{f"ppl_adc_prelora_{ds}": float(pre_lora_eval_metrics[ds]["perplexity"])
-                   for ds in pre_lora_eval_metrics},
-                "ppl_adc_prelora": (
-                    float(pre_lora_eval_metrics[args.eval_datasets[0]]["perplexity"])
-                    if args.eval_datasets[0] in pre_lora_eval_metrics else None
-                ),
-                "dead_rate_mean":        float(np.mean(_dead_vals)) if _dead_vals else None,
-                "dead_rate_max":         float(np.max(_dead_vals))  if _dead_vals else None,
-                "reconstruction_rel_mean": float(np.mean(_rel_vals)) if _rel_vals else None,
-                "downstream_adc_ptq":    pre_lora_downstream_metrics,
-                **(
-                    {"downstream_adc_lora": downstream_metrics}
-                    if args.lora_rank > 0
-                    else {"downstream_adc_ptq": downstream_metrics}
-                ),
-            },
+            "results": _record_results,
         }
         upsert_results_record(args.results_json_path, _record)
 
