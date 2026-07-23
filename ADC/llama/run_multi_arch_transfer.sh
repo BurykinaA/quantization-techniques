@@ -11,6 +11,8 @@ SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
 FQ_START_STAGE_B="${FQ_START_STAGE_B:-0}"
 FQ_STAGE_A_PATH="${FQ_STAGE_A_PATH:-}"
 FORCE_FQ_RETRAIN="${FORCE_FQ_RETRAIN:-0}"
+FQ_DIAGNOSTIC_STAGE="${FQ_DIAGNOSTIC_STAGE:-}"
+DIAGNOSTIC_WINDOWS="${DIAGNOSTIC_WINDOWS:-8}"
 RESULTS_JSON="${RESULTS_JSON:-${SCRIPT_DIR}/transfer_results/multi_arch_transfer.json}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-${SCRIPT_DIR}/transfer_results/checkpoints}"
 LOG_ROOT="${LOG_ROOT:-${SCRIPT_DIR}/transfer_results/logs}"
@@ -202,18 +204,48 @@ run_adc_transfer() {
     optional_args=()
   fi
 
+  local standard_output_dir="${CHECKPOINT_ROOT}/${key}/${output_suffix}"
   local run_name="${key}_${run_suffix}"
-  local output_dir="${CHECKPOINT_ROOT}/${key}/${output_suffix}"
+  local output_dir="${standard_output_dir}"
   local log_path="${LOG_ROOT}/${run_name}.log"
-  local transforms_path="${output_dir}/flat_quant_transforms.pt"
-  local stage_a_transforms_path="${output_dir}/flat_quant_transforms_stage_a.pt"
+  local transforms_path="${standard_output_dir}/flat_quant_transforms.pt"
+  local stage_a_transforms_path="${standard_output_dir}/flat_quant_transforms_stage_a.pt"
 
-  if is_completed "${run_name}"; then
+  if [[ -n "${FQ_DIAGNOSTIC_STAGE}" ]]; then
+    case "${FQ_DIAGNOSTIC_STAGE}" in
+      stage_a)
+        transforms_path="${stage_a_transforms_path}"
+        ;;
+      stage_b)
+        ;;
+      *)
+        echo "FQ_DIAGNOSTIC_STAGE must be stage_a or stage_b" >&2
+        return 1
+        ;;
+    esac
+    if [[ ! -f "${transforms_path}" ]]; then
+      echo "Diagnostic checkpoint not found: ${transforms_path}" >&2
+      return 1
+    fi
+    run_name="${key}_diagnostic_${FQ_DIAGNOSTIC_STAGE}"
+    output_dir="${CHECKPOINT_ROOT}/${key}/diagnostic_${FQ_DIAGNOSTIC_STAGE}"
+    log_path="${LOG_ROOT}/${run_name}.log"
+    optional_args=(
+      --stage_eval
+      --stage_eval_max_windows "${DIAGNOSTIC_WINDOWS}"
+      --diagnostic_only_after_adc_calibration
+      --skip_model_save
+    )
+    quality_guard_args=()
+    resume_args=(--fq_reload_path "${transforms_path}" --fq_skip_stage_b_on_reload)
+  elif is_completed "${run_name}"; then
     echo "Skipping completed run: ${run_name}"
     return
   fi
 
-  if [[ "${FQ_START_STAGE_B}" == "1" ]]; then
+  if [[ -n "${FQ_DIAGNOSTIC_STAGE}" ]]; then
+    :
+  elif [[ "${FQ_START_STAGE_B}" == "1" ]]; then
     if [[ -n "${FQ_STAGE_A_PATH}" ]]; then
       stage_a_transforms_path="${FQ_STAGE_A_PATH}"
     fi
@@ -288,7 +320,7 @@ run_adc_transfer() {
 }
 
 echo "Results: ${RESULTS_JSON}"
-echo "Mode: SMOKE=${SMOKE} ONLY=${ONLY:-all} SKIP_COMPLETED=${SKIP_COMPLETED} FQ_START_STAGE_B=${FQ_START_STAGE_B} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN}"
+echo "Mode: SMOKE=${SMOKE} ONLY=${ONLY:-all} SKIP_COMPLETED=${SKIP_COMPLETED} FQ_START_STAGE_B=${FQ_START_STAGE_B} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN} FQ_DIAGNOSTIC_STAGE=${FQ_DIAGNOSTIC_STAGE:-off}"
 
 for index in "${!MODEL_KEYS[@]}"; do
   key="${MODEL_KEYS[${index}]}"
@@ -300,7 +332,7 @@ for index in "${!MODEL_KEYS[@]}"; do
   echo "======================================================================"
   echo "Model: ${model_id} (${key})"
   echo "======================================================================"
-  if [[ "${SMOKE}" != "1" ]]; then
+  if [[ "${SMOKE}" != "1" && -z "${FQ_DIAGNOSTIC_STAGE}" ]]; then
     run_bf16 "${key}" "${model_id}"
   fi
   run_adc_transfer "${key}" "${model_id}"

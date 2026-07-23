@@ -2328,6 +2328,9 @@ def main():
                              "the pipeline degrades.")
     parser.add_argument("--stage_eval_max_windows", type=int, default=50,
                         help="Max sliding-window chunks for each stage_eval pass (default 50, ~fast)")
+    parser.add_argument("--diagnostic_only_after_adc_calibration", action="store_true",
+                        help="Run stage evaluations through calibrated ADC, then exit before "
+                             "pre-LoRA evaluation, LoRA, downstream tasks, and model saving")
     parser.add_argument("--layer_ablation", action="store_true",
                         help="Layer-by-layer ablation: bypass ADC in one decoder layer at a time "
                              "and eval perplexity. Pinpoints which layer contributes most to ADC error.")
@@ -2339,6 +2342,10 @@ def main():
                              "type is the bottleneck. Reuses layer_ablation_max_windows.")
 
     args = parser.parse_args()
+    if args.diagnostic_only_after_adc_calibration:
+        args.stage_eval = True
+        args.disable_visualizations = True
+        args.skip_model_save = True
     if args.fq_start_stage_b_from:
         if args.fq_reload_path:
             parser.error("--fq_start_stage_b_from and --fq_reload_path are mutually exclusive")
@@ -3167,6 +3174,40 @@ def main():
             if hasattr(module, 'set_quantizer_mode'):
                 module.set_quantizer_mode('fixed')
     logger.info("Quantizers set to 'fixed' mode after calibration")
+
+    if args.stage_eval and stage_eval_enc is not None:
+        logger.info("Stage eval D: bypassing ADC while keeping W4A4 quantization...")
+        for _, module in model.named_modules():
+            if isinstance(module, TiledLinearADC):
+                module.set_bypass_adc(True)
+        _run_stage_eval(
+            model,
+            stage_eval_enc,
+            device,
+            "D_post_adc_calibration_w4a4_no_adc",
+            args,
+            use_wandb,
+        )
+        for _, module in model.named_modules():
+            if isinstance(module, TiledLinearADC):
+                module.set_bypass_adc(False)
+        _run_stage_eval(
+            model,
+            stage_eval_enc,
+            device,
+            "E_post_adc_calibration_with_adc",
+            args,
+            use_wandb,
+        )
+
+    if args.diagnostic_only_after_adc_calibration:
+        logger.info(
+            "Diagnostic-only run complete; skipping pre-LoRA evaluation, LoRA, "
+            "downstream tasks, and model serialization"
+        )
+        if use_wandb:
+            wandb.finish()
+        return
 
     # =========================================================================
     # STEP 2.3 (optional): KD fine-tuning of activation scales

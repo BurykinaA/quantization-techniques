@@ -135,6 +135,22 @@ SKIP_COMPLETED=0 \
 Use `FORCE_FQ_RETRAIN=1` to ignore an existing final transform checkpoint and
 train a fresh Stage A.
 
+To compare saved Stage A and Stage B checkpoints without retraining, LoRA, or
+downstream evaluation, run the diagnostic mode for each checkpoint:
+
+```bash
+ONLY=olmo_1b FQ_DIAGNOSTIC_STAGE=stage_a DIAGNOSTIC_WINDOWS=8 \
+  bash ADC/llama/run_multi_arch_transfer.sh
+
+ONLY=olmo_1b FQ_DIAGNOSTIC_STAGE=stage_b DIAGNOSTIC_WINDOWS=8 \
+  bash ADC/llama/run_multi_arch_transfer.sh
+```
+
+Each run reports four WikiText-2 checkpoints: post-FlatQuant reparameterization,
+post-ADC replacement in full bypass mode, calibrated W4A4 with ADC bypassed, and
+calibrated W4A4 with ADC enabled. Diagnostic outputs use separate directories
+and never overwrite the saved Stage A or Stage B transforms.
+
 The save-and-resume path can be checked quickly with TinyLlama. The first
 command creates a new Stage A checkpoint using two samples; the second command
 loads that checkpoint, skips Stage A, and runs the one-epoch smoke Stage B:
