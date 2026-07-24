@@ -37,6 +37,7 @@ import functools
 import gc
 import logging
 import math
+import os
 from contextlib import nullcontext
 
 import torch
@@ -1258,6 +1259,9 @@ def calibrate_flat_quant(
     adc_noise_std: float = 0.0,
     amp_dtype: torch.dtype | None = None,
     calibration_layer_indices: set[int] | None = None,
+    progress_checkpoint_path: str | None = None,
+    progress_stage: str = "stage_a",
+    resume_after_layer: int = -1,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1446,6 +1450,18 @@ def calibrate_flat_quant(
             "FlatQuant targeted calibration layers: %s",
             sorted(selected_layers),
         )
+    if resume_after_layer < -1 or resume_after_layer >= num_layers:
+        raise ValueError(
+            f"FlatQuant resume layer {resume_after_layer} is out of range for "
+            f"a {num_layers}-layer model"
+        )
+    if resume_after_layer >= 0:
+        logger.info(
+            "FlatQuant resuming after completed layer %d",
+            resume_after_layer,
+        )
+    if progress_checkpoint_path and not progress_stage:
+        raise ValueError("FlatQuant progress stage must be non-empty")
     layer_bar = tqdm(range(num_layers), desc="FlatQuant layers", unit="layer")
     for i in layer_bar:
         layer_bar.set_postfix(layer=i)
@@ -1481,11 +1497,32 @@ def calibrate_flat_quant(
         if _out_bad:
             logger.warning(f"Layer {i}: fp_outs (FP reference) contains NaN/Inf — training may be unstable")
 
-        if selected_layers is not None and i not in selected_layers:
-            logger.info(
-                "  layer %d: targeted test skips optimization; forwarding FP reference",
-                i,
+        resume_skip = i <= resume_after_layer
+        targeted_skip = selected_layers is not None and i not in selected_layers
+        if resume_skip or targeted_skip:
+            skip_reason = (
+                "already present in progress checkpoint"
+                if resume_skip
+                else "excluded from targeted test"
             )
+            logger.info(
+                "  layer %d: skipping optimization (%s); forwarding FP reference",
+                i,
+                skip_reason,
+            )
+            if resume_skip and propagate_quant_inputs:
+                with torch.no_grad():
+                    for batch_index in range(actual_nsamples // cali_bsz):
+                        start = batch_index * cali_bsz
+                        quant_output = layer(
+                            quant_inps[start:start + cali_bsz],
+                            **batch_kwargs,
+                        )
+                        if isinstance(quant_output, tuple):
+                            quant_output = quant_output[0]
+                        quant_inps[start:start + cali_bsz] = (
+                            quant_output.detach().float()
+                        )
             fp_inps, fp_outs = fp_outs, fp_inps
             for name, param in layer.named_parameters():
                 param.requires_grad = False
@@ -2020,6 +2057,23 @@ def calibrate_flat_quant(
         del layer
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        if progress_checkpoint_path:
+            save_flat_transforms(
+                model,
+                progress_checkpoint_path,
+                metadata={
+                    "stage": progress_stage,
+                    "last_completed_layer": i,
+                    "num_layers": num_layers,
+                    "amp_dtype": str(dtype),
+                    "propagate_quant_inputs": propagate_quant_inputs,
+                },
+            )
+            logger.info(
+                "FlatQuant progress checkpoint updated after layer %d: %s",
+                i,
+                progress_checkpoint_path,
+            )
 
     del inps, fp_inps, fp_outs
     gc.collect()
@@ -2167,13 +2221,19 @@ def compare_layer_outputs(
 # Part 7 — Save / Load Transforms
 # =========================================================================
 
-def save_flat_transforms(model: nn.Module, path: str) -> None:
+def save_flat_transforms(
+    model: nn.Module,
+    path: str,
+    metadata: dict | None = None,
+) -> None:
     """Save FlatQuant transform state dicts for all layers.
 
     Saves Kronecker transforms AND LWC/LAC clip factors — both are required
     to reproduce the reparameterized weights on reload.
     """
     transforms = {}
+    if metadata is not None:
+        transforms["_metadata"] = dict(metadata)
     for i, layer in enumerate(get_decoder_layers(model)):
         state = {}
         if isinstance(layer.self_attn, FlatQuantLlamaAttention):
@@ -2211,8 +2271,21 @@ def save_flat_transforms(model: nn.Module, path: str) -> None:
                         state[f"mlp_{proj_name}_clip"] = proj_state
         if state:
             transforms[i] = state
-    torch.save(transforms, path)
+    absolute_path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
+    temporary_path = f"{absolute_path}.tmp.{os.getpid()}"
+    torch.save(transforms, temporary_path)
+    os.replace(temporary_path, absolute_path)
     logger.info(f"Saved FlatQuant transforms to {path}")
+
+
+def load_flat_transform_metadata(path: str) -> dict:
+    """Read optional checkpoint metadata without exposing layer state."""
+    transforms = torch.load(path, map_location="cpu")
+    metadata = transforms.get("_metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError(f"Invalid FlatQuant checkpoint metadata in {path}")
+    return dict(metadata)
 
 
 def load_flat_transforms(model: nn.Module, path: str) -> nn.Module:
@@ -2228,6 +2301,8 @@ def load_flat_transforms(model: nn.Module, path: str) -> nn.Module:
 
     transforms = torch.load(path, map_location=_device)
     for i, state in transforms.items():
+        if not isinstance(i, int):
+            continue
         layer = get_decoder_layers(model)[i]
 
         # --- Attention ---

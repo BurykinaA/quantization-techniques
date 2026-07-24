@@ -45,6 +45,7 @@ from ADC.llama.core.flat_quant import (
     reparameterize_model as fq_reparameterize_model,
     strip_flatquant_wrappers,
     save_flat_transforms,
+    load_flat_transform_metadata,
     load_flat_transforms,
     capture_layer_outputs,
     compare_layer_outputs,
@@ -2046,6 +2047,53 @@ def upsert_results_record(path: str, record: dict) -> None:
     logger.info("Results written to: %s", absolute_path)
 
 
+def validate_flat_quant_layer_checkpoint(
+    path: str,
+    *,
+    expected_stage: str,
+    expected_num_layers: int,
+    expected_dtype: torch.dtype,
+    expected_propagation: bool,
+) -> int:
+    """Validate a resumable layer checkpoint and return its completed layer."""
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            f"FlatQuant {expected_stage} layer progress checkpoint not found: {path}"
+        )
+    metadata = load_flat_transform_metadata(path)
+    if metadata.get("stage") != expected_stage:
+        raise ValueError(
+            "FlatQuant layer progress checkpoint stage mismatch: "
+            f"checkpoint={metadata.get('stage')}, requested={expected_stage}"
+        )
+    checkpoint_layers = metadata.get("num_layers")
+    if checkpoint_layers != expected_num_layers:
+        raise ValueError(
+            "FlatQuant layer progress checkpoint model depth mismatch: "
+            f"checkpoint={checkpoint_layers}, model={expected_num_layers}"
+        )
+    checkpoint_propagation = metadata.get("propagate_quant_inputs")
+    if checkpoint_propagation != expected_propagation:
+        raise ValueError(
+            "FlatQuant layer progress checkpoint propagation mismatch: "
+            f"checkpoint={checkpoint_propagation}, "
+            f"requested={expected_propagation}"
+        )
+    checkpoint_dtype = metadata.get("amp_dtype")
+    if checkpoint_dtype != str(expected_dtype):
+        raise ValueError(
+            "FlatQuant layer progress checkpoint dtype mismatch: "
+            f"checkpoint={checkpoint_dtype}, requested={expected_dtype}"
+        )
+    completed_layer = metadata.get("last_completed_layer")
+    if not isinstance(completed_layer, int):
+        raise ValueError(
+            "FlatQuant layer progress checkpoint has no valid "
+            "last_completed_layer"
+        )
+    return completed_layer
+
+
 # =========================================================================
 # Main pipeline
 # =========================================================================
@@ -2234,6 +2282,30 @@ def main():
     parser.add_argument("--fq_start_stage_b_from", type=str, default=None,
                         help="Load a Stage A transform checkpoint, skip Stage A, "
                              "and continue with Stage B")
+    parser.add_argument(
+        "--fq_layer_checkpoint_path",
+        type=str,
+        default=None,
+        help="Atomically overwrite this Stage A progress checkpoint after each layer",
+    )
+    parser.add_argument(
+        "--fq_resume_layer_checkpoint",
+        action="store_true",
+        help="Load --fq_layer_checkpoint_path and continue Stage A after its "
+             "last completed layer",
+    )
+    parser.add_argument(
+        "--fq_stage_b_layer_checkpoint_path",
+        type=str,
+        default=None,
+        help="Atomically overwrite this Stage B progress checkpoint after each layer",
+    )
+    parser.add_argument(
+        "--fq_resume_stage_b_layer_checkpoint",
+        action="store_true",
+        help="Load --fq_stage_b_layer_checkpoint_path and continue Stage B "
+             "after its last completed layer",
+    )
     parser.add_argument("--fq_skip_stage_b_on_reload", action="store_true",
                         help="Treat reloaded transforms as final and skip Stage B")
     parser.add_argument(
@@ -2387,10 +2459,61 @@ def main():
             parser.error("--fq_test_layers requires --preprocess_method flat_quant")
         if args.fq_reload_path or args.fq_start_stage_b_from:
             parser.error("--fq_test_layers cannot reload FlatQuant transforms")
+        if (
+            args.fq_layer_checkpoint_path
+            or args.fq_resume_layer_checkpoint
+            or args.fq_stage_b_layer_checkpoint_path
+            or args.fq_resume_stage_b_layer_checkpoint
+        ):
+            parser.error("--fq_test_layers cannot use layer progress checkpoints")
         if min(args.fq_test_layers) < 0:
             parser.error("--fq_test_layers values must be non-negative")
         args.disable_visualizations = True
         args.skip_model_save = True
+    if args.fq_resume_layer_checkpoint and not args.fq_layer_checkpoint_path:
+        parser.error(
+            "--fq_resume_layer_checkpoint requires --fq_layer_checkpoint_path"
+        )
+    if args.fq_layer_checkpoint_path and args.preprocess_method != "flat_quant":
+        parser.error(
+            "--fq_layer_checkpoint_path requires --preprocess_method flat_quant"
+        )
+    if args.fq_layer_checkpoint_path and (
+        args.fq_reload_path or args.fq_start_stage_b_from
+    ):
+        parser.error(
+            "--fq_layer_checkpoint_path cannot be combined with a final or "
+            "Stage A transform reload"
+        )
+    if (
+        args.fq_resume_stage_b_layer_checkpoint
+        and not args.fq_stage_b_layer_checkpoint_path
+    ):
+        parser.error(
+            "--fq_resume_stage_b_layer_checkpoint requires "
+            "--fq_stage_b_layer_checkpoint_path"
+        )
+    if (
+        args.fq_stage_b_layer_checkpoint_path
+        and args.preprocess_method != "flat_quant"
+    ):
+        parser.error(
+            "--fq_stage_b_layer_checkpoint_path requires "
+            "--preprocess_method flat_quant"
+        )
+    if args.fq_stage_b_layer_checkpoint_path and args.fq_stage_b_epochs <= 0:
+        parser.error(
+            "--fq_stage_b_layer_checkpoint_path requires "
+            "--fq_stage_b_epochs > 0"
+        )
+    if args.fq_stage_b_layer_checkpoint_path and (
+        args.fq_skip_stage_b_on_reload
+        or (args.fq_reload_path and not args.fq_start_stage_b_from)
+    ):
+        parser.error(
+            "--fq_stage_b_layer_checkpoint_path cannot be combined with a "
+            "final transform reload or --fq_skip_stage_b_on_reload"
+        )
     if args.fq_start_stage_b_from:
         if args.fq_reload_path:
             parser.error("--fq_start_stage_b_from and --fq_reload_path are mutually exclusive")
@@ -2562,6 +2685,14 @@ def main():
                 "fq_lac": args.fq_lac,
                 "fq_reload_path": args.fq_reload_path,
                 "fq_start_stage_b_from": args.fq_start_stage_b_from,
+                "fq_layer_checkpoint_path": args.fq_layer_checkpoint_path,
+                "fq_resume_layer_checkpoint": args.fq_resume_layer_checkpoint,
+                "fq_stage_b_layer_checkpoint_path": (
+                    args.fq_stage_b_layer_checkpoint_path
+                ),
+                "fq_resume_stage_b_layer_checkpoint": (
+                    args.fq_resume_stage_b_layer_checkpoint
+                ),
                 "bx": args.bx,
                 "bw": args.bw,
                 "ba": args.ba,
@@ -2915,6 +3046,38 @@ def main():
                 logger.info(f"Loading pre-trained FlatQuant transforms from {args.fq_reload_path}")
                 model = load_flat_transforms(model, args.fq_reload_path)
             else:
+                resume_after_layer = -1
+                if args.fq_resume_layer_checkpoint:
+                    checkpoint_path = args.fq_layer_checkpoint_path
+                    resume_after_layer = validate_flat_quant_layer_checkpoint(
+                        checkpoint_path,
+                        expected_stage="stage_a",
+                        expected_num_layers=layout_info["num_layers"],
+                        expected_dtype=torch_dtype,
+                        expected_propagation=args.fq_propagate_quant,
+                    )
+                    logger.info(
+                        "Resuming FlatQuant Stage A after layer %d from %s",
+                        resume_after_layer,
+                        checkpoint_path,
+                    )
+                    model = load_flat_transforms(model, checkpoint_path)
+                elif args.fq_layer_checkpoint_path:
+                    save_flat_transforms(
+                        model,
+                        args.fq_layer_checkpoint_path,
+                        metadata={
+                            "stage": "stage_a",
+                            "last_completed_layer": -1,
+                            "num_layers": layout_info["num_layers"],
+                            "amp_dtype": str(torch_dtype),
+                            "propagate_quant_inputs": args.fq_propagate_quant,
+                        },
+                    )
+                    logger.info(
+                        "Initialized FlatQuant Stage A progress checkpoint: %s",
+                        args.fq_layer_checkpoint_path,
+                    )
                 logger.info("Starting FlatQuant layer-by-layer calibration...")
                 model = calibrate_flat_quant(
                     model,
@@ -2960,6 +3123,8 @@ def main():
                         if args.fq_test_layers
                         else None
                     ),
+                    progress_checkpoint_path=args.fq_layer_checkpoint_path,
+                    resume_after_layer=resume_after_layer,
                 )
                 if args.fq_test_layers:
                     logger.info(
@@ -2999,6 +3164,45 @@ def main():
                 _stage_a_diag_mlp  = (not args.fq_diag_attn and not args.fq_diag_mlp) or args.fq_diag_mlp
                 _sb_diag_attn = (_stage_a_diag_attn if _sb_neither else args.fq_stage_b_diag_attn)
                 _sb_diag_mlp  = (_stage_a_diag_mlp  if _sb_neither else args.fq_stage_b_diag_mlp)
+                stage_b_resume_after_layer = -1
+                if args.fq_resume_stage_b_layer_checkpoint:
+                    stage_b_checkpoint_path = (
+                        args.fq_stage_b_layer_checkpoint_path
+                    )
+                    stage_b_resume_after_layer = (
+                        validate_flat_quant_layer_checkpoint(
+                            stage_b_checkpoint_path,
+                            expected_stage="stage_b",
+                            expected_num_layers=layout_info["num_layers"],
+                            expected_dtype=torch_dtype,
+                            expected_propagation=True,
+                        )
+                    )
+                    logger.info(
+                        "Resuming FlatQuant Stage B after layer %d from %s",
+                        stage_b_resume_after_layer,
+                        stage_b_checkpoint_path,
+                    )
+                    model = load_flat_transforms(
+                        model,
+                        stage_b_checkpoint_path,
+                    )
+                elif args.fq_stage_b_layer_checkpoint_path:
+                    save_flat_transforms(
+                        model,
+                        args.fq_stage_b_layer_checkpoint_path,
+                        metadata={
+                            "stage": "stage_b",
+                            "last_completed_layer": -1,
+                            "num_layers": layout_info["num_layers"],
+                            "amp_dtype": str(torch_dtype),
+                            "propagate_quant_inputs": True,
+                        },
+                    )
+                    logger.info(
+                        "Initialized FlatQuant Stage B progress checkpoint: %s",
+                        args.fq_stage_b_layer_checkpoint_path,
+                    )
                 logger.info(
                     f"Stage B: {args.fq_stage_b_epochs} epochs, "
                     f"prop=True, prop_alpha={args.fq_stage_b_prop_alpha}, "
@@ -3029,6 +3233,11 @@ def main():
                     beta_param=args.fq_beta_param,
                     adc_noise_std=args.fq_stage_b_noise_std,
                     amp_dtype=torch_dtype,
+                    progress_checkpoint_path=(
+                        args.fq_stage_b_layer_checkpoint_path
+                    ),
+                    progress_stage="stage_b",
+                    resume_after_layer=stage_b_resume_after_layer,
                 )
 
             if args.fq_save_transforms:
@@ -3901,6 +4110,14 @@ def main():
                 "fq_kronecker_init":     getattr(args, "fq_kronecker_init", "random"),
                 "fq_start_stage_b_from": args.fq_start_stage_b_from,
                 "fq_reload_path":        args.fq_reload_path,
+                "fq_layer_checkpoint_path": args.fq_layer_checkpoint_path,
+                "fq_resume_layer_checkpoint": args.fq_resume_layer_checkpoint,
+                "fq_stage_b_layer_checkpoint_path": (
+                    args.fq_stage_b_layer_checkpoint_path
+                ),
+                "fq_resume_stage_b_layer_checkpoint": (
+                    args.fq_resume_stage_b_layer_checkpoint
+                ),
                 "fq_skip_stage_b_on_reload": args.fq_skip_stage_b_on_reload,
                 "calibration_batch_size": args.calibration_batch_size,
                 "eval_datasets":         list(args.eval_datasets),

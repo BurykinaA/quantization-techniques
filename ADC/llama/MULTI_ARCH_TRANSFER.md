@@ -160,6 +160,21 @@ command reloads those final transforms and skips both FlatQuant stages. When the
 old log contains the complete pre-LoRA PPL and downstream results, the runner
 copies and reuses them instead of repeating the long MMLU evaluation.
 
+During both full FlatQuant stages, the runner atomically overwrites a progress
+checkpoint after each completed decoder layer:
+
+```text
+<output_dir>/flat_quant_stage_a_progress.pt
+<output_dir>/flat_quant_stage_b_progress.pt
+```
+
+If the process stops during layer N, rerunning the same command automatically
+loads this file, forwards through layers `0..N-1` without optimizing them again,
+and continues with layer N. If Stage A had already completed, the runner loads
+`flat_quant_transforms_stage_a.pt` and resumes Stage B directly. An interrupted
+checkpoint write cannot corrupt the last completed checkpoint because the
+replacement is atomic.
+
 Every newly trained Stage A is saved immediately, before Stage B starts:
 
 ```text
@@ -182,8 +197,9 @@ SKIP_COMPLETED=0 \
   bash ADC/llama/run_multi_arch_transfer.sh
 ```
 
-Use `FORCE_FQ_RETRAIN=1` to ignore an existing final transform checkpoint and
-train a fresh Stage A.
+Use `FORCE_FQ_RETRAIN=1` to ignore existing final transforms and both progress
+checkpoints. Each progress file is reinitialized before layer 0 of its stage and
+then overwritten after every newly completed layer.
 
 To compare saved Stage A and Stage B checkpoints without retraining, LoRA, or
 downstream evaluation, run the diagnostic mode for each checkpoint:

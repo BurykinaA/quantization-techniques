@@ -15,6 +15,7 @@ from ADC.llama.core.flat_quant import (
     _reparameterize_ln,
     _resolve_flatquant_amp_dtype,
     apply_flatquant_to_model,
+    load_flat_transform_metadata,
     load_flat_transforms,
     reparameterize_model,
     save_flat_transforms,
@@ -185,6 +186,29 @@ def test_stage_a_transform_checkpoint_roundtrip(tmp_path) -> None:
     load_flat_transforms(model, str(checkpoint_path))
 
     torch.testing.assert_close(transform.diag_scale, expected)
+
+
+def test_layer_progress_checkpoint_metadata_and_atomic_save(tmp_path) -> None:
+    model = DummyCausalLM(DummyDecoderLayer(), model_type="llama")
+    apply_flatquant_to_model(
+        model,
+        w_bits=4,
+        a_bits=4,
+        add_diag=True,
+        lwc=True,
+        lac=True,
+    )
+    checkpoint_path = tmp_path / "flat_quant_stage_a_progress.pt"
+    metadata = {
+        "stage": "stage_a",
+        "last_completed_layer": 0,
+        "num_layers": 1,
+    }
+
+    save_flat_transforms(model, str(checkpoint_path), metadata=metadata)
+
+    assert load_flat_transform_metadata(str(checkpoint_path)) == metadata
+    assert not list(tmp_path.glob("*.tmp.*"))
 
 
 def test_tiled_adc_preserves_qwen_style_linear_bias() -> None:

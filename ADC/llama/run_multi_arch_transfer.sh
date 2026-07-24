@@ -244,6 +244,7 @@ run_adc_transfer() {
   local -a eval_limit_args=()
   local -a quality_guard_args=(--pre_lora_ppl_threshold 500)
   local -a resume_args=()
+  local -a progress_args=()
   local -a stage_a_propagation_args=()
   local -a fq_test_layer_values=()
   local -a optional_args=(
@@ -294,6 +295,8 @@ run_adc_transfer() {
   local log_path="${LOG_ROOT}/${run_name}.log"
   local transforms_path="${standard_output_dir}/flat_quant_transforms.pt"
   local stage_a_transforms_path="${standard_output_dir}/flat_quant_transforms_stage_a.pt"
+  local layer_checkpoint_path="${standard_output_dir}/flat_quant_stage_a_progress.pt"
+  local stage_b_layer_checkpoint_path="${standard_output_dir}/flat_quant_stage_b_progress.pt"
 
   if [[ -n "${FQ_TEST_LAYERS}" ]]; then
     IFS=',' read -r -a fq_test_layer_values <<< "${FQ_TEST_LAYERS}"
@@ -351,6 +354,13 @@ run_adc_transfer() {
       return 1
     fi
     resume_args=(--fq_start_stage_b_from "${stage_a_transforms_path}")
+    progress_args=(
+      --fq_stage_b_layer_checkpoint_path "${stage_b_layer_checkpoint_path}"
+    )
+    if [[ "${FORCE_FQ_RETRAIN}" != "1" && -f "${stage_b_layer_checkpoint_path}" ]]; then
+      echo "Resuming Stage B from layer checkpoint: ${stage_b_layer_checkpoint_path}"
+      progress_args+=(--fq_resume_stage_b_layer_checkpoint)
+    fi
   elif [[ "${SMOKE}" != "1" && "${FORCE_FQ_RETRAIN}" != "1" && -f "${transforms_path}" ]]; then
     resume_args=(--fq_reload_path "${transforms_path}" --fq_skip_stage_b_on_reload)
     local pre_lora_resume_log="${log_path%.log}.pre_lora_resume.log"
@@ -359,6 +369,29 @@ run_adc_transfer() {
       resume_args+=(--pre_lora_metrics_log "${pre_lora_resume_log}")
     elif [[ -f "${pre_lora_resume_log}" ]] && has_complete_pre_lora_metrics "${pre_lora_resume_log}"; then
       resume_args+=(--pre_lora_metrics_log "${pre_lora_resume_log}")
+    fi
+  elif [[ "${SMOKE}" != "1" && "${FORCE_FQ_RETRAIN}" != "1" \
+          && -f "${stage_a_transforms_path}" ]]; then
+    echo "Resuming from completed Stage A: ${stage_a_transforms_path}"
+    resume_args=(--fq_start_stage_b_from "${stage_a_transforms_path}")
+    progress_args=(
+      --fq_stage_b_layer_checkpoint_path "${stage_b_layer_checkpoint_path}"
+    )
+    if [[ -f "${stage_b_layer_checkpoint_path}" ]]; then
+      echo "Resuming Stage B from layer checkpoint: ${stage_b_layer_checkpoint_path}"
+      progress_args+=(--fq_resume_stage_b_layer_checkpoint)
+    fi
+  fi
+
+  if [[ "${SMOKE}" != "1" && -z "${FQ_TEST_LAYERS}" && -z "${FQ_DIAGNOSTIC_STAGE}" \
+        && "${FQ_START_STAGE_B}" != "1" && "${#resume_args[@]}" == "0" ]]; then
+    progress_args=(
+      --fq_layer_checkpoint_path "${layer_checkpoint_path}"
+      --fq_stage_b_layer_checkpoint_path "${stage_b_layer_checkpoint_path}"
+    )
+    if [[ "${FORCE_FQ_RETRAIN}" != "1" && -f "${layer_checkpoint_path}" ]]; then
+      echo "Resuming Stage A from layer checkpoint: ${layer_checkpoint_path}"
+      progress_args+=(--fq_resume_layer_checkpoint)
     fi
   fi
 
@@ -414,6 +447,7 @@ run_adc_transfer() {
     "${quality_guard_args[@]}" \
     "${stage_a_propagation_args[@]}" \
     "${optional_args[@]}" \
+    "${progress_args[@]}" \
     "${resume_args[@]}"
 }
 
