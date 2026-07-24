@@ -1,12 +1,15 @@
 # ADC-aware INT4 quantization for Vision Transformers
 
-Ports the FlatQuant + unipolar-ADC method (thesis §5.5.4, originally Llama-3.2-1B)
-to timm Vision Transformers, evaluated on ImageNet top-1/top-5.
+Ports the FlatQuant + ADC quantization method (originally Llama-3.2-1B) to timm
+Vision Transformers, evaluated on ImageNet top-1/top-5.
 
-The architecture-agnostic machinery in `../core/` is reused **unchanged**:
-`adc_layers.py` (`QATLinearADC`/`TiledLinearADC`), `adc_lora.py`
-(`ResidualLoRATiledLinearADC`/`apply_adc_lora`), and `flat_quant.py`
-(`FlatQuantLinear`, `KroneckerTransform`). Only the ViT-specific glue lives here.
+The architecture-agnostic machinery in `../core/` (i.e. `ADC/llama/core`) is
+reused **unchanged**: `adc_layers.py` (`QATLinearADC`/`TiledLinearADC`),
+`adc_lora.py` (`ResidualLoRATiledLinearADC`/`apply_adc_lora`), and
+`flat_quant.py` (`FlatQuantLinear`, `KroneckerTransform`). Only the ViT-specific
+glue lives here. The ADC hardware model is exactly what `ADC/llama/core`
+implements — a **bipolar signed ADC**: `floor(y/δ).clamp(na, pa)·δ` with
+`δ = 2·tile_in·q_x·q_w / (2^ba·k)`.
 
 ## Files
 
@@ -20,12 +23,12 @@ The architecture-agnostic machinery in `../core/` is reused **unchanged**:
 | `vit_lora.py` | ViT post-ADC LoRA training (image CE + KL to FP teacher) |
 | `run.sh` | env wrapper (see below) |
 
-## Configurations (thesis §5.5.4, ported)
+## Configurations
 
 1. **`fp`** — full-precision timm model, no quantization.
 2. **`int4_no_adc`** — INT4 FlatQuant transforms, ADC floor bypassed. Isolates INT4 error.
-3. **`unsigned_ptq`** — INT4 FlatQuant + unipolar (unsigned shift-subtract) ADC. `k` configurable.
-4. **`unsigned_ptq_lora`** — (3) + post-ADC residual LoRA (rank **r=4**, α=8, all projections,
+3. **`ptq`** — INT4 FlatQuant + ADC hardware model. `k` configurable.
+4. **`ptq_lora`** — (3) + post-ADC residual LoRA (rank **r=4**, α=8, all projections,
    CE + λ·KL to the FP teacher, λ=0.5, T=2.0).
 
 Quantized layers per block: `attn.qkv`, `attn.proj`, `mlp.fc1`, `mlp.fc2`
@@ -38,6 +41,8 @@ Quantized layers per block: `attn.qkv`, `attn.proj`, `mlp.fc1`, `mlp.fc2`
 
 The project `PYTHONPATH` shadows torch and breaks `import torch`. Always launch through
 `run.sh`, which does `cd /tmp && env -u PYTHONPATH IMAGENET_ROOT=... python vit_pipeline.py`.
+The pipeline puts the `quantization_techniques` repo root on `sys.path` so the
+`ADC.llama.core.*` packages import the same way the LLaMA runs use them.
 Verified stack: torch 2.2.2+cu121, timm 0.9.2, torchvision 0.16 on an A100 80GB.
 Needs only torch + timm + torchvision (no `transformers`/`datasets`).
 
@@ -46,20 +51,20 @@ Needs only torch + timm + torchvision (no `transformers`/`datasets`).
 ## Running
 
 ```bash
-cd /home/coder/project/quantization_techniques/ADC/best/vit
+cd /home/coder/project/quantization_techniques/ADC/llama/vit
 
 # 1) Smoke check — fast correctness (2/1 FlatQuant epochs, 128 calib imgs, 5% val subset):
 ./run.sh --model vit_tiny_patch16_224 --configs fp int4_no_adc --smoke --val_portion 0.05
 
-# 2) Full unsigned PTQ (k=4) on vit_tiny:
-./run.sh --model vit_tiny_patch16_224 --configs unsigned_ptq --k 4
+# 2) Full PTQ (k=4) on vit_tiny:
+./run.sh --model vit_tiny_patch16_224 --configs ptq --k 4
 
 # 3) Add post-ADC LoRA (rank 4):
-./run.sh --model vit_tiny_patch16_224 --configs unsigned_ptq_lora --k 4
+./run.sh --model vit_tiny_patch16_224 --configs ptq_lora --k 4
 
 # 4) All four on vit_base:
 ./run.sh --model vit_base_patch16_224 \
-    --configs fp int4_no_adc unsigned_ptq unsigned_ptq_lora --k 4
+    --configs fp int4_no_adc ptq ptq_lora --k 4
 ```
 
 Useful flags: `--k {4,8,16}`, `--val_portion 0.05` (strided subset for speed),
@@ -75,8 +80,7 @@ There is **no thesis ViT target number** — this is a port to a new modality. T
 signal is:
 
 - `fp` top-1 ≈ **76%** (vit_tiny) / **~85%** (vit_base) — matches timm pretrained.
-- Monotonic degradation: `fp ≥ int4_no_adc ≥ unsigned_ptq` in top-1.
-- LoRA recovers accuracy: `unsigned_ptq_lora > unsigned_ptq`.
+- Monotonic degradation: `fp ≥ int4_no_adc ≥ ptq` in top-1.
+- LoRA recovers accuracy: `ptq_lora > ptq`.
 - `--k 16` vs `--k 4` changes the logged δ and moves accuracy (proves the ADC path is engaged).
 - LoRA CE+KL loss decreases across epochs (logged).
-```

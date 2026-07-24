@@ -1,13 +1,14 @@
 """
 Configuration presets for ADC-aware ViT quantization.
 
-Mirrors ADC/best/configs.py, adapted from LLaMA/perplexity to timm ViT /
-ImageNet top-1.  The four §5.5.4 configurations, ported to vision transformers:
+Adapted from the LLaMA ADC pipeline to timm ViT / ImageNet top-1, using the
+ADC hardware model exactly as implemented in ADC/llama/core (bipolar signed
+ADC — floor(y/δ).clamp(na, pa)·δ).  Four configurations:
 
-  fp                 → full precision timm model, no quantization
-  int4_no_adc        → INT4 FlatQuant transforms, ADC floor bypassed
-  unsigned_ptq       → INT4 FlatQuant + unipolar (unsigned shift-subtract) ADC
-  unsigned_ptq_lora  → unsigned_ptq + post-ADC residual LoRA (rank 4)
+  fp            → full precision timm model, no quantization
+  int4_no_adc   → INT4 FlatQuant transforms, ADC floor bypassed
+  ptq           → INT4 FlatQuant + ADC hardware model
+  ptq_lora      → ptq + post-ADC residual LoRA (rank 4)
 
 k (ADC parallelism) is exposed as a CLI flag; default k=4 per request.  The
 thesis used a global k=16 (with 4 as the smallest per-layer-search candidate).
@@ -25,9 +26,8 @@ class ViTBaseConfig:
     output_dir: str = "./outputs_vit"
     data_dir: str | None = None       # falls back to $IMAGENET_ROOT
 
-    # ADC hardware constants
-    #   bipolar δ  = 2·tile_in·q_x·q_w / (2^ba·k)
-    #   unipolar δ = tile_in·(2^bx-1)(2^bw-1) / ((2^ba-1)·k)
+    # ADC hardware constants (bipolar signed ADC, as in ADC/llama/core)
+    #   δ = 2·tile_in·q_x·q_w / (2^ba·k)
     bx: int = 4           # activation bits
     bw: int = 4           # weight bits
     ba: int = 8           # ADC output bits
@@ -51,10 +51,10 @@ class _SharedFlatQuantConfig(ViTBaseConfig):
     """
     # FlatQuant calibration (thesis scale)
     fq_epochs: int = 30            # Stage A epochs
-    fq_stage_b_epochs: int = 10    # Stage B epochs (lr × 0.1)
+    fq_stage_b_epochs: int = 5    # Stage B epochs (lr × 0.1)
     fq_lr: float = 5e-3
     fq_nsamples: int = 1024
-    fq_cali_bsz: int = 16
+    fq_cali_bsz: int = 256
     fq_w_bits: int = 4
     fq_a_bits: int = 4
 
@@ -66,9 +66,6 @@ class _SharedFlatQuantConfig(ViTBaseConfig):
     fq_add_diag: bool = True
     fq_stage_b_prop_alpha: float = 0.5   # x_cal = 0.5·x_adc + 0.5·x_fp
     fq_stage_b_diag_attn: bool = True    # add attention diagonal in stage B
-
-    # Unipolar (unsigned shift-subtract) ADC — models positive-only optical HW.
-    unipolar_adc: bool = True
 
     # Calibration set for ADC percentile scales (drawn from train split).
     num_calibration_batches: int = 64
@@ -105,22 +102,22 @@ class ViTInt4NoADCConfig(_SharedFlatQuantConfig):
 
 
 @dataclass
-class ViTUnsignedPTQConfig(_SharedFlatQuantConfig):
-    """INT4 FlatQuant + full unipolar ADC hardware model (no learned correction)."""
-    name: str = "unsigned_ptq"
+class ViTPTQConfig(_SharedFlatQuantConfig):
+    """INT4 FlatQuant + full ADC hardware model (no learned correction)."""
+    name: str = "ptq"
     use_adc: bool = True
 
 
 @dataclass
-class ViTUnsignedPTQLoRAConfig(ViTUnsignedPTQConfig):
-    """unsigned_ptq + post-ADC residual LoRA correction.
+class ViTPTQLoRAConfig(ViTPTQConfig):
+    """ptq + post-ADC residual LoRA correction.
 
         y = TiledLinearADC(x) + (α/r)·B(A(x.float()))
 
     LoRA is FP32, added after the ADC floor.  Trained with CE (labels) +
     λ·KL(student‖FP-teacher), matching the thesis LoRA recipe (r=4, α=8).
     """
-    name: str = "unsigned_ptq_lora"
+    name: str = "ptq_lora"
 
     lora_rank: int = 4
     lora_alpha: float = 8.0     # effective scaling = α / r = 2.0
@@ -145,8 +142,8 @@ class ViTUnsignedPTQLoRAConfig(ViTUnsignedPTQConfig):
 CONFIG_MAP = {
     "fp": ViTFPConfig,
     "int4_no_adc": ViTInt4NoADCConfig,
-    "unsigned_ptq": ViTUnsignedPTQConfig,
-    "unsigned_ptq_lora": ViTUnsignedPTQLoRAConfig,
+    "ptq": ViTPTQConfig,
+    "ptq_lora": ViTPTQLoRAConfig,
 }
 
 

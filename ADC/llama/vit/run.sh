@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./run.sh --model vit_tiny_patch16_224 --configs fp int4_no_adc --smoke --val_portion 0.05
-#   ./run.sh --model vit_tiny_patch16_224 --configs unsigned_ptq unsigned_ptq_lora --k 4
+#   ./run.sh --model vit_tiny_patch16_224 --configs ptq ptq_lora --k 4
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

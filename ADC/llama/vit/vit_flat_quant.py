@@ -2,13 +2,13 @@
 FlatQuant wrappers for timm Vision Transformers.
 
 This is the ViT analogue of the LLaMA-specific wrappers in
-``core/flat_quant.py`` (FlatQuantLlamaMLP / FlatQuantLlamaAttention /
+``ADC/llama/core/flat_quant.py`` (FlatQuantLlamaMLP / FlatQuantLlamaAttention /
 apply_flatquant_to_model / reparameterize_model / calibrate_flat_quant).
 It reuses the architecture-agnostic building blocks unchanged:
 
-    core.flat_quant.FlatQuantLinear      — per-projection transform + fake/ADC quant
-    core.flat_quant.KroneckerTransform   — learnable Kronecker transform + diagonal
-    core.flat_quant._QuantProjectionWrapper — swaps a projection during attn training
+    ADC.llama.core.flat_quant.FlatQuantLinear      — per-projection transform + fake/ADC quant
+    ADC.llama.core.flat_quant.KroneckerTransform   — learnable Kronecker transform + diagonal
+    ADC.llama.core.flat_quant._QuantProjectionWrapper — swaps a projection during attn training
 
 Structural mapping (timm ViT block ← LLaMA decoder layer):
 
@@ -43,7 +43,7 @@ import torch
 import torch.nn as nn
 from tqdm.auto import tqdm
 
-from core.flat_quant import (
+from ADC.llama.core.flat_quant import (
     FlatQuantLinear,
     KroneckerTransform,
     _QuantProjectionWrapper,

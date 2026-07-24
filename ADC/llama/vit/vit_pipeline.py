@@ -2,9 +2,9 @@
 """
 ADC-aware INT4 quantization of timm Vision Transformers on ImageNet.
 
-Ports the LLaMA pipeline (ADC/best/pipeline.py) to vision transformers,
-reusing core/adc_layers.py, core/adc_lora.py and core/flat_quant.py unchanged,
-plus the ViT-specific wrappers in this directory.
+Ports the LLaMA ADC pipeline to vision transformers, reusing the core modules
+in ADC/llama/core (adc_layers.py, adc_lora.py, flat_quant.py) unchanged, plus
+the ViT-specific wrappers in this directory.
 
 Pipeline (quantized configs):
   1. Load pretrained timm ViT
@@ -15,15 +15,15 @@ Pipeline (quantized configs):
   5. (optional) post-ADC LoRA → learn residual correction (CE+KL to FP teacher)
   6. Evaluate ImageNet top-1/top-5, measure latency
 
-Four configurations (thesis §5.5.4, ported to ViT):
-  fp                 full precision
-  int4_no_adc        INT4 FlatQuant, ADC floor bypassed
-  unsigned_ptq       INT4 FlatQuant + unipolar ADC (default k=4)
-  unsigned_ptq_lora  unsigned_ptq + post-ADC LoRA (rank 4)
+Four configurations:
+  fp            full precision
+  int4_no_adc   INT4 FlatQuant, ADC floor bypassed
+  ptq           INT4 FlatQuant + ADC hardware model (default k=4)
+  ptq_lora      ptq + post-ADC LoRA (rank 4)
 
 Run (via run.sh, which sets the env):
   ./run.sh --model vit_tiny_patch16_224 --configs fp int4_no_adc --smoke --val_portion 0.05
-  ./run.sh --model vit_tiny_patch16_224 --configs unsigned_ptq unsigned_ptq_lora --k 4
+  ./run.sh --model vit_tiny_patch16_224 --configs ptq ptq_lora --k 4
 """
 
 import argparse
@@ -38,19 +38,21 @@ import timm
 import torch
 import torch.nn as nn
 
-# Make `core` and the sibling vit_* modules importable whether run from the
-# repo root or from ADC/best/.
+# Make the ADC.llama.core package (absolute imports, like the llama runs use)
+# and the sibling vit_* modules importable regardless of the launch cwd.
+#   _HERE      = ADC/llama/vit        → sibling `vit_*` modules
+#   _REPO_ROOT = quantization_techniques → `ADC.llama.core.*` namespace packages
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_BEST = os.path.dirname(_HERE)
-sys.path.insert(0, _BEST)   # ADC/best  → `core`, `configs`, `eval`
-sys.path.insert(0, _HERE)   # ADC/best/vit → `vit_*`
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
+sys.path.insert(0, _REPO_ROOT)
+sys.path.insert(0, _HERE)
 
-from core.adc_layers import TiledLinearADC              # noqa: E402
-from core.adc_lora import apply_adc_lora                # noqa: E402
-from core.flat_quant import FlatQuantLinear             # noqa: E402
+from ADC.llama.core.adc_layers import TiledLinearADC    # noqa: E402
+from ADC.llama.core.adc_lora import apply_adc_lora      # noqa: E402
+from ADC.llama.core.flat_quant import FlatQuantLinear   # noqa: E402
 
 from vit_configs import build_config, ViTFPConfig, ViTInt4NoADCConfig, \
-    ViTUnsignedPTQConfig, ViTUnsignedPTQLoRAConfig      # noqa: E402
+    ViTPTQConfig, ViTPTQLoRAConfig                       # noqa: E402
 from vit_data import ViTImageNetLoaderGenerator, resolve_imagenet_root  # noqa: E402
 from vit_eval import validate, measure_latency          # noqa: E402
 from vit_flat_quant import (                             # noqa: E402
@@ -76,7 +78,7 @@ def load_vit_model(cfg):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ADC conversion + calibration  (reused pattern from ADC/best/pipeline.py)
+# ADC conversion + calibration  (reused pattern from the LLaMA ADC pipeline)
 # ─────────────────────────────────────────────────────────────────────────────
 
 EXCLUDE = ("head", "_orig_attn")  # classifier head + the retained orig attn module
@@ -95,7 +97,6 @@ def _replace_linear_with_adc(model, cfg):
                     bx=cfg.bx, bw=cfg.bw, ba=cfg.ba, k=cfg.k,
                     ashift=False, signed_activations=True,
                     mvm_limit=cfg.mvm_limit,
-                    unipolar_adc=getattr(cfg, "unipolar_adc", False),
                     use_kurtosis_loss=False,
                 )
                 adc.load_weights(child)
@@ -108,8 +109,7 @@ def _replace_linear_with_adc(model, cfg):
     delta0 = next(m.tiles[0].delta for _, m in model.named_modules()
                   if isinstance(m, TiledLinearADC))
     logger.info(f"  Replaced {n_adc} linear layers with TiledLinearADC "
-                f"(k={cfg.k}, unipolar={getattr(cfg, 'unipolar_adc', False)}, "
-                f"example δ≈{delta0:.3f})")
+                f"(k={cfg.k}, example δ≈{delta0:.3f})")
     return model
 
 
@@ -143,7 +143,7 @@ class _ADCCalibrator:
     """Sets per-channel quant scales from activation/weight percentile stats.
 
     Runs in bypass mode (clean FP forward) to collect stats, then writes scales.
-    (Same approach as ADC/best/pipeline.py._ADCCalibrator.)
+    (Same approach as the LLaMA ADC pipeline's _ADCCalibrator.)
     """
 
     def __init__(self, model, cfg):
@@ -206,9 +206,11 @@ class _ADCCalibrator:
 
 def _fq_cache_key(cfg):
     import hashlib
+    # use_adc is part of the key: int4_no_adc now trains FlatQuant without the
+    # ADC floor, so its cached model differs from the ADC-trained ptq model.
     s = (f"{cfg.model_name}_{cfg.fq_epochs}_{cfg.fq_stage_b_epochs}_{cfg.fq_nsamples}"
          f"_{cfg.fq_lr}_{cfg.bx}_{cfg.bw}_{cfg.ba}_{cfg.k}_{cfg.mvm_limit}"
-         f"_uni{getattr(cfg, 'unipolar_adc', False)}_v1")
+         f"_adc{int(getattr(cfg, 'use_adc', True))}_v3")
     return hashlib.md5(s.encode()).hexdigest()[:10]
 
 
@@ -222,9 +224,18 @@ def apply_flatquant(model, loader, cfg, device, cache_dir=None):
             return torch.load(cache_path, weights_only=False, map_location=device).to(device)
         logger.info(f"FlatQuant cache miss — will save to {cache_path}")
 
-    fq_adc_config = dict(bx=cfg.bx, bw=cfg.bw, ba=cfg.ba, k=cfg.k,
-                         mvm_limit=cfg.mvm_limit, signed_activations=True,
-                         fq_unipolar_delta=getattr(cfg, "unipolar_adc", False))
+    # When the config disables the ADC (int4_no_adc), train FlatQuant WITHOUT
+    # the ADC floor: adc_config=None makes FlatQuantLinear.train_forward use
+    # plain INT4 fake-quant instead of _train_forward_adc.  This keeps training
+    # and evaluation consistent (both INT4, no ADC floor) rather than adapting
+    # the transforms to an ADC regime that eval then bypasses.
+    if getattr(cfg, "use_adc", True):
+        fq_adc_config = dict(bx=cfg.bx, bw=cfg.bw, ba=cfg.ba, k=cfg.k,
+                             mvm_limit=cfg.mvm_limit, signed_activations=True)
+    else:
+        fq_adc_config = None
+        logger.info("  ADC disabled for this config → FlatQuant trains with "
+                    "plain INT4 fake-quant (no ADC floor)")
 
     logger.info("─── Apply FlatQuant wrappers ───")
     model = apply_flatquant_to_vit(
@@ -334,10 +345,10 @@ def run_config(cfg, cache_dir=None):
             _set_bypass_adc_floor(model, True)
             results = run_evaluation(model, val_loader, cfg, device)
             _set_bypass_adc_floor(model, False)
-        elif isinstance(cfg, ViTUnsignedPTQLoRAConfig):
+        elif isinstance(cfg, ViTPTQLoRAConfig):
             model = apply_lora(model, calib_loader, cfg, device)
             results = run_evaluation(model, val_loader, cfg, device)
-        else:  # ViTUnsignedPTQConfig
+        else:  # ViTPTQConfig
             results = run_evaluation(model, val_loader, cfg, device)
 
     results["config"] = cfg.name
@@ -368,8 +379,8 @@ def print_table(all_results):
 def main():
     p = argparse.ArgumentParser(description="ADC-aware INT4 ViT quantization")
     p.add_argument("--configs", nargs="+",
-                   default=["fp", "int4_no_adc", "unsigned_ptq", "unsigned_ptq_lora"],
-                   choices=["fp", "int4_no_adc", "unsigned_ptq", "unsigned_ptq_lora"])
+                   default=["fp", "int4_no_adc", "ptq", "ptq_lora"],
+                   choices=["fp", "int4_no_adc", "ptq", "ptq_lora"])
     p.add_argument("--model", default="vit_tiny_patch16_224",
                    help="timm model, e.g. vit_tiny_patch16_224 / vit_base_patch16_224")
     p.add_argument("--k", type=int, default=4, help="ADC parallelism (thesis default 16)")
@@ -380,6 +391,10 @@ def main():
     p.add_argument("--num_workers", type=int, default=8)
     p.add_argument("--smoke", action="store_true",
                    help="shrink calibration (few epochs / samples) for a fast run")
+    p.add_argument("--fq_epochs", type=int, default=None,
+                   help="override FlatQuant Stage A epochs (full-scale data, fewer epochs)")
+    p.add_argument("--fq_stage_b_epochs", type=int, default=None,
+                   help="override FlatQuant Stage B epochs (0 to skip Stage B)")
     p.add_argument("--output_dir", default="./outputs_vit")
     p.add_argument("--fq_cache_dir", default="./outputs_vit/fq_cache")
     p.add_argument("--no_fq_cache", action="store_true")
@@ -396,6 +411,12 @@ def main():
             num_workers=args.num_workers, output_dir=args.output_dir)
         if args.smoke and hasattr(cfg, "apply_smoke"):
             cfg.apply_smoke()
+        # Explicit epoch overrides win over --smoke, letting you run full-scale
+        # calibration data (fq_nsamples etc.) with a reduced epoch count.
+        if args.fq_epochs is not None and hasattr(cfg, "fq_epochs"):
+            cfg.fq_epochs = args.fq_epochs
+        if args.fq_stage_b_epochs is not None and hasattr(cfg, "fq_stage_b_epochs"):
+            cfg.fq_stage_b_epochs = args.fq_stage_b_epochs
         try:
             all_results[name] = run_config(cfg, cache_dir=cache_dir)
         except Exception as e:
