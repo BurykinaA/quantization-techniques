@@ -9,7 +9,7 @@ from pathlib import Path
 MODELS = [
     ("meta-llama/Llama-3.2-1B", "Llama-3.2-1B", "llama32_1b"),
     ("Qwen/Qwen2.5-1.5B", "Qwen2.5-1.5B", "qwen25_15b"),
-    ("allenai/OLMo-1B-hf", "OLMo-1B", "olmo_1b"),
+    ("HuggingFaceTB/SmolLM2-1.7B", "SmolLM2-1.7B", "smollm2_17b"),
     ("TinyLlama/TinyLlama_v1.1", "TinyLlama-1.1B", "tinyllama_11b"),
 ]
 
@@ -138,11 +138,6 @@ def validate_adc_config(record: dict) -> list[str]:
         "max_eval_samples": 1000,
         "pre_lora_ppl_threshold": 500.0,
     }
-    if record.get("model_name") == "allenai/OLMo-1B-hf":
-        expected.update({
-            "fq_propagate_quant": True,
-            "fq_prop_alpha": 0.5,
-        })
     mismatches = []
     for name, value in expected.items():
         if config.get(name) != value:
@@ -196,11 +191,7 @@ def collect_rows(records: list[dict]) -> tuple[list[dict], list[str]]:
 
     for model_id, model_label, key in MODELS:
         bf16_record = by_run_name.get(f"{key}_bf16")
-        adc_run_name = (
-            f"{key}_adc_transfer_stage_a_prop_v2"
-            if key == "olmo_1b"
-            else f"{key}_adc_transfer"
-        )
+        adc_run_name = f"{key}_adc_transfer"
         adc_record = by_run_name.get(adc_run_name)
         int4_adc_off_run_name = f"{key}_int4_ptq_adc_off"
         int4_adc_off_record = by_run_name.get(int4_adc_off_run_name)

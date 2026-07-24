@@ -4,7 +4,7 @@ This runner evaluates the same protocol on:
 
 - `meta-llama/Llama-3.2-1B`
 - `Qwen/Qwen2.5-1.5B`
-- `allenai/OLMo-1B-hf`
+- `HuggingFaceTB/SmolLM2-1.7B`
 - `TinyLlama/TinyLlama_v1.1`
 
 The historical `run_perplexity_all_models.sh` and
@@ -23,21 +23,12 @@ The historical `run_perplexity_all_models.sh` and
   objective; transform singular values are bounded to prevent late-layer drift
 - ADC scale calibration batch size 4
 - post-ADC LoRA: rank 4, all seven projections, 5 epochs, CE + KL,
-  effective batch size 4. Qwen uses microbatch 2 with two gradient-accumulation
-  steps. TinyLlama also uses microbatch 2 with two accumulation steps because
-  its 22 tiled decoder layers exceed an 80 GB GPU at physical batch 4.
+  effective batch size 4. Qwen, SmolLM2, and TinyLlama use microbatch 2 with
+  two gradient-accumulation steps.
 - WikiText-2 `test` and the existing C4 `test` to `validation` mapping
 - context 2048, stride 1024, 1000 C4 samples
 - downstream: HellaSwag, MMLU, WinoGrande, ARC-Easy, ARC-Challenge,
   PIQA, OpenBookQA, and BoolQ; MMLU is 5-shot and all other tasks are 0-shot
-
-The corrected OLMo transfer run also enables propagation during Stage A. Each
-next decoder layer receives the full quantized-dequantized output of the
-preceding layer, while `fq_prop_alpha=0.5` mixes clean-input and
-propagated-input reconstruction losses. Hidden states themselves are never
-interpolated. OLMo writes to the separate
-`adc_transfer_stage_a_prop_v2` checkpoint directory so the failed clean-input
-Stage A checkpoint remains available for diagnostics.
 
 `--enforce_transfer_quant_config` makes the quantized run fail early if its
 signed W4A4/ADC/LoRA settings differ from this protocol.
@@ -84,11 +75,11 @@ SMOKE=1 SKIP_COMPLETED=1 \
 To retry one architecture:
 
 ```bash
-SMOKE=1 ONLY=qwen25_15b SKIP_COMPLETED=0 \
+SMOKE=1 ONLY=smollm2_17b SKIP_COMPLETED=0 \
   bash ADC/llama/run_multi_arch_transfer.sh
 ```
 
-Accepted `ONLY` keys are `llama32_1b`, `qwen25_15b`, `olmo_1b`, and
+Accepted `ONLY` keys are `llama32_1b`, `qwen25_15b`, `smollm2_17b`, and
 `tinyllama_11b`; comma-separated keys and full model IDs are also accepted.
 
 ## Full resumable CUDA batch
@@ -173,10 +164,10 @@ To compare saved Stage A and Stage B checkpoints without retraining, LoRA, or
 downstream evaluation, run the diagnostic mode for each checkpoint:
 
 ```bash
-ONLY=olmo_1b FQ_DIAGNOSTIC_STAGE=stage_a DIAGNOSTIC_WINDOWS=8 \
+ONLY=smollm2_17b FQ_DIAGNOSTIC_STAGE=stage_a DIAGNOSTIC_WINDOWS=8 \
   bash ADC/llama/run_multi_arch_transfer.sh
 
-ONLY=olmo_1b FQ_DIAGNOSTIC_STAGE=stage_b DIAGNOSTIC_WINDOWS=8 \
+ONLY=smollm2_17b FQ_DIAGNOSTIC_STAGE=stage_b DIAGNOSTIC_WINDOWS=8 \
   bash ADC/llama/run_multi_arch_transfer.sh
 ```
 
@@ -213,7 +204,7 @@ LORA_MICROBATCH_SIZE=1 LORA_GRADIENT_ACCUMULATION_STEPS=4 \
 
 ## Validate and format results
 
-The summarizer fails if any of the expected 12 rows, task metrics, perplexities,
+The summarizer fails if any of the expected 16 rows, task metrics, perplexities,
 or fixed protocol fields are missing. It recomputes the eight-task mean and
 writes copy-ready Markdown and LaTeX rows.
 

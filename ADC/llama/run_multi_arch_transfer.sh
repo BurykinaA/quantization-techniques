@@ -22,13 +22,13 @@ LOG_ROOT="${LOG_ROOT:-${SCRIPT_DIR}/transfer_results/logs}"
 MODEL_KEYS=(
   "llama32_1b"
   "qwen25_15b"
-  "olmo_1b"
+  "smollm2_17b"
   "tinyllama_11b"
 )
 MODEL_IDS=(
   "meta-llama/Llama-3.2-1B"
   "Qwen/Qwen2.5-1.5B"
-  "allenai/OLMo-1B-hf"
+  "HuggingFaceTB/SmolLM2-1.7B"
   "TinyLlama/TinyLlama_v1.1"
 )
 
@@ -155,8 +155,6 @@ run_int4_adc_off() {
 
   if [[ "${key}" == "qwen25_15b" ]]; then
     source_suffix="adc_transfer_best_epoch_v2"
-  elif [[ "${key}" == "olmo_1b" ]]; then
-    source_suffix="adc_transfer_stage_a_prop_v2"
   fi
 
   local transforms_path="${CHECKPOINT_ROOT}/${key}/${source_suffix}/flat_quant_transforms.pt"
@@ -253,16 +251,14 @@ run_adc_transfer() {
     lora_microbatch_size=2
     lora_gradient_accumulation_steps=2
   fi
+  if [[ "${key}" == "smollm2_17b" && -z "${LORA_MICROBATCH_SIZE+x}" ]]; then
+    lora_microbatch_size=2
+    lora_gradient_accumulation_steps=2
+  fi
   if [[ "${key}" == "tinyllama_11b" && -z "${LORA_MICROBATCH_SIZE+x}" ]]; then
     lora_microbatch_size=2
     lora_gradient_accumulation_steps=2
   fi
-  if [[ "${key}" == "olmo_1b" ]]; then
-    run_suffix="adc_transfer_stage_a_prop_v2"
-    output_suffix="adc_transfer_stage_a_prop_v2"
-    stage_a_propagation_args=(--fq_propagate_quant --fq_prop_alpha 0.5)
-  fi
-
   if [[ "${SMOKE}" == "1" ]]; then
     run_suffix="adc_transfer_smoke"
     output_suffix="adc_transfer_smoke"
