@@ -2236,6 +2236,14 @@ def main():
                              "and continue with Stage B")
     parser.add_argument("--fq_skip_stage_b_on_reload", action="store_true",
                         help="Treat reloaded transforms as final and skip Stage B")
+    parser.add_argument(
+        "--fq_test_layers",
+        nargs="+",
+        type=int,
+        default=None,
+        help="Run full-shape Stage A calibration only for selected decoder "
+             "layers, forwarding FP references through all other layers, then exit",
+    )
 
     # ADC settings
     parser.add_argument("--bx", type=int, default=8, help="Activation bits")
@@ -2372,6 +2380,15 @@ def main():
                 "--adc_off_eval_only cannot be combined with "
                 "--enforce_transfer_quant_config"
             )
+        args.disable_visualizations = True
+        args.skip_model_save = True
+    if args.fq_test_layers:
+        if args.preprocess_method != "flat_quant":
+            parser.error("--fq_test_layers requires --preprocess_method flat_quant")
+        if args.fq_reload_path or args.fq_start_stage_b_from:
+            parser.error("--fq_test_layers cannot reload FlatQuant transforms")
+        if min(args.fq_test_layers) < 0:
+            parser.error("--fq_test_layers values must be non-negative")
         args.disable_visualizations = True
         args.skip_model_save = True
     if args.fq_start_stage_b_from:
@@ -2937,7 +2954,22 @@ def main():
                     stochastic_prop=args.fq_stochastic_prop,
                     stochastic_mode=args.fq_stochastic_mode,
                     beta_param=args.fq_beta_param,
+                    amp_dtype=torch_dtype,
+                    calibration_layer_indices=(
+                        set(args.fq_test_layers)
+                        if args.fq_test_layers
+                        else None
+                    ),
                 )
+                if args.fq_test_layers:
+                    logger.info(
+                        "Targeted FlatQuant layer test complete for layers %s; "
+                        "skipping Stage B, ADC conversion, LoRA, evaluation, and saving",
+                        args.fq_test_layers,
+                    )
+                    if use_wandb:
+                        wandb.finish()
+                    return
                 os.makedirs(args.output_dir, exist_ok=True)
                 stage_a_transforms_path = os.path.join(
                     args.output_dir,
@@ -2996,6 +3028,7 @@ def main():
                     stochastic_mode=args.fq_stochastic_mode,
                     beta_param=args.fq_beta_param,
                     adc_noise_std=args.fq_stage_b_noise_std,
+                    amp_dtype=torch_dtype,
                 )
 
             if args.fq_save_transforms:

@@ -13,11 +13,17 @@ FQ_STAGE_A_PATH="${FQ_STAGE_A_PATH:-}"
 FORCE_FQ_RETRAIN="${FORCE_FQ_RETRAIN:-0}"
 FQ_DIAGNOSTIC_STAGE="${FQ_DIAGNOSTIC_STAGE:-}"
 DIAGNOSTIC_WINDOWS="${DIAGNOSTIC_WINDOWS:-8}"
+FQ_TEST_LAYERS="${FQ_TEST_LAYERS:-}"
 INT4_ADC_OFF_ONLY="${INT4_ADC_OFF_ONLY:-0}"
 INT4_ADC_OFF_TRANSFORMS_PATH="${INT4_ADC_OFF_TRANSFORMS_PATH:-}"
 RESULTS_JSON="${RESULTS_JSON:-${SCRIPT_DIR}/transfer_results/multi_arch_transfer.json}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-${SCRIPT_DIR}/transfer_results/checkpoints}"
 LOG_ROOT="${LOG_ROOT:-${SCRIPT_DIR}/transfer_results/logs}"
+
+if [[ -n "${FQ_TEST_LAYERS}" && "${SMOKE}" == "1" ]]; then
+  echo "FQ_TEST_LAYERS cannot be combined with SMOKE=1" >&2
+  exit 1
+fi
 
 MODEL_KEYS=(
   "llama32_1b"
@@ -239,6 +245,7 @@ run_adc_transfer() {
   local -a quality_guard_args=(--pre_lora_ppl_threshold 500)
   local -a resume_args=()
   local -a stage_a_propagation_args=()
+  local -a fq_test_layer_values=()
   local -a optional_args=(
     --fq_save_transforms
     --run_lm_eval
@@ -288,7 +295,18 @@ run_adc_transfer() {
   local transforms_path="${standard_output_dir}/flat_quant_transforms.pt"
   local stage_a_transforms_path="${standard_output_dir}/flat_quant_transforms_stage_a.pt"
 
-  if [[ -n "${FQ_DIAGNOSTIC_STAGE}" ]]; then
+  if [[ -n "${FQ_TEST_LAYERS}" ]]; then
+    IFS=',' read -r -a fq_test_layer_values <<< "${FQ_TEST_LAYERS}"
+    local test_suffix="${FQ_TEST_LAYERS//,/_}"
+    run_name="${key}_fq_layer_test_${test_suffix}"
+    output_dir="${CHECKPOINT_ROOT}/${key}/fq_layer_test_${test_suffix}"
+    log_path="${LOG_ROOT}/${run_name}.log"
+    optional_args=(
+      --fq_test_layers "${fq_test_layer_values[@]}"
+      --skip_model_save
+    )
+    quality_guard_args=()
+  elif [[ -n "${FQ_DIAGNOSTIC_STAGE}" ]]; then
     case "${FQ_DIAGNOSTIC_STAGE}" in
       stage_a)
         transforms_path="${stage_a_transforms_path}"
@@ -320,7 +338,9 @@ run_adc_transfer() {
     return
   fi
 
-  if [[ -n "${FQ_DIAGNOSTIC_STAGE}" ]]; then
+  if [[ -n "${FQ_TEST_LAYERS}" ]]; then
+    :
+  elif [[ -n "${FQ_DIAGNOSTIC_STAGE}" ]]; then
     :
   elif [[ "${FQ_START_STAGE_B}" == "1" ]]; then
     if [[ -n "${FQ_STAGE_A_PATH}" ]]; then
@@ -398,7 +418,7 @@ run_adc_transfer() {
 }
 
 echo "Results: ${RESULTS_JSON}"
-echo "Mode: SMOKE=${SMOKE} ONLY=${ONLY:-all} SKIP_COMPLETED=${SKIP_COMPLETED} FQ_START_STAGE_B=${FQ_START_STAGE_B} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN} FQ_DIAGNOSTIC_STAGE=${FQ_DIAGNOSTIC_STAGE:-off} INT4_ADC_OFF_ONLY=${INT4_ADC_OFF_ONLY}"
+echo "Mode: SMOKE=${SMOKE} ONLY=${ONLY:-all} SKIP_COMPLETED=${SKIP_COMPLETED} FQ_START_STAGE_B=${FQ_START_STAGE_B} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN} FQ_DIAGNOSTIC_STAGE=${FQ_DIAGNOSTIC_STAGE:-off} FQ_TEST_LAYERS=${FQ_TEST_LAYERS:-off} INT4_ADC_OFF_ONLY=${INT4_ADC_OFF_ONLY}"
 
 for index in "${!MODEL_KEYS[@]}"; do
   key="${MODEL_KEYS[${index}]}"
@@ -414,7 +434,7 @@ for index in "${!MODEL_KEYS[@]}"; do
     run_int4_adc_off "${key}" "${model_id}"
     continue
   fi
-  if [[ "${SMOKE}" != "1" && -z "${FQ_DIAGNOSTIC_STAGE}" ]]; then
+  if [[ "${SMOKE}" != "1" && -z "${FQ_DIAGNOSTIC_STAGE}" && -z "${FQ_TEST_LAYERS}" ]]; then
     run_bf16 "${key}" "${model_id}"
   fi
   run_adc_transfer "${key}" "${model_id}"

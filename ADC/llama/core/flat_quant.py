@@ -1184,6 +1184,25 @@ def _project_flatquant_parameters(module: nn.Module) -> None:
                 parameter.data.clamp_(min=-2.25, max=100.0)
 
 
+def _resolve_flatquant_amp_dtype(
+    model: nn.Module,
+    requested_dtype: torch.dtype | None = None,
+) -> torch.dtype:
+    """Choose calibration autocast dtype without narrowing BF16 models to FP16."""
+    supported_dtypes = {torch.float16, torch.bfloat16, torch.float32}
+    if requested_dtype is not None:
+        if requested_dtype not in supported_dtypes:
+            raise ValueError(
+                f"Unsupported FlatQuant calibration dtype: {requested_dtype}"
+            )
+        return requested_dtype
+
+    for parameter in model.parameters():
+        if parameter.is_floating_point() and parameter.dtype in supported_dtypes:
+            return parameter.dtype
+    return torch.float32
+
+
 def _capture_calibration_batch(
     storage: torch.Tensor,
     batch: torch.Tensor,
@@ -1237,6 +1256,8 @@ def calibrate_flat_quant(
     stochastic_mode: str = "bernoulli",  # "bernoulli" | "beta"
     beta_param: float = 2.0,
     adc_noise_std: float = 0.0,
+    amp_dtype: torch.dtype | None = None,
+    calibration_layer_indices: set[int] | None = None,
 ) -> nn.Module:
     """Train FlatQuant transforms layer-by-layer using MSE loss.
 
@@ -1272,11 +1293,19 @@ def calibrate_flat_quant(
         param.requires_grad = False
 
     # ── AMP setup ──
-    dtype = torch.float16
-    traincast = functools.partial(torch.amp.autocast, device_type="cuda", dtype=dtype)
-    if not torch.cuda.is_available():
-        dtype = torch.float32
+    # Respect the model/requested compute dtype. Hard-coding FP16 here can
+    # overflow late-layer MLP transforms in BF16 models even though BF16 has
+    # sufficient exponent range.
+    dtype = _resolve_flatquant_amp_dtype(model, amp_dtype)
+    if torch.cuda.is_available() and dtype in (torch.float16, torch.bfloat16):
+        traincast = functools.partial(
+            torch.amp.autocast,
+            device_type="cuda",
+            dtype=dtype,
+        )
+    else:
         traincast = nullcontext
+    logger.info("FlatQuant calibration compute dtype: %s", dtype)
 
     backbone = get_decoder_backbone(model)
     layers = get_decoder_layers(model)
@@ -1398,6 +1427,25 @@ def calibrate_flat_quant(
         loss_func = nn.MSELoss()
 
     num_layers = len(layers)
+    selected_layers = (
+        set(calibration_layer_indices)
+        if calibration_layer_indices is not None
+        else None
+    )
+    if selected_layers is not None:
+        invalid_layers = sorted(
+            index for index in selected_layers
+            if index < 0 or index >= num_layers
+        )
+        if invalid_layers:
+            raise ValueError(
+                f"FlatQuant calibration layer indices out of range: "
+                f"{invalid_layers}; model has {num_layers} layers"
+            )
+        logger.info(
+            "FlatQuant targeted calibration layers: %s",
+            sorted(selected_layers),
+        )
     layer_bar = tqdm(range(num_layers), desc="FlatQuant layers", unit="layer")
     for i in layer_bar:
         layer_bar.set_postfix(layer=i)
@@ -1432,6 +1480,22 @@ def calibrate_flat_quant(
             continue
         if _out_bad:
             logger.warning(f"Layer {i}: fp_outs (FP reference) contains NaN/Inf — training may be unstable")
+
+        if selected_layers is not None and i not in selected_layers:
+            logger.info(
+                "  layer %d: targeted test skips optimization; forwarding FP reference",
+                i,
+            )
+            fp_inps, fp_outs = fp_outs, fp_inps
+            for name, param in layer.named_parameters():
+                param.requires_grad = False
+                if name in dtype_dict:
+                    param.data = param.to(dtype_dict[name])
+            layers[i] = layer.cpu()
+            del layer
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            continue
 
         # (b) Initialise diagonal scales from activation / weight stats
         if add_diag:
@@ -1596,10 +1660,15 @@ def calibrate_flat_quant(
             i,
             best_validation,
         )
+        if not math.isfinite(best_validation):
+            raise RuntimeError(
+                f"FlatQuant layer {i} has a non-finite initial validation "
+                "objective; refusing to start calibration"
+            )
 
-        # Attach forward hooks to catch the first NaN-producing tensor (only
-        # on the first NaN batch so we don't spam the log).
+        # Attach forward hooks to catch the first NaN-producing tensor.
         _nan_found: list[str] = []
+        _nan_reported_tags: set[str] = set()
 
         def _make_nan_hook(tag: str) -> callable:
             def _hook(module, inp, out):
@@ -1608,7 +1677,12 @@ def calibrate_flat_quant(
                 t = out[0] if isinstance(out, (tuple, list)) else out
                 if isinstance(t, torch.Tensor) and (torch.isnan(t).any() or torch.isinf(t).any()):
                     _nan_found.append(tag)
-                    logger.warning(f"Layer {i}: first NaN/Inf tensor → {tag}  shape={list(t.shape)}")
+                    if tag not in _nan_reported_tags:
+                        _nan_reported_tags.add(tag)
+                        logger.warning(
+                            f"Layer {i}: first NaN/Inf tensor → {tag}  "
+                            f"shape={list(t.shape)}"
+                        )
             return _hook
 
         _hooks = []
@@ -1616,6 +1690,8 @@ def calibrate_flat_quant(
             _hooks.append(mod.register_forward_hook(_make_nan_hook(name)))
 
         epoch_bar = tqdm(range(epochs), desc=f"  L{i} epochs", unit="ep", leave=False)
+        layer_aborted = False
+        invalid_batch_limit = min(4, n_batches)
         for epoch in epoch_bar:
             epoch_mse = 0.0
             epoch_dead = 0.0
@@ -1624,8 +1700,11 @@ def calibrate_flat_quant(
             epoch_band = 0.0
             epoch_pen_count = 0
             nan_count = 0
+            consecutive_invalid_batches = 0
+            processed_batches = 0
             batch_bar = tqdm(range(n_batches), desc=f"    L{i} E{epoch} batches", unit="batch", leave=False)
             for j in batch_bar:
+                processed_batches = j + 1
                 idx = j * cali_bsz
                 _nan_found.clear()
                 # Forward only under autocast — backward must run in float32
@@ -1703,8 +1782,19 @@ def calibrate_flat_quant(
                             epoch_band += (_band_acc / _n_band).item()
                 if torch.isnan(loss) or torch.isinf(loss):
                     nan_count += 1
+                    consecutive_invalid_batches += 1
                     batch_bar.set_postfix(loss="NaN", nan=nan_count)
                     scheduler.step()
+                    if consecutive_invalid_batches >= invalid_batch_limit:
+                        layer_aborted = True
+                        logger.error(
+                            "Layer %d epoch %d: %d consecutive invalid forward "
+                            "batches; aborting the layer and restoring its best checkpoint",
+                            i,
+                            epoch,
+                            consecutive_invalid_batches,
+                        )
+                        break
                     continue
                 epoch_mse += loss.detach().item()
                 # Cast to float32 before backward so 1/loss doesn't overflow
@@ -1741,10 +1831,22 @@ def calibrate_flat_quant(
                                     f"nan={n_nan} inf={n_inf}  finite_range=[{gmin:.3e}, {gmax:.3e}]"
                                 )
                     nan_count += 1
+                    consecutive_invalid_batches += 1
                     batch_bar.set_postfix(loss="NaN/grad", nan=nan_count)
                     optimizer.zero_grad()
                     scheduler.step()
+                    if consecutive_invalid_batches >= invalid_batch_limit:
+                        layer_aborted = True
+                        logger.error(
+                            "Layer %d epoch %d: %d consecutive invalid gradient "
+                            "batches; aborting the layer and restoring its best checkpoint",
+                            i,
+                            epoch,
+                            consecutive_invalid_batches,
+                        )
+                        break
                     continue
+                consecutive_invalid_batches = 0
                 # Clip gradients to prevent explosion through 1/diag paths
                 torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
                 optimizer.step()
@@ -1773,8 +1875,12 @@ def calibrate_flat_quant(
                     _pf["band"] = f"{(_band_acc / _n_band).item():.3e}"
                 batch_bar.set_postfix(**_pf)
             lr = optimizer.param_groups[0]["lr"]
-            ok = n_batches - nan_count
-            _epf = dict(lr=f"{lr:.2e}", mse=f"{epoch_mse:.3e}", ok=f"{ok}/{n_batches}")
+            ok = processed_batches - nan_count
+            _epf = dict(
+                lr=f"{lr:.2e}",
+                mse=f"{epoch_mse:.3e}",
+                ok=f"{ok}/{processed_batches}",
+            )
             _log_extra = ""
             if epoch_pen_count > 0:
                 _mean_dead = epoch_dead / epoch_pen_count
@@ -1794,8 +1900,11 @@ def calibrate_flat_quant(
             epoch_bar.set_postfix(**_epf)
             logger.info(
                 f"  layer {i} epoch {epoch}, lr={lr:.8f}, "
-                f"mse={epoch_mse:.4e}, ok_batches={ok}/{n_batches}{_log_extra}"
+                f"mse={epoch_mse:.4e}, ok_batches={ok}/{processed_batches}"
+                f" (target={n_batches}){_log_extra}"
             )
+            if layer_aborted:
+                break
             validation_objective = _validation_objective()
             logger.info(
                 "  layer %d epoch %d validation objective=%.4e",
@@ -1830,6 +1939,19 @@ def calibrate_flat_quant(
                     )
         for h in _hooks:
             h.remove()
+        if layer_aborted:
+            if best_epoch < 0:
+                raise RuntimeError(
+                    f"FlatQuant layer {i} became numerically invalid before "
+                    "finding an improved checkpoint; refusing to continue"
+                )
+            logger.warning(
+                "Layer %d recovered from invalid batches using epoch %d "
+                "(validation %.4e)",
+                i,
+                best_epoch,
+                best_validation,
+            )
 
         # (d5) Post-training per-tile PACT alpha calibration.
         # Transforms are now converged.  Run a few no-grad batches through the

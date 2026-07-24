@@ -13,6 +13,7 @@ from ADC.llama.core.flat_quant import (
     _capture_calibration_batch,
     _project_flatquant_parameters,
     _reparameterize_ln,
+    _resolve_flatquant_amp_dtype,
     apply_flatquant_to_model,
     load_flat_transforms,
     reparameterize_model,
@@ -114,6 +115,16 @@ def test_calibration_capture_keeps_every_batch_element() -> None:
     torch.testing.assert_close(
         storage,
         torch.cat((first_batch, second_batch[:2]), dim=0),
+    )
+
+
+def test_flatquant_amp_dtype_preserves_bfloat16_model() -> None:
+    model = nn.Linear(8, 8).to(dtype=torch.bfloat16)
+
+    assert _resolve_flatquant_amp_dtype(model) == torch.bfloat16
+    assert (
+        _resolve_flatquant_amp_dtype(model, requested_dtype=torch.float32)
+        == torch.float32
     )
 
 

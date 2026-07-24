@@ -18,6 +18,8 @@ The historical `run_perplexity_all_models.sh` and
 - signed 8-bit ADC, `k=16`, `M=256`
 - FlatQuant Stage A: 1024 samples, 30 epochs, calibration batch size 16,
   MLP diagonal training
+- FlatQuant autocast follows `--torch_dtype`; the transfer protocol therefore
+  keeps BF16 exponent range instead of narrowing calibration to FP16
 - propagated Stage B: 10 epochs, `alpha=0.5`, attention diagonal training
 - each layer restores the checkpoint with the best fixed-batch validation
   objective; transform singular values are bounded to prevent late-layer drift
@@ -81,6 +83,29 @@ SMOKE=1 ONLY=smollm2_17b SKIP_COMPLETED=0 \
 
 Accepted `ONLY` keys are `llama32_1b`, `qwen25_15b`, `smollm2_17b`, and
 `tinyllama_11b`; comma-separated keys and full model IDs are also accepted.
+
+After a failed SmolLM2 Stage A produced by the old FP16-autocast path, restart
+from fresh transforms while retaining any completed BF16 record:
+
+```bash
+ONLY=smollm2_17b FORCE_FQ_RETRAIN=1 SKIP_COMPLETED=1 \
+  bash ADC/llama/run_multi_arch_transfer.sh
+```
+
+Before repeating the full eight-hour Stage A, stress-test the two late layers
+that failed previously:
+
+```bash
+ONLY=smollm2_17b FQ_TEST_LAYERS=22,23 \
+  bash ADC/llama/run_multi_arch_transfer.sh
+```
+
+This retains the full Stage A shape (`1024` samples, sequence length `512`,
+batch size `16`, and `30` epochs), forwards FP references through layers
+0--21, optimizes only layers 22--23 in BF16, and exits before Stage B, ADC,
+LoRA, perplexity, and downstream evaluation. It is intentionally more
+demanding than `SMOKE=1`, which uses only two length-64 samples and one epoch
+and therefore cannot expose late-epoch FP16 overflow.
 
 ## Full resumable CUDA batch
 
