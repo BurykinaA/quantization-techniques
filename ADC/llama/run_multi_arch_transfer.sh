@@ -16,6 +16,7 @@ DIAGNOSTIC_WINDOWS="${DIAGNOSTIC_WINDOWS:-8}"
 FQ_TEST_LAYERS="${FQ_TEST_LAYERS:-}"
 INT4_ADC_OFF_ONLY="${INT4_ADC_OFF_ONLY:-0}"
 INT4_ADC_OFF_TRANSFORMS_PATH="${INT4_ADC_OFF_TRANSFORMS_PATH:-}"
+ADC_LM_EVAL_BATCH_SIZE="${ADC_LM_EVAL_BATCH_SIZE:-1}"
 RESULTS_JSON="${RESULTS_JSON:-${SCRIPT_DIR}/transfer_results/multi_arch_transfer.json}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-${SCRIPT_DIR}/transfer_results/checkpoints}"
 LOG_ROOT="${LOG_ROOT:-${SCRIPT_DIR}/transfer_results/logs}"
@@ -214,7 +215,7 @@ run_int4_adc_off() {
     --adc_off_eval_only \
     --run_lm_eval \
     --lm_eval_tasks hellaswag mmlu winogrande arc_easy arc_challenge piqa openbookqa boolq \
-    --lm_eval_batch_size auto \
+    --lm_eval_batch_size "${ADC_LM_EVAL_BATCH_SIZE}" \
     --skip_model_save \
     --disable_visualizations \
     --disable_wandb \
@@ -251,7 +252,7 @@ run_adc_transfer() {
     --fq_save_transforms
     --run_lm_eval
     --lm_eval_tasks hellaswag mmlu winogrande arc_easy arc_challenge piqa openbookqa boolq
-    --lm_eval_batch_size auto
+    --lm_eval_batch_size "${ADC_LM_EVAL_BATCH_SIZE}"
   )
 
   if [[ "${key}" == "qwen25_15b" && -z "${LORA_MICROBATCH_SIZE+x}" ]]; then
@@ -452,7 +453,7 @@ run_adc_transfer() {
 }
 
 echo "Results: ${RESULTS_JSON}"
-echo "Mode: SMOKE=${SMOKE} ONLY=${ONLY:-all} SKIP_COMPLETED=${SKIP_COMPLETED} FQ_START_STAGE_B=${FQ_START_STAGE_B} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN} FQ_DIAGNOSTIC_STAGE=${FQ_DIAGNOSTIC_STAGE:-off} FQ_TEST_LAYERS=${FQ_TEST_LAYERS:-off} INT4_ADC_OFF_ONLY=${INT4_ADC_OFF_ONLY}"
+echo "Mode: SMOKE=${SMOKE} ONLY=${ONLY:-all} SKIP_COMPLETED=${SKIP_COMPLETED} FQ_START_STAGE_B=${FQ_START_STAGE_B} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN} FQ_DIAGNOSTIC_STAGE=${FQ_DIAGNOSTIC_STAGE:-off} FQ_TEST_LAYERS=${FQ_TEST_LAYERS:-off} INT4_ADC_OFF_ONLY=${INT4_ADC_OFF_ONLY} ADC_LM_EVAL_BATCH_SIZE=${ADC_LM_EVAL_BATCH_SIZE}"
 
 for index in "${!MODEL_KEYS[@]}"; do
   key="${MODEL_KEYS[${index}]}"

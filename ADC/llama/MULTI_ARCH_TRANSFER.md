@@ -243,6 +243,11 @@ LORA_MICROBATCH_SIZE=1 LORA_GRADIENT_ACCUMULATION_STEPS=4 \
   bash ADC/llama/run_multi_arch_transfer.sh
 ```
 
+ADC downstream evaluation defaults to `ADC_LM_EVAL_BATCH_SIZE=1`. The harness
+`auto` batch-size probe is not reliable for tiled ADC layers because each tile
+materializes a large integer-MVM output. A larger fixed value can be requested
+explicitly only after confirming available GPU memory.
+
 ## Validate and format results
 
 The summarizer fails if any of the expected 16 rows, task metrics, perplexities,
