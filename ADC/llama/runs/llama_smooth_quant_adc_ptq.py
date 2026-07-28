@@ -868,6 +868,9 @@ def collect_adc_layer_diagnostics(
     dataloader,
     num_batches: int,
     device: torch.device,
+    z_hist_out: dict | None = None,
+    z_hist_bins: int = 1024,
+    z_hist_range: float = 256.0,
 ) -> dict:
     """Collect per-tile ADC quantization diagnostics over *num_batches* batches.
 
@@ -883,9 +886,16 @@ def collect_adc_layer_diagnostics(
     w_sat_rate           fraction of weight codes at ±qmax (static, from weights)
     reconstruction_mse   MSE(y_quantized, y_fp16) per tile element
     reconstruction_rel   reconstruction_mse / mean(y_fp16²)
+
+    When *z_hist_out* is supplied it is filled in place with a fine-grained
+    histogram of z per tile over [-z_hist_range, z_hist_range], plus the counts
+    falling outside it. The five coarse buckets above only summarize that
+    distribution; the histogram resolves the dead zone around zero and the
+    behaviour at the clamp boundary.
     """
     tile_stats: dict = {}
     hooks: list = []
+    collect_hist = z_hist_out is not None and z_hist_bins > 0
 
     def _make_hook(tile_name: str):
         def _hook(module, inp, output):
@@ -941,8 +951,9 @@ def collect_adc_layer_diagnostics(
                     "diff_sq_sum": 0.0, "fp_sq_sum": 0.0,
                     "act_sat": 0, "act_n": 0,
                     "bins": set(),
-                    "na": na, "pa": pa,
+                    "na": na, "pa": pa, "delta": delta,
                     "zb0": 0, "zb1": 0, "zb2": 0, "zb3": 0, "zb4": 0,
+                    "hist": None, "hist_under": 0, "hist_over": 0,
                 }
             s = tile_stats[tile_name]
             s["dead"] += dead
@@ -961,6 +972,16 @@ def collect_adc_layer_diagnostics(
             s["zb2"] += z_b2
             s["zb3"] += z_b3
             s["zb4"] += z_b4
+
+            if collect_hist:
+                # histc drops values outside the range, so they are counted apart.
+                counts = torch.histc(
+                    z_flat.float(), bins=z_hist_bins,
+                    min=-z_hist_range, max=z_hist_range,
+                )
+                s["hist"] = counts if s["hist"] is None else s["hist"] + counts
+                s["hist_under"] += int((z_flat < -z_hist_range).sum())
+                s["hist_over"] += int((z_flat > z_hist_range).sum())
         return _hook
 
     for name, module in model.named_modules():
@@ -1020,6 +1041,18 @@ def collect_adc_layer_diagnostics(
             # Excess kurtosis of z: 0 = normal, >0 = heavy-tailed peak at 0
             "kurtosis_z":    (s["z_quad_sum"] / n) / max(var_z ** 2, 1e-10) - 3.0,
         }
+        if collect_hist and s["hist"] is not None:
+            z_hist_out[name] = {
+                "hist":  s["hist"].detach().cpu().tolist(),
+                "under": s["hist_under"],
+                "over":  s["hist_over"],
+                "total": s["total"],
+                "delta": s["delta"],
+                "na":    s["na"],
+                "pa":    s["pa"],
+                "range": float(z_hist_range),
+                "bins":  int(z_hist_bins),
+            }
     return results
 
 
@@ -1080,6 +1113,47 @@ def log_adc_diagnostics(results: dict, use_wandb: bool = False) -> None:
             log_dict[f"adc_diag/max_{m}"] = a["max"]
             log_dict[f"adc_diag/{m}_hist"] = wandb.Histogram(a["vals"])
         wandb.log(log_dict)
+
+
+def save_adc_input_histograms(z_hist: dict, path: str, metadata: dict) -> None:
+    """Write per-tile histograms of the ADC input z = y_int / Delta to an .npz.
+
+    All tiles share one bin layout, so the counts stack into a single array with
+    the tile names kept alongside. Delta is fixed by the hardware configuration,
+    which is what makes histograms from different checkpoints comparable.
+    """
+    import json
+
+    if not z_hist:
+        logger.warning("ADC input histograms: nothing collected, skipping %s", path)
+        return
+
+    names = sorted(z_hist)
+    reference = z_hist[names[0]]
+
+    def column(key: str, dtype):
+        return np.asarray([z_hist[name][key] for name in names], dtype=dtype)
+
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    np.savez_compressed(
+        path,
+        names=np.asarray(names),
+        counts=np.asarray([z_hist[name]["hist"] for name in names], dtype=np.float64),
+        under=column("under", np.int64),
+        over=column("over", np.int64),
+        total=column("total", np.int64),
+        delta=column("delta", np.float64),
+        na=column("na", np.int64),
+        pa=column("pa", np.int64),
+        z_range=np.float64(reference["range"]),
+        n_bins=np.int64(reference["bins"]),
+        metadata=np.asarray(json.dumps(metadata)),
+    )
+    logger.info(
+        "ADC input histograms written to %s (%d tiles, %d bins over +/-%g)",
+        path, len(names), reference["bins"], reference["range"],
+    )
 
 
 # =========================================================================
@@ -2399,6 +2473,16 @@ def main():
                         help="Run FP16 baseline perplexity BEFORE any changes")
     parser.add_argument("--run_no_adc_eval", action="store_true",
                         help="Run extra evaluation WITHOUT ADC to isolate quantization vs ADC error")
+    parser.add_argument("--adc_zhist_path", type=str, default=None,
+                        help="Write per-tile histograms of the ADC input z = y_int/Delta "
+                             "to this .npz file during ADC diagnostics")
+    parser.add_argument("--adc_zhist_bins", type=int, default=1024,
+                        help="Number of histogram bins for --adc_zhist_path")
+    parser.add_argument("--adc_zhist_range", type=float, default=256.0,
+                        help="Histogram covers [-range, range] measured in ADC steps")
+    parser.add_argument("--adc_zhist_only", action="store_true",
+                        help="Exit right after writing --adc_zhist_path, skipping perplexity "
+                             "evaluation, LoRA, downstream tasks, and model serialization")
     parser.add_argument(
         "--adc_off_eval_only",
         action="store_true",
@@ -2431,6 +2515,11 @@ def main():
     args = parser.parse_args()
     if args.diagnostic_only_after_adc_calibration:
         args.stage_eval = True
+        args.disable_visualizations = True
+        args.skip_model_save = True
+    if args.adc_zhist_only:
+        if not args.adc_zhist_path:
+            parser.error("--adc_zhist_only requires --adc_zhist_path")
         args.disable_visualizations = True
         args.skip_model_save = True
     if args.adc_off_eval_only:
@@ -3668,10 +3757,36 @@ def main():
     # ADC layer diagnostics (always runs)
     logger.info("Collecting ADC layer diagnostics...")
     adc_diag_batches = min(32, args.num_calibration_batches)
+    z_hist: dict | None = {} if args.adc_zhist_path else None
     adc_diag_results = collect_adc_layer_diagnostics(
-        model, calibration_loader, adc_diag_batches, device
+        model, calibration_loader, adc_diag_batches, device,
+        z_hist_out=z_hist,
+        z_hist_bins=args.adc_zhist_bins,
+        z_hist_range=args.adc_zhist_range,
     )
     log_adc_diagnostics(adc_diag_results, use_wandb=use_wandb)
+
+    if args.adc_zhist_path:
+        save_adc_input_histograms(
+            z_hist,
+            args.adc_zhist_path,
+            metadata={
+                "model_name":     args.model_name,
+                "fq_reload_path": args.fq_reload_path,
+                "fq_add_diag":    args.fq_add_diag,
+                "bx": args.bx, "bw": args.bw, "ba": args.ba,
+                "k": args.k, "mvm_limit": args.mvm_limit,
+                "diag_batches":   adc_diag_batches,
+            },
+        )
+        if args.adc_zhist_only:
+            logger.info(
+                "ADC histogram run complete; skipping perplexity evaluation, "
+                "LoRA, downstream tasks, and model serialization"
+            )
+            if use_wandb:
+                wandb.finish()
+            return
 
     # Latency measurement
     logger.info("Measuring forward-pass latency...")
