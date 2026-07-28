@@ -2,14 +2,16 @@
 """Compare what reaches the ADC across checkpoints.
 
 Input files are produced by ``--adc_zhist_path`` and hold one histogram per tile
-of z = y_int / Delta, the accumulated MVM partial sum measured in ADC steps.
-Delta is fixed by the hardware configuration rather than by the data, so
-histograms from different checkpoints share one lattice and are comparable.
+over ADC codes floor(z), where z = y_int / Delta is the accumulated MVM partial
+sum measured in ADC steps. Delta is fixed by the hardware configuration rather
+than by the data, so histograms from different checkpoints share one lattice and
+are comparable.
 
-Two failure modes live on that axis: mass inside |z| < 1 is floored to zero by
-the converter, and mass beyond the clamp bounds saturates. Because every tile is
-stored separately, the same files support both an aggregate view and a per-layer
-breakdown, which is where a localized collapse becomes visible.
+Two failure modes live on that axis: codes -1 and 0 are what the converter reads
+when the accumulation never reaches a full step, and mass beyond the clamp
+bounds saturates. Because every tile is stored separately, the same files
+support both an aggregate view and a per-layer breakdown, which is where a
+localized collapse becomes visible.
 """
 
 import argparse
@@ -84,9 +86,10 @@ def load_tiles(path: Path, pattern: str | None, layer: int | None) -> dict:
     if not keep:
         raise SystemExit(f"{path}: no tile matches the requested selection")
 
-    z_range = float(payload["z_range"])
-    n_bins = int(payload["n_bins"])
-    edges = np.linspace(-z_range, z_range, n_bins + 1)
+    code_lo = int(payload["code_lo"])
+    n_bins = payload["counts"].shape[1]
+    # Bin i holds ADC code code_lo + i, which covers z in [code, code + 1).
+    codes = code_lo + np.arange(n_bins)
 
     metadata = {}
     if "metadata" in payload:
@@ -96,35 +99,37 @@ def load_tiles(path: Path, pattern: str | None, layer: int | None) -> dict:
             metadata = {}
 
     return {
-        "names":   [names[i] for i in keep],
-        "counts":  payload["counts"][keep],
-        "outside": payload["under"][keep] + payload["over"][keep],
-        "na":      float(payload["na"][keep].min()),
-        "pa":      float(payload["pa"][keep].max()),
-        "centers": 0.5 * (edges[:-1] + edges[1:]),
-        "metadata": metadata,
+        "names":     [names[i] for i in keep],
+        "counts":    payload["counts"][keep],
+        "outside":   payload["under"][keep] + payload["over"][keep],
+        "abs_z_sum": payload["abs_z_sum"][keep],
+        "na":        float(payload["na"][keep].min()),
+        "pa":        float(payload["pa"][keep].max()),
+        "codes":     codes,
+        "metadata":  metadata,
     }
 
 
-def summarize(counts: np.ndarray, outside: float, tiles: dict) -> dict:
+def summarize(counts: np.ndarray, outside: float, abs_z_sum: float, tiles: dict) -> dict:
     """Reduce a stack of tile histograms to the quantities the figures show."""
-    centers = tiles["centers"]
+    codes = tiles["codes"]
     summed = counts.sum(axis=0) if counts.ndim > 1 else counts
-    # Values outside the histogram range still belong in the denominator and
-    # count as saturated.
-    total = float(summed.sum()) + float(outside)
-    total = max(total, 1.0)
+    # Codes outside the stored range still belong in the denominator and are
+    # saturated by definition.
+    total = max(float(summed.sum()) + float(outside), 1.0)
 
-    dead = float(summed[np.abs(centers) < 1.0].sum())
+    # The converter reads zero whenever the accumulation stays below one step,
+    # which is exactly codes -1 and 0.
+    dead = float(summed[(codes == -1) | (codes == 0)].sum())
     clipped = float(
-        summed[(centers < tiles["na"]) | (centers > tiles["pa"])].sum()
+        summed[(codes < tiles["na"]) | (codes > tiles["pa"])].sum()
     ) + float(outside)
 
     return {
         "density":    summed / total,
         "dead_frac":  dead / total,
         "clip_frac":  clipped / total,
-        "mean_abs_z": float((np.abs(centers) * summed).sum()) / total,
+        "mean_abs_z": float(abs_z_sum) / total,
     }
 
 
@@ -173,8 +178,9 @@ def plot_hist(series: list, args: argparse.Namespace) -> None:
     for index, (label, data) in enumerate(series):
         stats = data["all"]
         axis.plot(
-            data["tiles"]["centers"], stats["density"],
+            data["tiles"]["codes"] + 0.5, stats["density"],
             color=COLORS[index % len(COLORS)], linewidth=1.4,
+            drawstyle="steps-mid",
             label=(
                 f"{label}  (floored {format_percent(stats['dead_frac'])}, "
                 f"mean $|z|$ {stats['mean_abs_z']:.1f})"
@@ -184,7 +190,7 @@ def plot_hist(series: list, args: argparse.Namespace) -> None:
 
     axis.set_yscale(args.yscale)
     axis.set_xlim(-args.xlim, args.xlim)
-    axis.set_xlabel(r"ADC input $z = y_{\mathrm{int}} / \Delta$  (ADC steps)")
+    axis.set_xlabel(r"ADC output code $\lfloor y_{\mathrm{int}} / \Delta \rfloor$")
     axis.set_ylabel("fraction of accumulations")
     axis.legend(fontsize=8, frameon=False)
     for side in ("top", "right"):
@@ -242,12 +248,16 @@ def main() -> None:
         tiles = load_tiles(Path(raw_path), args.filter, args.layer)
         entry = {
             "tiles": tiles,
-            "all": summarize(tiles["counts"], tiles["outside"].sum(), tiles),
+            "all": summarize(
+                tiles["counts"], tiles["outside"].sum(),
+                tiles["abs_z_sum"].sum(), tiles,
+            ),
         }
         if args.mode == "per-layer":
             entry["per_layer"] = {
                 layer: summarize(
-                    tiles["counts"][rows], tiles["outside"][rows].sum(), tiles
+                    tiles["counts"][rows], tiles["outside"][rows].sum(),
+                    tiles["abs_z_sum"][rows].sum(), tiles,
                 )
                 for layer, rows in group_by_layer(tiles).items()
             }

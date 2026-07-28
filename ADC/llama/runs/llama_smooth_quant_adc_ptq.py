@@ -869,8 +869,7 @@ def collect_adc_layer_diagnostics(
     num_batches: int,
     device: torch.device,
     z_hist_out: dict | None = None,
-    z_hist_bins: int = 1024,
-    z_hist_range: float = 256.0,
+    z_hist_code_range: int = 256,
 ) -> dict:
     """Collect per-tile ADC quantization diagnostics over *num_batches* batches.
 
@@ -887,15 +886,22 @@ def collect_adc_layer_diagnostics(
     reconstruction_mse   MSE(y_quantized, y_fp16) per tile element
     reconstruction_rel   reconstruction_mse / mean(y_fp16²)
 
-    When *z_hist_out* is supplied it is filled in place with a fine-grained
-    histogram of z per tile over [-z_hist_range, z_hist_range], plus the counts
-    falling outside it. The five coarse buckets above only summarize that
-    distribution; the histogram resolves the dead zone around zero and the
-    behaviour at the clamp boundary.
+    When *z_hist_out* is supplied it is filled in place with a per-tile histogram
+    over ADC codes floor(z), covering [-z_hist_code_range, z_hist_code_range-1]
+    plus the counts falling outside. The five coarse buckets above only summarize
+    that distribution; one bin per code resolves the dead zone around zero and
+    the behaviour at the clamp boundary.
+
+    Binning by code rather than by z matters: y_int is an integer, so z lives on
+    a lattice of spacing 1/delta, and a uniform grid over z beats against that
+    lattice and imprints a periodic comb on the histogram.
     """
     tile_stats: dict = {}
     hooks: list = []
-    collect_hist = z_hist_out is not None and z_hist_bins > 0
+    collect_hist = z_hist_out is not None and z_hist_code_range > 0
+    code_lo = -int(z_hist_code_range)
+    code_hi = int(z_hist_code_range) - 1
+    n_code_bins = code_hi - code_lo + 1
 
     def _make_hook(tile_name: str):
         def _hook(module, inp, output):
@@ -954,6 +960,7 @@ def collect_adc_layer_diagnostics(
                     "na": na, "pa": pa, "delta": delta,
                     "zb0": 0, "zb1": 0, "zb2": 0, "zb3": 0, "zb4": 0,
                     "hist": None, "hist_under": 0, "hist_over": 0,
+                    "abs_z_sum": 0.0,
                 }
             s = tile_stats[tile_name]
             s["dead"] += dead
@@ -974,14 +981,15 @@ def collect_adc_layer_diagnostics(
             s["zb4"] += z_b4
 
             if collect_hist:
-                # histc drops values outside the range, so they are counted apart.
-                counts = torch.histc(
-                    z_flat.float(), bins=z_hist_bins,
-                    min=-z_hist_range, max=z_hist_range,
+                codes = z_flat.floor().to(torch.int64)
+                inside = (codes >= code_lo) & (codes <= code_hi)
+                counts = torch.bincount(
+                    codes[inside] - code_lo, minlength=n_code_bins
                 )
                 s["hist"] = counts if s["hist"] is None else s["hist"] + counts
-                s["hist_under"] += int((z_flat < -z_hist_range).sum())
-                s["hist_over"] += int((z_flat > z_hist_range).sum())
+                s["hist_under"] += int((codes < code_lo).sum())
+                s["hist_over"] += int((codes > code_hi).sum())
+                s["abs_z_sum"] += float(z_flat.abs().sum())
         return _hook
 
     for name, module in model.named_modules():
@@ -1043,15 +1051,15 @@ def collect_adc_layer_diagnostics(
         }
         if collect_hist and s["hist"] is not None:
             z_hist_out[name] = {
-                "hist":  s["hist"].detach().cpu().tolist(),
-                "under": s["hist_under"],
-                "over":  s["hist_over"],
-                "total": s["total"],
-                "delta": s["delta"],
-                "na":    s["na"],
-                "pa":    s["pa"],
-                "range": float(z_hist_range),
-                "bins":  int(z_hist_bins),
+                "hist":      s["hist"].detach().cpu().tolist(),
+                "under":     s["hist_under"],
+                "over":      s["hist_over"],
+                "total":     s["total"],
+                "abs_z_sum": s["abs_z_sum"],
+                "delta":     s["delta"],
+                "na":        s["na"],
+                "pa":        s["pa"],
+                "code_lo":   int(code_lo),
             }
     return results
 
@@ -1116,7 +1124,7 @@ def log_adc_diagnostics(results: dict, use_wandb: bool = False) -> None:
 
 
 def save_adc_input_histograms(z_hist: dict, path: str, metadata: dict) -> None:
-    """Write per-tile histograms of the ADC input z = y_int / Delta to an .npz.
+    """Write per-tile histograms of the ADC code floor(y_int / Delta) to an .npz.
 
     All tiles share one bin layout, so the counts stack into a single array with
     the tile names kept alongside. Delta is fixed by the hardware configuration,
@@ -1143,16 +1151,16 @@ def save_adc_input_histograms(z_hist: dict, path: str, metadata: dict) -> None:
         under=column("under", np.int64),
         over=column("over", np.int64),
         total=column("total", np.int64),
+        abs_z_sum=column("abs_z_sum", np.float64),
         delta=column("delta", np.float64),
         na=column("na", np.int64),
         pa=column("pa", np.int64),
-        z_range=np.float64(reference["range"]),
-        n_bins=np.int64(reference["bins"]),
+        code_lo=np.int64(reference["code_lo"]),
         metadata=np.asarray(json.dumps(metadata)),
     )
     logger.info(
-        "ADC input histograms written to %s (%d tiles, %d bins over +/-%g)",
-        path, len(names), reference["bins"], reference["range"],
+        "ADC input histograms written to %s (%d tiles, %d codes from %d)",
+        path, len(names), len(reference["hist"]), reference["code_lo"],
     )
 
 
@@ -2474,12 +2482,10 @@ def main():
     parser.add_argument("--run_no_adc_eval", action="store_true",
                         help="Run extra evaluation WITHOUT ADC to isolate quantization vs ADC error")
     parser.add_argument("--adc_zhist_path", type=str, default=None,
-                        help="Write per-tile histograms of the ADC input z = y_int/Delta "
+                        help="Write per-tile histograms of the ADC code floor(y_int/Delta) "
                              "to this .npz file during ADC diagnostics")
-    parser.add_argument("--adc_zhist_bins", type=int, default=1024,
-                        help="Number of histogram bins for --adc_zhist_path")
-    parser.add_argument("--adc_zhist_range", type=float, default=256.0,
-                        help="Histogram covers [-range, range] measured in ADC steps")
+    parser.add_argument("--adc_zhist_code_range", type=int, default=256,
+                        help="Histogram covers codes [-range, range-1], one bin per code")
     parser.add_argument("--adc_zhist_only", action="store_true",
                         help="Exit right after writing --adc_zhist_path, skipping perplexity "
                              "evaluation, LoRA, downstream tasks, and model serialization")
@@ -3761,8 +3767,7 @@ def main():
     adc_diag_results = collect_adc_layer_diagnostics(
         model, calibration_loader, adc_diag_batches, device,
         z_hist_out=z_hist,
-        z_hist_bins=args.adc_zhist_bins,
-        z_hist_range=args.adc_zhist_range,
+        z_hist_code_range=args.adc_zhist_code_range,
     )
     log_adc_diagnostics(adc_diag_results, use_wandb=use_wandb)
 
