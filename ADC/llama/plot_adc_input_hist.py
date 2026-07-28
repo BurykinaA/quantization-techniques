@@ -60,6 +60,12 @@ def parse_args() -> argparse.Namespace:
         default=200.0,
         help="Histogram range in ADC steps (default 200, just past the 8-bit clamp)",
     )
+    parser.add_argument(
+        "--yscale",
+        choices=["log", "linear"],
+        default="log",
+        help="Log resolves the tails, linear emphasizes the peak at zero",
+    )
     parser.add_argument("--title", default=None)
     return parser.parse_args()
 
@@ -149,14 +155,20 @@ def plot_hist(series: list, args: argparse.Namespace) -> None:
         xytext=(0, -10), textcoords="offset points",
         ha="center", va="top", fontsize=8, color="0.35",
     )
-    for bound in (reference["tiles"]["na"], reference["tiles"]["pa"]):
+    # The clamp sits at +-128 steps and falls outside a zoomed-in view.
+    bounds = [
+        bound for bound in (reference["tiles"]["na"], reference["tiles"]["pa"])
+        if abs(bound) <= args.xlim
+    ]
+    for bound in bounds:
         axis.axvline(bound, color="0.4", linestyle="--", linewidth=0.9, zorder=1)
-    axis.annotate(
-        "ADC clamp", xy=(reference["tiles"]["pa"], 1.0),
-        xycoords=("data", "axes fraction"),
-        xytext=(-4, -10), textcoords="offset points",
-        ha="right", va="top", fontsize=8, color="0.35",
-    )
+    if bounds:
+        axis.annotate(
+            "ADC clamp", xy=(max(bounds), 1.0),
+            xycoords=("data", "axes fraction"),
+            xytext=(-4, -10), textcoords="offset points",
+            ha="right", va="top", fontsize=8, color="0.35",
+        )
 
     for index, (label, data) in enumerate(series):
         stats = data["all"]
@@ -164,13 +176,13 @@ def plot_hist(series: list, args: argparse.Namespace) -> None:
             data["tiles"]["centers"], stats["density"],
             color=COLORS[index % len(COLORS)], linewidth=1.4,
             label=(
-                f"{label}  (dead {format_percent(stats['dead_frac'])}, "
-                f"clipped {format_percent(stats['clip_frac'])})"
+                f"{label}  (floored {format_percent(stats['dead_frac'])}, "
+                f"mean $|z|$ {stats['mean_abs_z']:.1f})"
             ),
             zorder=2 + index,
         )
 
-    axis.set_yscale("log")
+    axis.set_yscale(args.yscale)
     axis.set_xlim(-args.xlim, args.xlim)
     axis.set_xlabel(r"ADC input $z = y_{\mathrm{int}} / \Delta$  (ADC steps)")
     axis.set_ylabel("fraction of accumulations")
