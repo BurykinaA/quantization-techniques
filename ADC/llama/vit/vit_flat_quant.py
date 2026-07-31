@@ -41,6 +41,7 @@ from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from tqdm.auto import tqdm
 
 from ADC.llama.core.flat_quant import (
@@ -62,7 +63,13 @@ class FlatQuantViTAttention(nn.Module):
     Keeps the original timm ``Attention`` module (so the softmax attention math
     stays intact) and only intercepts the ``qkv`` and ``proj`` linear layers.
 
-    ln_trans : shared transform applied to the (LayerNorm'd) attention input.
+    ln_trans   : shared transform applied to the (LayerNorm'd) attention input.
+    proj_trans : transform applied to proj's input (the attention output, i.e.
+                 post-softmax·V).  That input is not a transformable upstream
+                 activation, so — unlike ln_trans — proj_trans is applied live
+                 at inference (via the re-implemented attention forward below)
+                 and its inverse is folded into proj's weight; the ·T / T⁻¹ pair
+                 cancels exactly, same as mlp.mid_trans.
     """
 
     def __init__(self, attn: nn.Module, w_bits, a_bits, add_diag, lwc, lac,
@@ -70,21 +77,45 @@ class FlatQuantViTAttention(nn.Module):
         super().__init__()
         self._orig_attn = attn
         in_dim = attn.qkv.weight.shape[1]
+        proj_in_dim = attn.proj.weight.shape[1]
 
         self.qkv = FlatQuantLinear(attn.qkv, w_bits, a_bits, lwc, lac, adc_config)
         self.proj = FlatQuantLinear(attn.proj, w_bits, a_bits, lwc, lac, adc_config)
 
         self.ln_trans = KroneckerTransform(in_dim, add_diag=add_diag)
+        self.proj_trans = KroneckerTransform(proj_in_dim, add_diag=add_diag)
 
         self._ori_mode = False
         self._collect_smax = add_diag
         if self._collect_smax:
             self._ln_smax = torch.ones(in_dim, device="cpu") * 1e-5
+            self._proj_smax = torch.ones(proj_in_dim, device="cpu") * 1e-5
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self._ori_mode:
             return self._ori_forward(x)
         return self._train_forward(x)
+
+    def _attn_output(self, x: torch.Tensor, qkv_fn) -> torch.Tensor:
+        """timm ViT attention math up to (but excluding) the ``proj`` layer.
+
+        Re-implements timm's ``Attention.forward`` so the transform can be
+        inserted on proj's input; ``qkv_fn`` produces the qkv projection
+        (FP or quantised).  Returns the pre-proj attention output [B, N, C].
+        """
+        a = self._orig_attn
+        B, N, C = x.shape
+        qkv = qkv_fn(x).reshape(B, N, 3, a.num_heads, a.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+        q, k = a.q_norm(q), a.k_norm(k)
+        if a.fused_attn:
+            o = F.scaled_dot_product_attention(
+                q, k, v, dropout_p=a.attn_drop.p if self.training else 0.0)
+        else:
+            attn = (q * a.scale) @ k.transpose(-2, -1)
+            attn = a.attn_drop(attn.softmax(dim=-1))
+            o = attn @ v
+        return o.transpose(1, 2).reshape(B, N, C)
 
     def _ori_forward(self, x: torch.Tensor) -> torch.Tensor:
         if self._collect_smax and hasattr(self, "_ln_smax"):
@@ -92,35 +123,44 @@ class FlatQuantViTAttention(nn.Module):
                 self._ln_smax.to(x.device),
                 x.reshape(-1, x.shape[-1]).abs().amax(dim=0).detach(),
             )
-        return self._orig_attn(x)
+        attn_out = self._attn_output(x, self.qkv.ori_forward)
+        if self._collect_smax and hasattr(self, "_proj_smax"):
+            self._proj_smax = torch.maximum(
+                self._proj_smax.to(attn_out.device),
+                attn_out.reshape(-1, attn_out.shape[-1]).abs().amax(dim=0).detach(),
+            )
+        return self.proj.ori_forward(attn_out)
 
     def _train_forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Forward-transform the attention input, then route qkv/proj through
-        # quantised wrappers while the original attention runs the softmax math.
+        # Forward-transform the attention input; run the softmax math; then
+        # forward-transform proj's input (the attention output) so proj sees a
+        # flattened activation, exactly as qkv does with ln_trans.
         x_t = self.ln_trans(x)
-        saved = (self._orig_attn.qkv, self._orig_attn.proj)
-        try:
-            self._orig_attn.qkv = _QuantProjectionWrapper(self.qkv, self.ln_trans)
-            self._orig_attn.proj = _QuantProjectionWrapper(self.proj, None)
-            return self._orig_attn(x_t)
-        finally:
-            self._orig_attn.qkv, self._orig_attn.proj = saved
+        attn_out = self._attn_output(
+            x_t, lambda t: self.qkv.train_forward(t, qa_trans=self.ln_trans))
+        proj_in_t = self.proj_trans(attn_out)
+        return self.proj.train_forward(proj_in_t, qa_trans=self.proj_trans)
 
     def init_diag_scale(self, alpha: float = 0.5) -> None:
         if not hasattr(self, "_ln_smax"):
             return
-        qkv_w = self.qkv.linear.weight.abs().amax(dim=0)
         eps = 1e-5
+        qkv_w = self.qkv.linear.weight.abs().amax(dim=0)
         self.ln_trans.diag_scale.data = (
             qkv_w.pow(1 - alpha) / self._ln_smax.to(qkv_w.device).pow(alpha)
         ).clamp(min=eps)
-        del self._ln_smax
+        proj_w = self.proj.linear.weight.abs().amax(dim=0)
+        self.proj_trans.diag_scale.data = (
+            proj_w.pow(1 - alpha) / self._proj_smax.to(proj_w.device).pow(alpha)
+        ).clamp(min=eps)
+        del self._ln_smax, self._proj_smax
         self._collect_smax = False
 
     def reparameterize(self) -> None:
         self.ln_trans.to_eval_mode()
+        self.proj_trans.to_eval_mode()
         self.qkv.reparameterize(qa_trans=self.ln_trans)
-        self.proj.reparameterize()   # proj input is not ln_trans-transformed
+        self.proj.reparameterize(qa_trans=self.proj_trans)
 
 
 class FlatQuantViTMlp(nn.Module):

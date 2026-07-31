@@ -210,7 +210,7 @@ def _fq_cache_key(cfg):
     # ADC floor, so its cached model differs from the ADC-trained ptq model.
     s = (f"{cfg.model_name}_{cfg.fq_epochs}_{cfg.fq_stage_b_epochs}_{cfg.fq_nsamples}"
          f"_{cfg.fq_lr}_{cfg.bx}_{cfg.bw}_{cfg.ba}_{cfg.k}_{cfg.mvm_limit}"
-         f"_adc{int(getattr(cfg, 'use_adc', True))}_v3")
+         f"_adc{int(getattr(cfg, 'use_adc', True))}_v4")
     return hashlib.md5(s.encode()).hexdigest()[:10]
 
 
