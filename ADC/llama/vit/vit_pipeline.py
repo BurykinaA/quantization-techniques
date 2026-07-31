@@ -206,13 +206,14 @@ class _ADCCalibrator:
 
 def _fq_cache_key(cfg):
     import hashlib
-    # use_adc is part of the key: int4_no_adc now trains FlatQuant without the
-    # ADC floor, so its cached model differs from the ADC-trained ptq model.
+    # int4_no_adc and ptq now train an identical FlatQuant+ADC model (they differ
+    # only by the eval-time ADC-floor bypass), so use_adc is no longer part of the
+    # key — both configs share one cached training run.  v5 invalidates the old
+    # v4 int4_no_adc cache, which was trained with the now-removed mismatch.
     s = (f"{cfg.model_name}_{cfg.fq_epochs}_{cfg.fq_stage_b_epochs}_{cfg.fq_nsamples}"
          f"_{cfg.fq_lr}_{cfg.bx}_{cfg.bw}_{cfg.ba}_{cfg.k}_{cfg.mvm_limit}"
-         f"_adc{int(getattr(cfg, 'use_adc', True))}_v4")
+         f"_v5")
     return hashlib.md5(s.encode()).hexdigest()[:10]
-
 
 def apply_flatquant(model, loader, cfg, device, cache_dir=None):
     cache_path = None
@@ -224,18 +225,14 @@ def apply_flatquant(model, loader, cfg, device, cache_dir=None):
             return torch.load(cache_path, weights_only=False, map_location=device).to(device)
         logger.info(f"FlatQuant cache miss — will save to {cache_path}")
 
-    # When the config disables the ADC (int4_no_adc), train FlatQuant WITHOUT
-    # the ADC floor: adc_config=None makes FlatQuantLinear.train_forward use
-    # plain INT4 fake-quant instead of _train_forward_adc.  This keeps training
-    # and evaluation consistent (both INT4, no ADC floor) rather than adapting
-    # the transforms to an ADC regime that eval then bypasses.
-    if getattr(cfg, "use_adc", True):
-        fq_adc_config = dict(bx=cfg.bx, bw=cfg.bw, ba=cfg.ba, k=cfg.k,
-                             mvm_limit=cfg.mvm_limit, signed_activations=True)
-    else:
-        fq_adc_config = None
-        logger.info("  ADC disabled for this config → FlatQuant trains with "
-                    "plain INT4 fake-quant (no ADC floor)")
+    # Always train FlatQuant through the ADC path (_train_forward_adc), whose
+    # activation quantizer (per-token amax) matches QATLinearADC at eval.
+    # int4_no_adc then bypasses ONLY the ADC floor at eval (see
+    # _set_bypass_adc_floor in run_config), so the sole train/eval difference is
+    # the floor itself — no activation-quantizer mismatch, mirroring the LLaMA
+    # FlatQuant pipeline (train with adc_config, toggle bypass_adc at eval).
+    fq_adc_config = dict(bx=cfg.bx, bw=cfg.bw, ba=cfg.ba, k=cfg.k,
+                         mvm_limit=cfg.mvm_limit, signed_activations=True)
 
     logger.info("─── Apply FlatQuant wrappers ───")
     model = apply_flatquant_to_vit(
@@ -289,16 +286,21 @@ def apply_flatquant(model, loader, cfg, device, cache_dir=None):
 # LoRA
 # ─────────────────────────────────────────────────────────────────────────────
 
-def apply_lora(model, loader, cfg, device):
+def apply_lora(model, loader_gen, cfg, device):
     logger.info(f"─── Post-ADC LoRA (rank={cfg.lora_rank}, α={cfg.lora_alpha}, "
                 f"targets={list(cfg.lora_target_modules)}) ───")
     model = apply_adc_lora(
         model, target_modules=list(cfg.lora_target_modules),
         rank=cfg.lora_rank, lora_alpha=cfg.lora_alpha,
         mode=cfg.lora_mode, layer_indices=None)
+    # Dedicated LoRA calibration loader batched at cfg.lora_cali_bsz.  LoRA runs a
+    # full forward+backward through the ADC graph, so it needs a much smaller
+    # batch than FlatQuant's fq_cali_bsz (reusing that loader is what caused OOM).
+    lora_loader = loader_gen.calib_loader(
+        num=cfg.lora_nsamples, batch_size=cfg.lora_cali_bsz)
     model = calibrate_adc_lora_vit(
-        model, loader, device,
-        nsamples=cfg.lora_nsamples, cali_bsz=cfg.lora_cali_bsz,
+        model, lora_loader, device,
+        nsamples=cfg.lora_nsamples,
         epochs=cfg.lora_epochs, lora_lr=cfg.lora_lr,
         lora_loss=cfg.lora_loss,
         teacher_model_name=cfg.model_name if cfg.lora_loss == "ce_kl" else None,
@@ -346,7 +348,7 @@ def run_config(cfg, cache_dir=None):
             results = run_evaluation(model, val_loader, cfg, device)
             _set_bypass_adc_floor(model, False)
         elif isinstance(cfg, ViTPTQLoRAConfig):
-            model = apply_lora(model, calib_loader, cfg, device)
+            model = apply_lora(model, loader_gen, cfg, device)
             results = run_evaluation(model, val_loader, cfg, device)
         else:  # ViTPTQConfig
             results = run_evaluation(model, val_loader, cfg, device)

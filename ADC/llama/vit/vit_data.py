@@ -87,13 +87,19 @@ class ViTImageNetLoaderGenerator:
         return DataLoader(ds, batch_size=self.val_batch_size, shuffle=False,
                           num_workers=self.num_workers, pin_memory=True)
 
-    def calib_loader(self, num: int = 1024, seed: int = 3) -> DataLoader:
+    def calib_loader(self, num: int = 1024, seed: int = 3,
+                     batch_size: int | None = None) -> DataLoader:
         """Calibration loader: ``num`` random images from the train split
-        (val transform, fixed seed for reproducibility)."""
+        (val transform, fixed seed for reproducibility).
+
+        ``batch_size`` overrides the generator's ``calib_batch_size`` (used e.g.
+        by LoRA calibration, which needs a smaller batch than FlatQuant)."""
         ds = self._train_dataset()
         g = torch.Generator().manual_seed(seed)
         perm = torch.randperm(len(ds), generator=g)[:num].tolist()
         sub = Subset(ds, perm)
-        logger.info(f"calib subset: {len(sub)} images from train (seed={seed})")
-        return DataLoader(sub, batch_size=self.calib_batch_size, shuffle=False,
+        bsz = batch_size if batch_size is not None else self.calib_batch_size
+        logger.info(f"calib subset: {len(sub)} images from train "
+                    f"(seed={seed}, batch_size={bsz})")
+        return DataLoader(sub, batch_size=bsz, shuffle=False,
                           num_workers=self.num_workers, pin_memory=True)

@@ -130,12 +130,12 @@ class ViTPTQLoRAConfig(ViTPTQConfig):
     lora_epochs: int = 5
     lora_lr: float = 1e-4
     lora_nsamples: int = 1024
-    lora_cali_bsz: int = 16
+    lora_cali_bsz: int = 64
 
     def apply_smoke(self) -> None:
         super().apply_smoke()
         self.lora_epochs = 2
-        self.lora_nsamples = 128
+        self.lora_nsamples = 16
         self.lora_cali_bsz = 8
 
 

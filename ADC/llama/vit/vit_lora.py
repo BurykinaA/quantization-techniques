@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 def calibrate_adc_lora_vit(
     model, dataloader, device,
-    nsamples=1024, cali_bsz=16, epochs=5, lora_lr=1e-4,
+    nsamples=1024, epochs=5, lora_lr=1e-4,
     lora_loss="ce_kl", teacher_model_name=None,
     kl_weight=0.5, kl_temperature=2.0,
 ):
@@ -59,21 +59,27 @@ def calibrate_adc_lora_vit(
             for p in teacher.parameters():
                 p.requires_grad_(False)
 
-    # Collect a fixed set of calibration batches
+    # Collect a fixed set of calibration batches on CPU (moved to the GPU one
+    # batch at a time in the training loop, so the whole set is never resident
+    # on the device).  The dataloader's batch size defines the LoRA batch size.
     samples = []
+    collected = 0
     for imgs, labels in dataloader:
-        if len(samples) * cali_bsz >= nsamples:
+        if collected >= nsamples:
             break
-        samples.append((imgs.to(device), labels.to(device)))
+        samples.append((imgs, labels))
+        collected += imgs.shape[0]
 
     ce = nn.CrossEntropyLoss()
     logger.info(f"[ViT-LoRA] Training {epochs} epochs on {len(samples)} batches "
-                f"lr={lora_lr} loss={lora_loss}")
+                f"({collected} images) lr={lora_lr} loss={lora_loss}")
 
     model.train()
     for epoch in range(epochs):
         total = 0.0
         for imgs, labels in samples:
+            imgs = imgs.to(device)
+            labels = labels.to(device)
             logits = model(imgs)
             loss = ce(logits, labels)
             if teacher is not None:
