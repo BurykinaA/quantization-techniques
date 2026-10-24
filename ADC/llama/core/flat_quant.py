@@ -545,6 +545,10 @@ class FlatQuantLinear(nn.Module):
         k: int  = cfg["k"]
         mvm_limit: int = cfg["mvm_limit"]
         signed: bool   = cfg.get("signed_activations", True)
+        # Tiled INT-only reference: keep tiling, integer codes, and the integer
+        # MVM, but skip the floor_ste/clamp ADC step so the transforms are
+        # calibrated without a converter (matches TiledLinearADC bypass_adc).
+        bypass_floor: bool = cfg.get("bypass_floor_ste", False)
 
         # Quantization bounds (matching QATLinearADC)
         if signed:
@@ -638,7 +642,10 @@ class FlatQuantLinear(nn.Module):
                 # E_eps[MSE(noisy ADC, FP)]; floor_ste below handles the non-diff floor.
                 noise = torch.randn_like(y_int) * self._adc_noise_std + 1.0
                 y_int = y_int * noise
-            y_adc  = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
+            if bypass_floor:
+                y_adc = y_int
+            else:
+                y_adc = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
 
             # Accumulate penalties (only when enabled)
             if self._penalty_enabled or self._band_enabled or self._penalty_lambda_center > 0:
@@ -1068,6 +1075,9 @@ def apply_flatquant_to_model(
             instead of simple INT8 fake-quant.  Expected keys::
 
                 {bx, bw, ba, k, mvm_limit, signed_activations}
+
+            Optional ``bypass_floor_ste=True`` keeps the tiled integer MVM
+            but skips the floor/clamp, giving a converter-free calibration.
     """
     layout = validate_model_layout(model)
     logger.info(
