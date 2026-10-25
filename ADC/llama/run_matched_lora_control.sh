@@ -10,7 +10,8 @@
 #   4. perplexity after LoRA, ADC bypassed
 #
 # The gain of step 4 over step 2 is compared with the Stage 3 gain of the
-# ADC arm (run_multi_arch_transfer.sh). See ADC/llama/MATCHED_LORA_CONTROL.md.
+# ADC arm, in that arm's dtype (TORCH_DTYPE). See
+# ADC/llama/MATCHED_LORA_CONTROL.md.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,11 +22,20 @@ SMOKE="${SMOKE:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
 FORCE_FQ_RETRAIN="${FORCE_FQ_RETRAIN:-0}"
+# Use the dtype of the ADC arm being compared against: the Llama rows of
+# Table 2 ran in float16 (the runner default), the transfer runs (SmolLM2,
+# TinyLlama) in bfloat16.
+TORCH_DTYPE="${TORCH_DTYPE:-bfloat16}"
 # Stage A dominates the run time (about 8 h for SmolLM2 per
 # MULTI_ARCH_TRANSFER.md), so SmolLM2 gets a GPU of its own.
 GPU0_MODELS="${GPU0_MODELS-llama32_1b tinyllama_11b}"
 GPU1_MODELS="${GPU1_MODELS-smollm2_17b}"
 CONTROL_ROOT="${CONTROL_ROOT:-${SCRIPT_DIR}/matched_control_results}"
+# Other dtypes get their own directory, so a run never reuses transforms or
+# completed records calibrated in a different dtype.
+if [[ "${TORCH_DTYPE}" != "bfloat16" ]]; then
+  CONTROL_ROOT="${CONTROL_ROOT}_${TORCH_DTYPE}"
+fi
 
 LORA_TARGETS=(q_proj k_proj v_proj o_proj gate_proj up_proj down_proj)
 
@@ -180,7 +190,7 @@ run_model() {
     --model_name "${model_id}" \
     --output_dir "${output_dir}" \
     --no_date_suffix \
-    --torch_dtype bfloat16 \
+    --torch_dtype "${TORCH_DTYPE}" \
     --preprocess_method flat_quant \
     --fq_w_bits 4 \
     --fq_a_bits 4 \
@@ -225,11 +235,12 @@ run_model() {
 }
 
 run_lane() {
-  local key
+  local key failed=0
   for key in "$@"; do
-    run_model "${key}" || true
+    run_model "${key}" || failed=1
   done
   log "lane finished"
+  return "${failed}"
 }
 
 # ---------------------------------------------------------------------------
@@ -247,7 +258,7 @@ done
 
 mkdir -p "${RESULTS_DIR}" "${LOG_ROOT}"
 
-log "Mode: SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN}"
+log "Mode: TORCH_DTYPE=${TORCH_DTYPE} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN}"
 log "GPU 0: ${GPU0_MODELS:-<idle>}"
 log "GPU 1: ${GPU1_MODELS:-<idle>}"
 log "Outputs: ${OUTPUT_ROOT}"
@@ -266,13 +277,14 @@ fi
 # oversubscribe them while both train adapters.
 log "CPU threads per lane: ${THREADS_PER_LANE}"
 
+any_failed=0
 lane_pids=()
 lane_index=0
 for lane_models in "${GPU0_MODELS}" "${GPU1_MODELS}"; do
   read -r -a lane_keys <<< "${lane_models}"
   if (( ${#lane_keys[@]} > 0 )); then
     if [[ "${DRY_RUN}" == "1" ]]; then
-      LANE_LABEL="gpu${lane_index}" run_lane "${lane_keys[@]}"
+      LANE_LABEL="gpu${lane_index}" run_lane "${lane_keys[@]}" || any_failed=1
     else
       (
         export CUDA_VISIBLE_DEVICES="${lane_index}"
@@ -288,7 +300,7 @@ for lane_models in "${GPU0_MODELS}" "${GPU1_MODELS}"; do
 done
 
 for pid in ${lane_pids[@]+"${lane_pids[@]}"}; do
-  wait "${pid}" || true
+  wait "${pid}" || any_failed=1
 done
 
 if [[ "${DRY_RUN}" != "1" ]]; then
@@ -298,4 +310,9 @@ if [[ "${DRY_RUN}" != "1" ]]; then
     --markdown-output "${OUTPUT_ROOT}/summary.md" \
     || log "summary failed; rerun summarize_matched_lora_control.py manually"
 fi
+if (( any_failed )); then
+  log "Some runs FAILED; see the FAIL lines above"
+fi
 log "All lanes finished. Summary: ${OUTPUT_ROOT}/summary.md"
+# Non-zero when any run failed, so `SMOKE=1 ... && ...` gates the full run.
+exit "${any_failed}"

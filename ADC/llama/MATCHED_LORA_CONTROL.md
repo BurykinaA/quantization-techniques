@@ -20,6 +20,24 @@ the ADC arm (`run_multi_arch_transfer.sh`).
 Default lanes: GPU 0 runs `llama32_1b tinyllama_11b`, GPU 1 runs
 `smollm2_17b`. Override them with `GPU0_MODELS` / `GPU1_MODELS`.
 
+## dtype
+
+Run each model in the dtype of the ADC arm it is compared with. The Llama
+rows of Table 2 (the `run_overnight_int4_v*` series and the "FlatQuant, no
+ADC" row) ran in float16, the default of the runner, because those scripts
+never passed `--torch_dtype`. The SmolLM2 and TinyLlama rows come from
+`run_multi_arch_transfer.sh`, which always passes bfloat16; its SmolLM2
+Stage A also overflowed under float16 autocast.
+
+`TORCH_DTYPE` defaults to `bfloat16`. Any other value writes to
+`matched_control_results_<dtype>/`, so a run never reuses transforms or
+completed records from another dtype:
+
+```bash
+TORCH_DTYPE=float16 GPU0_MODELS="" GPU1_MODELS="llama32_1b" \
+  bash ADC/llama/run_matched_lora_control.sh
+```
+
 ## Commands
 
 From the repository root, in the environment used for the transfer runs:
@@ -34,16 +52,19 @@ bash ADC/llama/run_matched_lora_control.sh           # full run, both GPUs
 runs as completed. Rerunning the full command skips finished models
 (`SKIP_COMPLETED=1`), resumes an interrupted Stage A from its layer
 checkpoint, and reuses finished transforms (`FORCE_FQ_RETRAIN=1` starts
-over). `DRY_RUN=1` prints the commands.
+over). `DRY_RUN=1` prints the commands. The script exits non-zero when any
+run failed, so `SMOKE=1 bash ... && bash ...` starts the full run only after
+a clean smoke run.
 
 Stage A progress: each finished decoder layer logs
 `layer N restored best checkpoint`.
 
-Rebuild the summary at any time:
+Rebuild the summary at any time, from one or several result directories:
 
 ```bash
 python3 ADC/llama/summarize_matched_lora_control.py \
-  --results-dir ADC/llama/matched_control_results/results
+  --results-dir ADC/llama/matched_control_results/results \
+                ADC/llama/matched_control_results_float16/results
 ```
 
 ## Outputs

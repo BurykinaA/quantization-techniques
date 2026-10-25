@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Perplexity before and after the no-ADC LoRA residual on FlatQuant.
 
-Reads the per-run JSON files written by run_matched_lora_control.sh. Models
-whose run has not finished yet are shown as "—".
+Reads the per-run JSON files written by run_matched_lora_control.sh, from one
+or more result directories (e.g. the bfloat16 and float16 runs). Models whose
+run has not finished yet are shown as "—".
 """
 
 import argparse
@@ -20,22 +21,28 @@ DATASETS = ("wikitext2", "c4")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results-dir", type=Path, required=True,
-                        help="Directory with the per-run JSON files")
+    parser.add_argument("--results-dir", type=Path, nargs="+", required=True,
+                        help="Directories with the per-run JSON files")
     parser.add_argument("--run-suffix", default="",
                         help="Run-name suffix, e.g. _smoke for smoke runs")
     parser.add_argument("--markdown-output", type=Path, default=None)
     return parser.parse_args()
 
 
-def successful_results(results_dir: Path) -> dict[str, dict]:
-    results = {}
-    for path in sorted(results_dir.glob("*.json")):
-        with path.open(encoding="utf-8") as handle:
-            for record in json.load(handle):
-                if record.get("status") == "success":
-                    results[record["run_name"]] = record.get("results", {})
-    return results
+def control_runs(results_dirs: list[Path], suffix: str) -> list[tuple[str, str, dict]]:
+    """(model key, dtype, results) for every finished control run."""
+    run_names = {f"{key}_flatquant_noadc_lora{suffix}": key for key, _ in MODELS}
+    runs = []
+    for results_dir in results_dirs:
+        for path in sorted(results_dir.glob("*.json")):
+            with path.open(encoding="utf-8") as handle:
+                for record in json.load(handle):
+                    key = run_names.get(record.get("run_name"))
+                    if key is None or record.get("status") != "success":
+                        continue
+                    dtype = record.get("config", {}).get("torch_dtype", "?")
+                    runs.append((key, dtype, record.get("results", {})))
+    return runs
 
 
 def fmt_change(before: float | None, after: float | None) -> str:
@@ -45,24 +52,33 @@ def fmt_change(before: float | None, after: float | None) -> str:
     return f"{before:.2f} → {after:.2f} ({change:+.1f}%)"
 
 
-def build_report(results: dict[str, dict], suffix: str) -> str:
+def build_report(runs: list[tuple[str, str, dict]]) -> str:
     lines = [
-        "| Model | Wiki: FlatQuant → + LoRA | C4: FlatQuant → + LoRA |",
-        "| :-- | --: | --: |",
+        "| Model | dtype | Wiki: FlatQuant → + LoRA | C4: FlatQuant → + LoRA |",
+        "| :-- | :-- | --: | --: |",
     ]
     for key, label in MODELS:
-        run = results.get(f"{key}_flatquant_noadc_lora{suffix}", {})
-        cells = [
-            fmt_change(run.get(f"ppl_noadc_prelora_{dataset}"), run.get(f"ppl_noadc_lora_{dataset}"))
-            for dataset in DATASETS
-        ]
-        lines.append(f"| {label} | {cells[0]} | {cells[1]} |")
+        model_runs = sorted(
+            ((dtype, results) for run_key, dtype, results in runs if run_key == key),
+            key=lambda item: item[0],
+        )
+        if not model_runs:
+            lines.append(f"| {label} | — | — | — |")
+        for dtype, results in model_runs:
+            cells = [
+                fmt_change(
+                    results.get(f"ppl_noadc_prelora_{dataset}"),
+                    results.get(f"ppl_noadc_lora_{dataset}"),
+                )
+                for dataset in DATASETS
+            ]
+            lines.append(f"| {label} | {dtype} | {cells[0]} | {cells[1]} |")
     return "\n".join(lines) + "\n"
 
 
 def main() -> None:
     args = parse_args()
-    report = build_report(successful_results(args.results_dir), args.run_suffix)
+    report = build_report(control_runs(args.results_dir, args.run_suffix))
     if args.markdown_output is not None:
         args.markdown_output.parent.mkdir(parents=True, exist_ok=True)
         args.markdown_output.write_text(report, encoding="utf-8")
