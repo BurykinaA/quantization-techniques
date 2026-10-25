@@ -7,16 +7,18 @@
 # and without the converter can be compared on the same backbone.
 #
 # Arms:
+#   flatquant      FlatQuant recalibrated from scratch without the ADC floor
+#                  (--fq_bypass_adc_floor, Stage A of the transfer protocol,
+#                  no Stage B): one digital reference built the same way for
+#                  every model
 #   same_backbone  final Stage 1-2 transforms of the ADC-Quant transfer run,
-#                  reloaded unchanged (the "FlatQuant, no ADC" row of the
-#                  paper for SmolLM2/TinyLlama is this backbone, ADC off)
-#   flatquant      FlatQuant Stage A recalibrated without the ADC floor
-#                  (--fq_bypass_adc_floor, no Stage B): the protocol of the
-#                  Llama "FlatQuant, no ADC" row
+#                  reloaded unchanged, so the converter is the only
+#                  difference from the ADC arm (needs the transfer checkpoints)
 #
 # Each GPU lane runs phase 1 (LoRA training + perplexity, adapter saved) for
 # all of its arms first, then phase 2 (downstream suite with the reloaded
-# adapter), so every perplexity result lands before the long lm-eval runs.
+# adapter; for flatquant also before LoRA), so every perplexity result lands
+# before the long lm-eval runs.
 #
 # See ADC/llama/MATCHED_LORA_CONTROL.md for usage.
 set -euo pipefail
@@ -32,8 +34,9 @@ SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
 RUN_DOWNSTREAM="${RUN_DOWNSTREAM:-1}"
 FORCE_FQ_RETRAIN="${FORCE_FQ_RETRAIN:-0}"
 ADC_LM_EVAL_BATCH_SIZE="${ADC_LM_EVAL_BATCH_SIZE:-1}"
-GPU0_ARMS="${GPU0_ARMS-llama32_1b:same_backbone llama32_1b:flatquant}"
-GPU1_ARMS="${GPU1_ARMS-smollm2_17b:same_backbone tinyllama_11b:same_backbone}"
+# FlatQuant arms first: their Stage A dominates the run time.
+GPU0_ARMS="${GPU0_ARMS-llama32_1b:flatquant tinyllama_11b:flatquant llama32_1b:same_backbone}"
+GPU1_ARMS="${GPU1_ARMS-smollm2_17b:flatquant smollm2_17b:same_backbone tinyllama_11b:same_backbone}"
 TRANSFER_ROOT="${TRANSFER_ROOT:-${SCRIPT_DIR}/transfer_results}"
 TRANSFER_CHECKPOINT_ROOT="${TRANSFER_CHECKPOINT_ROOT:-${TRANSFER_ROOT}/checkpoints}"
 TRANSFER_RESULTS_JSON="${TRANSFER_RESULTS_JSON:-${TRANSFER_ROOT}/multi_arch_transfer.json}"
@@ -194,7 +197,7 @@ resolve_transfer_transforms() {
     return 1
   fi
 
-  local staging="${EXTRACT_ROOT}/.staging_${key}_$$"
+  local staging="${EXTRACT_ROOT}/.staging_${key}_$$_${RANDOM}"
   mkdir -p "${staging}" "$(dirname "${extracted}")"
   tar -xzf "${archive}" -C "${staging}" "${members}"
   mv "${staging}/${members}" "${extracted}"
@@ -407,6 +410,11 @@ run_phase2() {
   if [[ "${SMOKE}" == "1" ]]; then
     lm_eval_args=(--run_lm_eval --lm_eval_tasks boolq --lm_eval_batch_size 1 --lm_eval_limit 2)
   fi
+  # The recomputed FlatQuant backbone also needs its own pre-LoRA downstream
+  # row; the same_backbone one already exists as <key>_int4_ptq_adc_off.
+  if [[ "${arm}" == "flatquant" ]]; then
+    lm_eval_args+=(--eval_pre_lora)
+  fi
   mkdir -p "${arm_dir}/downstream"
 
   run_step "${run_name} [phase 2: downstream with saved adapter]" \
@@ -465,7 +473,7 @@ PY
       arm="${spec#*:}"
       [[ "${arm}" == "same_backbone" ]] || continue
       transforms="$(resolve_transfer_transforms "${key}")" \
-        || die "transforms for ${key} not found; set TRANSFORMS_$(upper "${key}") or ARCHIVE_DIR"
+        || die "transforms for ${key} not found; set TRANSFORMS_$(upper "${key}") or ARCHIVE_DIR, or drop ${spec} from GPU0_ARMS/GPU1_ARMS"
       layers="$(num_layers_for "${key}")"
       "${PYTHON_BIN}" - "${transforms}" "${layers}" "${key}" <<'PY' \
         || die "transforms check failed for ${key}"
@@ -542,6 +550,18 @@ fi
 # The CE+KL teacher runs on the CPU; split the cores so the two lanes do not
 # oversubscribe them while both train adapters.
 log "CPU threads per lane: ${THREADS_PER_LANE}"
+
+# Resolve (and if needed extract) the transfer transforms before the lanes
+# start, so two lanes never unpack the same archive concurrently and a missing
+# checkpoint is reported now rather than hours into the run.
+for lane_arms in "${GPU0_ARMS}" "${GPU1_ARMS}"; do
+  for spec in ${lane_arms}; do
+    if [[ "${spec#*:}" == "same_backbone" ]]; then
+      resolve_transfer_transforms "${spec%%:*}" >/dev/null \
+        || log "WARNING: ${spec} will fail: transfer transforms not found"
+    fi
+  done
+done
 
 lane_pids=()
 lane_index=0

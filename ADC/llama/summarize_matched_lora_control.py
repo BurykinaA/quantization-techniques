@@ -75,9 +75,27 @@ def fmt_accuracy(before: float | None, after: float | None) -> str:
     return f"{fmt(before)} → {fmt(after)}"
 
 
+def task_row(
+    model_label: str,
+    row_label: str,
+    ppl_results: dict,
+    ppl_prefix: str,
+    downstream: dict | None,
+) -> tuple:
+    tasks = [accuracy_pct((downstream or {}).get(task, {})) for task, _ in TASKS]
+    return (
+        model_label,
+        row_label,
+        *(fmt(value) for value in ppl_pair(ppl_results, ppl_prefix)),
+        *(fmt(value) for value in tasks),
+        fmt(mean_accuracy(downstream)),
+    )
+
+
 def build_report(transfer: dict[str, dict], control: dict[str, dict], suffix: str) -> str:
     gain_rows = []
     cross_rows = []
+    task_rows = []
     checks = []
 
     def check(label: str, first: float | None, second: float | None) -> None:
@@ -150,7 +168,10 @@ def build_report(transfer: dict[str, dict], control: dict[str, dict], suffix: st
             gain_rows.append((
                 label, "FlatQuant, no ADC floor in calibration", "ADC off",
                 *(fmt_change(b, a) for b, a in zip(before, after)),
-                fmt_accuracy(None, mean_accuracy(flat_downstream.get("downstream_noadc_lora"))),
+                fmt_accuracy(
+                    mean_accuracy(flat_downstream.get("downstream_noadc_prelora")),
+                    mean_accuracy(flat_downstream.get("downstream_noadc_lora")),
+                ),
             ))
             cross_rows.append((
                 label, "FlatQuant, no ADC floor in calibration", "none (pre-LoRA)", "ADC on",
@@ -162,11 +183,34 @@ def build_report(transfer: dict[str, dict], control: dict[str, dict], suffix: st
             ))
             for dataset in DATASETS:
                 check(
+                    f"{label} {dataset}: FlatQuant phase-2 vs phase-1 before LoRA (ADC off)",
+                    flat_downstream.get(f"ppl_noadc_prelora_{dataset}"),
+                    flat.get(f"ppl_noadc_prelora_{dataset}"),
+                )
+                check(
                     f"{label} {dataset}: FlatQuant phase-2 reload vs phase-1 adapter (ADC off)",
                     flat_downstream.get(f"ppl_noadc_lora_{dataset}"),
                     flat.get(f"ppl_noadc_lora_{dataset}"),
                 )
 
+        # Table 2 layout: perplexities from the training run, accuracies from
+        # the downstream run of the same adapter.
+        for row_label, ppl_results, ppl_prefix, downstream in (
+            ("ADC-Quant, Stages 1–2", adc, "ppl_adc_prelora_", adc.get("downstream_adc_ptq")),
+            ("ADC-Quant, Stages 1–3", adc, "ppl_adc_", adc.get("downstream_adc_lora")),
+            ("Stages 1–2, ADC off", adc_off_ptq, "ppl_int4_ptq_",
+             adc_off_ptq.get("downstream_int4_ptq")),
+            ("Stages 1–2, ADC off + residual", same, "ppl_noadc_lora_",
+             same_downstream.get("downstream_noadc_lora")),
+            ("FlatQuant, no ADC", flat, "ppl_noadc_prelora_",
+             flat_downstream.get("downstream_noadc_prelora")),
+            ("FlatQuant, no ADC + residual", flat, "ppl_noadc_lora_",
+             flat_downstream.get("downstream_noadc_lora")),
+        ):
+            if ppl_results:
+                task_rows.append(task_row(label, row_label, ppl_results, ppl_prefix, downstream))
+
+    task_headers = [task_label for _, task_label in TASKS]
     lines = [
         "## Adapter gain with and without the ADC",
         "",
@@ -182,6 +226,12 @@ def build_report(transfer: dict[str, dict], control: dict[str, dict], suffix: st
         "| Model | Backbone | Adapter trained with | Evaluated with | Wiki | C4 |",
         "| :-- | :-- | :-- | :-- | --: | --: |",
         *("| " + " | ".join(row) + " |" for row in cross_rows),
+        "",
+        "## Per-task results",
+        "",
+        "| Model | Row | Wiki | C4 | " + " | ".join(task_headers) + " | Avg |",
+        "| :-- | :-- | --: | --: | " + " | ".join(["--:"] * len(task_headers)) + " | --: |",
+        *("| " + " | ".join(row) + " |" for row in task_rows),
         "",
         "## Consistency checks",
         "",

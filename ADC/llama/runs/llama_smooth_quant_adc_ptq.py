@@ -3794,7 +3794,7 @@ def main():
                 tasks=args.lm_eval_tasks,
                 batch_size=args.lm_eval_batch_size,
                 limit=args.lm_eval_limit,
-                stage="adc_ptq",
+                stage="noadc_ptq_control" if args.lora_adc_off_control else "adc_ptq",
             )
         logger.info("=" * 80)
 
@@ -4358,6 +4358,7 @@ def main():
                     f"ppl_adc_on_lora_{ds}": float(metrics["perplexity"])
                     for ds, metrics in adc_on_lora_metrics.items()
                 },
+                "downstream_noadc_prelora": pre_lora_downstream_metrics,
                 "downstream_noadc_lora": downstream_metrics,
             }
         else:

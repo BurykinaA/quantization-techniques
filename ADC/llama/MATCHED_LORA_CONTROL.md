@@ -11,29 +11,36 @@ converter-error correction from generic adapter capacity and distillation.
 
 | Arm | Backbone | Converter during adapter training/eval |
 | :-- | :-- | :-- |
+| `flatquant` | FlatQuant recalibrated from scratch with `--fq_bypass_adc_floor` | off |
 | `same_backbone` | final Stage 1-2 transforms of the transfer run, reloaded unchanged | off |
-| `flatquant` | FlatQuant Stage A recalibrated with `--fq_bypass_adc_floor`, no Stage B | off |
+
+`flatquant` rebuilds the "FlatQuant, no ADC" reference the same way for every
+model: Stage A of the transfer protocol (1024 sequences, 30 epochs, batch 16,
+MLP diagonals) with the floor/clamp removed from the calibration loss and no
+Stage B. The submitted table built this row differently per model (Llama:
+`run_int_only_baseline_1b.sh` on `multi-model-paper-comparison`;
+SmolLM2/TinyLlama: the ADC-Quant transforms with the ADC off).
 
 `same_backbone` holds the transforms fixed, so the converter is the only
-difference from the ADC arm. For SmolLM2 and TinyLlama, the paper's
-"FlatQuant, no ADC" row is this backbone with the ADC off. `flatquant`
-follows the protocol of the Llama "FlatQuant, no ADC" row
-(`run_int_only_baseline_1b.sh` on `multi-model-paper-comparison`), retrained
-on the current FlatQuant code, so its pre-LoRA perplexity can differ slightly
-from 14.13.
+difference from the ADC arm. It needs the transfer checkpoints (see Inputs).
 
-Default lanes: GPU 0 runs `llama32_1b:same_backbone llama32_1b:flatquant`,
-GPU 1 runs `smollm2_17b:same_backbone tinyllama_11b:same_backbone`. Override
-them with `GPU0_ARMS` / `GPU1_ARMS`, and keep all arms of one model in one lane.
+Default lanes, FlatQuant arms first because Stage A dominates the run time:
+
+- GPU 0: `llama32_1b:flatquant tinyllama_11b:flatquant llama32_1b:same_backbone`
+- GPU 1: `smollm2_17b:flatquant smollm2_17b:same_backbone tinyllama_11b:same_backbone`
+
+Override them with `GPU0_ARMS` / `GPU1_ARMS`.
 
 Each lane runs phase 1 for all of its arms first: LoRA training, perplexity
 with the ADC off before and after LoRA, and the same model with the ADC on.
 It then runs phase 2, the eight-task downstream suite with the saved adapter
-reloaded. Every perplexity result is written before the long lm-eval runs.
+reloaded, for `flatquant` also before LoRA. Every perplexity result is
+written before the long lm-eval runs.
 
 ## Inputs
 
-For each `same_backbone` model the runner uses the first of:
+`flatquant` needs nothing beyond the Hugging Face models and datasets. For
+each `same_backbone` model the runner uses the first of:
 
 1. `TRANSFORMS_LLAMA32_1B`, `TRANSFORMS_SMOLLM2_17B`, `TRANSFORMS_TINYLLAMA_11B`
 2. `$TRANSFER_CHECKPOINT_ROOT/<key>/adc_transfer/flat_quant_transforms.pt`
@@ -47,10 +54,10 @@ The summary reads the ADC arm from `TRANSFER_RESULTS_JSON` (default
 
 ## Commands
 
-From the repository root:
+From the repository root, in the environment used for the transfer runs:
 
 ```bash
-PREFLIGHT=1 bash ADC/llama/run_matched_lora_control.sh   # environment, tests, transforms
+PREFLIGHT=1 bash ADC/llama/run_matched_lora_control.sh   # environment, tests, transforms, GPUs
 SMOKE=1 bash ADC/llama/run_matched_lora_control.sh       # tiny end-to-end run of every arm
 bash ADC/llama/run_matched_lora_control.sh               # full run, both GPUs
 ```
@@ -61,6 +68,9 @@ successful record (`SKIP_COMPLETED=1`). An interrupted `flatquant` Stage A
 resumes from its layer checkpoint, and completed transforms are reused.
 `RUN_DOWNSTREAM=0` stops after phase 1; a later run without it performs only
 the missing downstream evaluations. `DRY_RUN=1` prints the commands.
+
+Stage A progress: each finished decoder layer logs
+`layer N restored best checkpoint`.
 
 Rebuild the summary at any time:
 
@@ -76,20 +86,26 @@ python3 ADC/llama/summarize_matched_lora_control.py \
 - `results/<key>_noadc_lora_<arm>.json`: `ppl_noadc_prelora_*`,
   `ppl_noadc_lora_*` (the matched control), `ppl_adc_on_prelora_*`, and
   `ppl_adc_on_lora_*` (the ADC-off-trained adapter deployed with the ADC)
-- `results/<key>_noadc_lora_<arm>_downstream.json`: `downstream_noadc_lora`
-  plus a perplexity re-evaluation that must match phase 1
+- `results/<key>_noadc_lora_<arm>_downstream.json`: `downstream_noadc_lora`,
+  for `flatquant` also `downstream_noadc_prelora`, plus perplexity
+  re-evaluations that must match phase 1
 - `checkpoints/<key>/<arm>/lora_adapter.pt`: adapter tensors and the settings
-  they were trained with; a reload rejects any mismatch
+  they were trained with; a reload rejects any mismatch.
+  `checkpoints/<key>/flatquant/flat_quant_transforms.pt`: the recalibrated
+  FlatQuant transforms
 - `logs/`, and `summary.md` with the gain table, the cross-deployment table,
-  and consistency checks. The `same_backbone` pre-LoRA numbers must reproduce
-  `<key>_int4_ptq_adc_off` (ADC off) and the transfer pre-LoRA ADC perplexity
-  (ADC on).
+  per-task rows in the Table 2 layout, and consistency checks. The
+  `same_backbone` pre-LoRA numbers must reproduce `<key>_int4_ptq_adc_off`
+  (ADC off) and the transfer pre-LoRA ADC perplexity (ADC on).
 
 ## Notes
 
-- `calibrate_adc_lora` stops after `nsamples / fq_cali_bsz` loader batches,
-  so with `--lora_nsamples 1024 --fq_cali_bsz 16` both arms train on
-  64 batches of 4 sequences (256 sequences of 512 tokens). The log line
+- Calibration sequences are the first WikiText-2 train paragraphs longer than
+  50 characters, in file order, each truncated or left-padded to 512 tokens.
+  FlatQuant captures the first 1024 (`Captured 1024 calibration samples`).
+  `calibrate_adc_lora` stops after `nsamples / fq_cali_bsz` loader batches,
+  so with `--lora_nsamples 1024 --fq_cali_bsz 16` every Stage 3 run, in both
+  arms, trains on the first 64 batches of 4 (256 sequences); the log line
   `Training 5 epochs on 64 batches` confirms it.
 - Each arm is a single seed (42). The repeated CE configuration of the paper
   varies by about 0.07 WikiText-2 perplexity across seeds.
