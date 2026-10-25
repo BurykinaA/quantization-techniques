@@ -7,12 +7,7 @@ import torch
 import torch.nn as nn
 
 from ADC.llama.core.adc_layers import TiledLinearADC
-from ADC.llama.core.adc_lora import (
-    ResidualLoRATiledLinearADC,
-    apply_adc_lora,
-    load_adc_lora,
-    save_adc_lora,
-)
+from ADC.llama.core.adc_lora import ResidualLoRATiledLinearADC, apply_adc_lora
 from ADC.llama.core.flat_quant import FlatQuantLinear
 from ADC.llama.runs import llama_smooth_quant_adc_ptq as runner
 
@@ -44,16 +39,6 @@ def _tiled_copy(linear: nn.Linear) -> TiledLinearADC:
         tile.weight_quantizer.scale.data = scales.clone()
         tile.weight_quantizer._scale_initialized = True
     return tiled
-
-
-def _lora_model(rank: int = 2, seed: int = 3) -> nn.Module:
-    torch.manual_seed(seed)
-    linear = nn.Linear(12, 8, bias=False)
-    flat_linear = FlatQuantLinear(linear, w_bits=4, a_bits=4)
-    flat_linear.linear = _tiled_copy(linear)
-    model = nn.ModuleDict({"down_proj": flat_linear})
-    apply_adc_lora(model, target_modules=["down_proj"], rank=rank, lora_alpha=4.0)
-    return model
 
 
 def test_bypass_floor_training_path_matches_adc_bypassed_inference() -> None:
@@ -99,7 +84,12 @@ def test_bypass_floor_removes_converter_from_training_path() -> None:
 
 
 def test_adc_bypass_reaches_tiled_layer_inside_residual_lora() -> None:
-    model = _lora_model()
+    torch.manual_seed(3)
+    linear = nn.Linear(12, 8, bias=False)
+    flat_linear = FlatQuantLinear(linear, w_bits=4, a_bits=4)
+    flat_linear.linear = _tiled_copy(linear)
+    model = nn.ModuleDict({"down_proj": flat_linear})
+    apply_adc_lora(model, target_modules=["down_proj"], rank=2, lora_alpha=4.0)
     wrapper = model["down_proj"].linear
     assert isinstance(wrapper, ResidualLoRATiledLinearADC)
 
@@ -115,7 +105,6 @@ def test_adc_bypass_reaches_tiled_layer_inside_residual_lora() -> None:
     ("argv", "message"),
     [
         (["--lora_adc_off_control"], "requires --lora_rank > 0"),
-        (["--lora_rank", "4", "--run_adc_on_eval"], "requires --lora_adc_off_control"),
         (
             ["--lora_rank", "4", "--lora_adc_off_control", "--run_no_adc_eval"],
             "already evaluates without ADC",
@@ -123,10 +112,6 @@ def test_adc_bypass_reaches_tiled_layer_inside_residual_lora() -> None:
         (
             ["--lora_rank", "4", "--lora_adc_off_control", "--lora_mode", "pre_adc"],
             "requires --lora_mode residual",
-        ),
-        (
-            ["--lora_rank", "4", "--lora_save_path", "a.pt", "--lora_load_path", "b.pt"],
-            "mutually exclusive",
         ),
         (["--fq_bypass_adc_floor"], "requires --preprocess_method flat_quant"),
     ],
@@ -144,48 +129,3 @@ def test_matched_control_rejects_invalid_flag_combinations(
 
     assert excinfo.value.code == 2
     assert message in capsys.readouterr().err
-
-
-def test_adc_lora_roundtrip_restores_adapter_and_metadata(tmp_path) -> None:
-    trained = _lora_model()
-    with torch.no_grad():
-        trained["down_proj"].linear.lora_A.weight.normal_()
-        trained["down_proj"].linear.lora_B.weight.normal_()
-    path = tmp_path / "lora_adapter.pt"
-    metadata = {"lora_rank": 2, "lora_adc_off_control": True}
-
-    save_adc_lora(trained, str(path), metadata=metadata)
-    restored = _lora_model()
-    loaded_metadata = load_adc_lora(restored, str(path))
-
-    assert loaded_metadata == metadata
-    assert not list(tmp_path.glob("*.tmp.*"))
-    for name in ("lora_A", "lora_B"):
-        torch.testing.assert_close(
-            getattr(restored["down_proj"].linear, name).weight,
-            getattr(trained["down_proj"].linear, name).weight,
-        )
-    inputs = torch.randn(3, 12)
-    with torch.no_grad():
-        torch.testing.assert_close(
-            restored["down_proj"].linear(inputs),
-            trained["down_proj"].linear(inputs),
-        )
-
-
-def test_adc_lora_load_rejects_different_rank(tmp_path) -> None:
-    path = tmp_path / "lora_adapter.pt"
-    save_adc_lora(_lora_model(rank=2), str(path))
-
-    with pytest.raises(ValueError, match="shape mismatch"):
-        load_adc_lora(_lora_model(rank=3), str(path))
-
-
-def test_adc_lora_load_rejects_missing_adapter_tensors(tmp_path) -> None:
-    path = tmp_path / "lora_adapter.pt"
-    save_adc_lora(_lora_model(), str(path))
-    model = _lora_model()
-    model["up_proj"] = _lora_model(seed=9)["down_proj"]
-
-    with pytest.raises(ValueError, match="missing"):
-        load_adc_lora(model, str(path))

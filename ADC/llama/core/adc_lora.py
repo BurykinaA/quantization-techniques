@@ -240,69 +240,6 @@ def apply_adc_lora(
 
 
 # ============================================================
-#  Adapter serialization
-# ============================================================
-
-def _is_lora_parameter(name: str) -> bool:
-    return ("lora_A.weight" in name or "lora_B.weight" in name   # nn.Linear variant
-            or ("lora_A" in name and "weight" not in name)        # nn.Parameter variant
-            or ("lora_B" in name and "weight" not in name))
-
-
-def save_adc_lora(model: nn.Module, path: str, metadata: dict | None = None) -> None:
-    """Atomically save only the LoRA adapter tensors plus run metadata."""
-    import os
-
-    state = {
-        name: param.detach().cpu().clone()
-        for name, param in model.named_parameters()
-        if _is_lora_parameter(name)
-    }
-    if not state:
-        raise ValueError("Model has no LoRA parameters to save")
-
-    absolute_path = os.path.abspath(path)
-    os.makedirs(os.path.dirname(absolute_path), exist_ok=True)
-    temporary_path = f"{absolute_path}.tmp.{os.getpid()}"
-    torch.save({"metadata": dict(metadata or {}), "state": state}, temporary_path)
-    os.replace(temporary_path, absolute_path)
-    print(f"[ADC-LoRA] Saved {len(state)} adapter tensors to {absolute_path}")
-
-
-def load_adc_lora(model: nn.Module, path: str) -> dict:
-    """Load adapter tensors saved by save_adc_lora; returns their metadata.
-
-    The adapter set must match exactly: a missing, unexpected, or reshaped
-    tensor means the wrappers differ from the run that trained them.
-    """
-    payload = torch.load(path, map_location="cpu")
-    state = payload["state"]
-    params = {
-        name: param
-        for name, param in model.named_parameters()
-        if _is_lora_parameter(name)
-    }
-    missing = sorted(set(params) - set(state))
-    unexpected = sorted(set(state) - set(params))
-    if missing or unexpected:
-        raise ValueError(
-            f"LoRA adapter mismatch for {path}: "
-            f"missing={missing[:5]} ({len(missing)} total), "
-            f"unexpected={unexpected[:5]} ({len(unexpected)} total)"
-        )
-    with torch.no_grad():
-        for name, param in params.items():
-            if param.shape != state[name].shape:
-                raise ValueError(
-                    f"LoRA adapter shape mismatch for {name}: "
-                    f"model={tuple(param.shape)}, file={tuple(state[name].shape)}"
-                )
-            param.copy_(state[name].to(device=param.device, dtype=param.dtype))
-    print(f"[ADC-LoRA] Loaded {len(state)} adapter tensors from {path}")
-    return dict(payload.get("metadata", {}))
-
-
-# ============================================================
 #  calibrate_adc_lora
 # ============================================================
 
@@ -329,7 +266,10 @@ def calibrate_adc_lora(
     """
     # Freeze everything except LoRA adapters
     for n, p in model.named_parameters():
-        p.requires_grad_(_is_lora_parameter(n))
+        is_lora = ("lora_A.weight" in n or "lora_B.weight" in n   # nn.Linear variant
+                   or ("lora_A" in n and "weight" not in n)        # nn.Parameter variant
+                   or ("lora_B" in n and "weight" not in n))
+        p.requires_grad_(is_lora)
 
     lora_params = [p for p in model.parameters() if p.requires_grad]
     if not lora_params:

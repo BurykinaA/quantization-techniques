@@ -37,12 +37,7 @@ from ADC.llama.core.smooth_quant import (
     calibrate_smooth_scales,
     apply_smooth_quant,
 )
-from ADC.llama.core.adc_lora import (
-    apply_adc_lora,
-    calibrate_adc_lora,
-    load_adc_lora,
-    save_adc_lora,
-)
+from ADC.llama.core.adc_lora import apply_adc_lora, calibrate_adc_lora
 from ADC.llama.core.flat_quant import (
     apply_flatquant_to_model,
     calibrate_flat_quant,
@@ -375,36 +370,6 @@ def set_adc_bypass(model: nn.Module, bypass: bool) -> None:
     for module in model.modules():
         if isinstance(module, TiledLinearADC):
             module.set_bypass_adc(bypass)
-
-
-def evaluate_perplexity_datasets(model, tokenizer, device, args, desc: str) -> dict:
-    """Sliding-window perplexity on every --eval_datasets corpus."""
-    metrics = {}
-    for dataset_name in args.eval_datasets:
-        encodings = load_and_tokenize_for_sliding_window(
-            dataset_name,
-            args.eval_split,
-            tokenizer,
-            max_samples=args.max_eval_samples if dataset_name == "c4" else None,
-        )
-        if encodings is None:
-            logger.warning("Skipping %s for %s (dataset unavailable)", desc, dataset_name)
-            continue
-        encodings = limit_sliding_window_encodings(
-            encodings,
-            args.max_length,
-            args.stride,
-            args.max_eval_windows,
-        )
-        metrics[dataset_name] = compute_perplexity_sliding_window(
-            model,
-            encodings,
-            device,
-            max_length=args.max_length,
-            stride=args.stride,
-            desc=f"{desc} {dataset_name}",
-        )
-    return metrics
 
 
 def prepare_dataset_for_lm(dataset, tokenizer, max_length: int, max_samples: int = None,
@@ -2406,14 +2371,6 @@ def main():
                         help="Matched no-ADC control: bypass only the ADC floor/clamp (tiled W4A4 "
                              "quantization stays active) for the pre-LoRA evaluation, residual "
                              "LoRA training, and the final evaluation")
-    parser.add_argument("--run_adc_on_eval", action="store_true",
-                        help="With --lora_adc_off_control: additionally evaluate perplexity with "
-                             "the ADC enabled, before (with --eval_pre_lora) and after LoRA")
-    parser.add_argument("--lora_save_path", type=str, default=None,
-                        help="Save the trained LoRA adapter tensors to this file")
-    parser.add_argument("--lora_load_path", type=str, default=None,
-                        help="Load LoRA adapter tensors saved by --lora_save_path instead of "
-                             "training them")
 
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
@@ -2616,10 +2573,7 @@ def main():
                 "pre-ADC variant always applies the converter"
             )
         if args.run_no_adc_eval:
-            parser.error(
-                "--lora_adc_off_control already evaluates without ADC; use "
-                "--run_adc_on_eval for the converter-enabled evaluation"
-            )
+            parser.error("--lora_adc_off_control already evaluates without ADC")
         if args.kd_epochs != 0:
             parser.error("--lora_adc_off_control requires --kd_epochs 0")
         if args.diagnostic_only_after_adc_calibration:
@@ -2627,14 +2581,6 @@ def main():
                 "--lora_adc_off_control cannot be combined with "
                 "--diagnostic_only_after_adc_calibration"
             )
-    if args.run_adc_on_eval and not args.lora_adc_off_control:
-        parser.error("--run_adc_on_eval requires --lora_adc_off_control")
-    if (args.lora_save_path or args.lora_load_path) and args.lora_rank <= 0:
-        parser.error("--lora_save_path and --lora_load_path require --lora_rank > 0")
-    if args.lora_save_path and args.lora_load_path:
-        parser.error("--lora_save_path and --lora_load_path are mutually exclusive")
-    if args.lora_load_path and not os.path.isfile(args.lora_load_path):
-        parser.error(f"--lora_load_path not found: {args.lora_load_path}")
     if args.fq_bypass_adc_floor and args.preprocess_method != "flat_quant":
         parser.error("--fq_bypass_adc_floor requires --preprocess_method flat_quant")
     if args.fq_test_layers:
@@ -3704,7 +3650,6 @@ def main():
     # STEP 2.35 (optional): WITH-ADC perplexity eval BEFORE LoRA
     # =========================================================================
     pre_lora_eval_metrics = {}    # per-dataset WITH-ADC metrics measured before LoRA
-    pre_lora_adc_on_metrics = {}  # --run_adc_on_eval: same model, converter enabled
     pre_lora_downstream_metrics = {}
     if args.eval_pre_lora and args.lora_rank > 0:
         if args.pre_lora_metrics_log:
@@ -3775,17 +3720,6 @@ def main():
                     f"downstream evaluation/LoRA: threshold="
                     f"{args.pre_lora_ppl_threshold}, measured={failed_quality}"
                 )
-        if args.run_adc_on_eval:
-            set_adc_bypass(model, False)
-            pre_lora_adc_on_metrics = evaluate_perplexity_datasets(
-                model, tokenizer, device, args, "PreLoRA ADC-on eval",
-            )
-            set_adc_bypass(model, True)
-            for _pre_ds, _pre_m in pre_lora_adc_on_metrics.items():
-                logger.info(
-                    f"BEFORE LoRA (ADC on) -> {_pre_ds.upper()} Perplexity: "
-                    f"{_pre_m['perplexity']:.4f}  (Loss: {_pre_m['avg_loss']:.4f})"
-                )
         if args.run_lm_eval and not pre_lora_downstream_metrics:
             pre_lora_downstream_metrics = run_lm_evaluation(
                 model,
@@ -3794,7 +3728,7 @@ def main():
                 tasks=args.lm_eval_tasks,
                 batch_size=args.lm_eval_batch_size,
                 limit=args.lm_eval_limit,
-                stage="noadc_ptq_control" if args.lora_adc_off_control else "adc_ptq",
+                stage="adc_ptq",
             )
         logger.info("=" * 80)
 
@@ -3817,71 +3751,21 @@ def main():
             layer_indices=_lora_layer_indices,
         )
         _lora_nsamples = args.lora_nsamples if args.lora_nsamples is not None else args.fq_nsamples
-        # Everything that determines the trained adapter; a reloaded adapter
-        # must have been trained under exactly these settings.
-        _lora_identity = {
-            "model_name": args.model_name,
-            "lora_rank": args.lora_rank,
-            "lora_alpha": args.lora_alpha,
-            "lora_mode": args.lora_mode,
-            "lora_target_modules": sorted(args.lora_target_modules),
-            "lora_layer_indices": (
-                sorted(_lora_layer_indices) if _lora_layer_indices else None
-            ),
-            "lora_epochs": args.lora_epochs,
-            "lora_nsamples": _lora_nsamples,
-            "lora_lr": args.lora_lr,
-            "lora_loss": args.lora_loss,
-            "lora_kl_weight": args.lora_kl_weight,
-            "lora_kl_temperature": args.lora_kl_temperature,
-            "lora_adc_off_control": args.lora_adc_off_control,
-        }
-        if args.lora_load_path:
-            _saved_metadata = load_adc_lora(model, args.lora_load_path)
-            _metadata_mismatches = {
-                name: {"saved": _saved_metadata.get(name), "requested": value}
-                for name, value in _lora_identity.items()
-                if _saved_metadata.get(name) != value
-            }
-            if _metadata_mismatches:
-                raise ValueError(
-                    f"LoRA adapter {args.lora_load_path} was trained with different "
-                    f"settings: {_metadata_mismatches}"
-                )
-            if _saved_metadata.get("fq_reload_path") != args.fq_reload_path:
-                logger.warning(
-                    "LoRA adapter was trained on transforms %s; this run uses %s",
-                    _saved_metadata.get("fq_reload_path"),
-                    args.fq_reload_path,
-                )
-            model.eval()
-        else:
-            model = calibrate_adc_lora(
-                model,
-                dataloader=calibration_loader,
-                device=device,
-                nsamples=_lora_nsamples,
-                cali_bsz=args.fq_cali_bsz,
-                epochs=args.lora_epochs,
-                lora_lr=args.lora_lr,
-                lora_loss=args.lora_loss,
-                teacher_name_or_path=args.model_name if args.lora_loss == "ce_kl" else None,
-                kl_weight=args.lora_kl_weight,
-                kl_temperature=args.lora_kl_temperature,
-                microbatch_size=args.lora_microbatch_size,
-                gradient_accumulation_steps=args.lora_gradient_accumulation_steps,
-            )
-            if args.lora_save_path:
-                save_adc_lora(
-                    model,
-                    args.lora_save_path,
-                    metadata={
-                        **_lora_identity,
-                        "fq_reload_path": args.fq_reload_path,
-                        "seed": args.seed,
-                        "timestamp": datetime.now().isoformat(),
-                    },
-                )
+        model = calibrate_adc_lora(
+            model,
+            dataloader=calibration_loader,
+            device=device,
+            nsamples=_lora_nsamples,
+            cali_bsz=args.fq_cali_bsz,
+            epochs=args.lora_epochs,
+            lora_lr=args.lora_lr,
+            lora_loss=args.lora_loss,
+            teacher_name_or_path=args.model_name if args.lora_loss == "ce_kl" else None,
+            kl_weight=args.lora_kl_weight,
+            kl_temperature=args.lora_kl_temperature,
+            microbatch_size=args.lora_microbatch_size,
+            gradient_accumulation_steps=args.lora_gradient_accumulation_steps,
+        )
         if use_wandb:
             wandb.log({
                 "lora_rank": args.lora_rank,
@@ -4077,26 +3961,6 @@ def main():
             if isinstance(module, TiledLinearADC):
                 module.set_bypass_adc(False)
         logger.info("ADC re-enabled for full evaluation.")
-        logger.info("=" * 80)
-
-    # Converse of STEP 2.5 for the matched no-ADC control: deploy the
-    # ADC-off-trained adapter on the converter-enabled path.
-    adc_on_lora_metrics = {}
-    if args.run_adc_on_eval:
-        logger.info("=" * 80)
-        logger.info("STEP 2.5: CROSS-DEPLOYMENT -- ADC-off-trained model WITH ADC")
-        logger.info("=" * 80)
-        set_adc_bypass(model, False)
-        adc_on_lora_metrics = evaluate_perplexity_datasets(
-            model, tokenizer, device, args, "ADC-on eval",
-        )
-        for _xd_ds, _xd_m in adc_on_lora_metrics.items():
-            logger.info(
-                f"WITH ADC -> {_xd_ds.upper()} Perplexity: {_xd_m['perplexity']:.4f}  "
-                f"(Loss: {_xd_m['avg_loss']:.4f})"
-            )
-        set_adc_bypass(model, True)
-        logger.info("ADC bypass restored for the final evaluation.")
         logger.info("=" * 80)
 
     if args.adc_off_eval_only:
@@ -4347,18 +4211,9 @@ def main():
                     for ds, metrics in pre_lora_eval_metrics.items()
                 },
                 **{
-                    f"ppl_adc_on_prelora_{ds}": float(metrics["perplexity"])
-                    for ds, metrics in pre_lora_adc_on_metrics.items()
-                },
-                **{
                     f"ppl_noadc_lora_{ds}": float(metrics["perplexity"])
                     for ds, metrics in all_eval_metrics.items()
                 },
-                **{
-                    f"ppl_adc_on_lora_{ds}": float(metrics["perplexity"])
-                    for ds, metrics in adc_on_lora_metrics.items()
-                },
-                "downstream_noadc_prelora": pre_lora_downstream_metrics,
                 "downstream_noadc_lora": downstream_metrics,
             }
         else:
@@ -4470,9 +4325,6 @@ def main():
                 "lora_mode":              args.lora_mode,
                 "fq_bypass_adc_floor":    args.fq_bypass_adc_floor,
                 "lora_adc_off_control":   args.lora_adc_off_control,
-                "run_adc_on_eval":        args.run_adc_on_eval,
-                "lora_save_path":         args.lora_save_path,
-                "lora_load_path":         args.lora_load_path,
             },
             "results": _record_results,
         }
