@@ -20,6 +20,25 @@ the ADC arm (`run_multi_arch_transfer.sh`).
 Default lanes: GPU 0 runs `llama32_1b tinyllama_11b`, GPU 1 runs
 `smollm2_17b`. Override them with `GPU0_MODELS` / `GPU1_MODELS`.
 
+## Backbone
+
+Step 1 must reproduce the model's "FlatQuant, no ADC" row of Table 2, and the
+rows were built in two different ways:
+
+- `BACKBONE=flatquant` (default) calibrates FlatQuant from scratch without the
+  floor. This is how the Llama row was produced, by
+  `run_int_only_baseline_1b.sh` on `multi-model-paper-comparison`.
+- `BACKBONE=adcquant` reloads the final ADC-Quant transforms of the transfer
+  run and bypasses the ADC, exactly as `run_int4_adc_off` produced the
+  SmolLM2/TinyLlama rows (`<key>_int4_ptq_adc_off`). The transforms default to
+  `transfer_results/checkpoints/<key>/adc_transfer/flat_quant_transforms.pt`;
+  override them with `TRANSFORMS_SMOLLM2_17B` / `TRANSFORMS_TINYLLAMA_11B`.
+
+```bash
+BACKBONE=adcquant GPU0_MODELS="tinyllama_11b" GPU1_MODELS="smollm2_17b" \
+  bash ADC/llama/run_matched_lora_control.sh
+```
+
 ## dtype
 
 Run each model in the dtype of the ADC arm it is compared with. The Llama
@@ -71,9 +90,10 @@ python3 ADC/llama/summarize_matched_lora_control.py \
 
 Under `ADC/llama/matched_control_results/`:
 
-- `results/<key>_flatquant_noadc_lora.json` with `ppl_noadc_prelora_*`
-  (FlatQuant) and `ppl_noadc_lora_*` (FlatQuant + residual)
-- `checkpoints/<key>/flat_quant_transforms.pt`, the recalibrated transforms
+- `results/<key>_<backbone>_noadc_lora.json` with `ppl_noadc_prelora_*`
+  (backbone, ADC off) and `ppl_noadc_lora_*` (backbone + residual)
+- `checkpoints/<key>/flat_quant_transforms.pt`, the recalibrated FlatQuant
+  transforms (`flatquant` only)
 - `logs/`, and `summary.md`
 
 ## Notes

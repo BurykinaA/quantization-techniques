@@ -2,9 +2,10 @@
 # Matched no-ADC control for the post-ADC LoRA residual (Stage 3).
 #
 # Per model, one run:
-#   1. FlatQuant calibrated from scratch without the ADC floor/clamp
-#      (--fq_bypass_adc_floor; Stage A of the transfer protocol, no Stage B)
-#   2. perplexity before LoRA, ADC bypassed
+#   1. the backbone of the model's "FlatQuant, no ADC" row (BACKBONE): FlatQuant
+#      calibrated from scratch without the ADC floor/clamp, or the transfer
+#      run's ADC-Quant transforms reloaded
+#   2. perplexity before LoRA, ADC bypassed (reproduces that row)
 #   3. the transfer-protocol residual (rank 4, all seven projections, CE+KL)
 #      trained with the ADC bypassed (--lora_adc_off_control)
 #   4. perplexity after LoRA, ADC bypassed
@@ -26,6 +27,13 @@ FORCE_FQ_RETRAIN="${FORCE_FQ_RETRAIN:-0}"
 # Table 2 ran in float16 (the runner default), the transfer runs (SmolLM2,
 # TinyLlama) in bfloat16.
 TORCH_DTYPE="${TORCH_DTYPE:-bfloat16}"
+# Backbone under the no-ADC adapter; pick the one that produced the model's
+# "FlatQuant, no ADC" row in Table 2:
+#   flatquant  FlatQuant recalibrated without the floor (the Llama row)
+#   adcquant   the transfer run's final ADC-Quant transforms with the ADC
+#              bypassed, i.e. <key>_int4_ptq_adc_off (the SmolLM2/TinyLlama rows)
+BACKBONE="${BACKBONE:-flatquant}"
+TRANSFER_CHECKPOINT_ROOT="${TRANSFER_CHECKPOINT_ROOT:-${SCRIPT_DIR}/transfer_results/checkpoints}"
 # Stage A dominates the run time (about 8 h for SmolLM2 per
 # MULTI_ARCH_TRANSFER.md), so SmolLM2 gets a GPU of its own.
 GPU0_MODELS="${GPU0_MODELS-llama32_1b tinyllama_11b}"
@@ -137,8 +145,11 @@ run_model() {
   local model_id micro accum
   model_id="$(model_id_for "${key}")"
   read -r micro accum <<< "$(lora_microbatch_for "${key}")"
-  local run_name="${key}_flatquant_noadc_lora${RUN_SUFFIX}"
+  local run_name="${key}_${BACKBONE}_noadc_lora${RUN_SUFFIX}"
   local output_dir="${OUTPUT_ROOT}/checkpoints/${key}"
+  if [[ "${BACKBONE}" == "adcquant" ]]; then
+    output_dir="${output_dir}_adcquant"
+  fi
   local transforms="${output_dir}/flat_quant_transforms.pt"
   local progress="${output_dir}/flat_quant_stage_a_progress.pt"
 
@@ -171,13 +182,40 @@ run_model() {
     mode_args=(--max_eval_windows 8)
   fi
 
-  # Reuse finished transforms, resume an interrupted Stage A, or start fresh.
-  local -a fq_args=(--fq_bypass_adc_floor --fq_stage_b_epochs 0)
-  if [[ "${FORCE_FQ_RETRAIN}" != "1" && -f "${transforms}" ]]; then
+  local -a fq_args
+  if [[ "${BACKBONE}" == "adcquant" ]]; then
+    local override_name
+    override_name="TRANSFORMS_$(printf '%s' "${key}" | tr '[:lower:]' '[:upper:]')"
+    local transfer_transforms="${!override_name:-}"
+    if [[ -z "${transfer_transforms}" ]]; then
+      transfer_transforms="${TRANSFER_CHECKPOINT_ROOT}/${key}/adc_transfer/flat_quant_transforms.pt"
+    fi
+    if [[ "${DRY_RUN}" != "1" && ! -f "${transfer_transforms}" ]]; then
+      log "FAIL  ${run_name}: ${transfer_transforms} not found (set ${override_name})"
+      return 1
+    fi
+    # Same arguments as run_int4_adc_off in run_multi_arch_transfer.sh; the
+    # Stage A/B settings are recorded only, the reloaded transforms are final.
+    fq_args=(
+      --fq_stage_b_epochs 10
+      --fq_stage_b_prop_alpha 0.5
+      --fq_stage_b_diag_attn
+      --fq_reload_path "${transfer_transforms}"
+      --fq_skip_stage_b_on_reload
+    )
+  # flatquant: reuse finished transforms, resume an interrupted Stage A, or
+  # start fresh.
+  elif [[ "${FORCE_FQ_RETRAIN}" != "1" && -f "${transforms}" ]]; then
     log "reusing FlatQuant transforms: ${transforms}"
-    fq_args+=(--fq_reload_path "${transforms}" --fq_skip_stage_b_on_reload)
+    fq_args=(
+      --fq_bypass_adc_floor --fq_stage_b_epochs 0
+      --fq_reload_path "${transforms}" --fq_skip_stage_b_on_reload
+    )
   else
-    fq_args+=(--fq_save_transforms --fq_layer_checkpoint_path "${progress}")
+    fq_args=(
+      --fq_bypass_adc_floor --fq_stage_b_epochs 0
+      --fq_save_transforms --fq_layer_checkpoint_path "${progress}"
+    )
     if [[ "${FORCE_FQ_RETRAIN}" != "1" && -f "${progress}" ]]; then
       log "resuming FlatQuant Stage A from ${progress}"
       fq_args+=(--fq_resume_layer_checkpoint)
@@ -255,10 +293,14 @@ for lane_models in "${GPU0_MODELS}" "${GPU1_MODELS}"; do
   fi
 done
 (( ACTIVE_LANES > 0 )) || die "both GPU0_MODELS and GPU1_MODELS are empty"
+case "${BACKBONE}" in
+  flatquant|adcquant) ;;
+  *) die "BACKBONE must be flatquant or adcquant, got '${BACKBONE}'" ;;
+esac
 
 mkdir -p "${RESULTS_DIR}" "${LOG_ROOT}"
 
-log "Mode: TORCH_DTYPE=${TORCH_DTYPE} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN}"
+log "Mode: BACKBONE=${BACKBONE} TORCH_DTYPE=${TORCH_DTYPE} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED} FORCE_FQ_RETRAIN=${FORCE_FQ_RETRAIN}"
 log "GPU 0: ${GPU0_MODELS:-<idle>}"
 log "GPU 1: ${GPU1_MODELS:-<idle>}"
 log "Outputs: ${OUTPUT_ROOT}"
