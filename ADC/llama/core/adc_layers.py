@@ -264,6 +264,9 @@ class QATLinearADC(nn.Linear):
         
         # When True, skip ADC quantization (floor/clamp) in forward pass.
         self.bypass_adc = False
+        # When True, dequantize non-saturated ADC codes at the bin centre,
+        # (q + 0.5) * delta, instead of the lower bin edge q * delta.
+        self.adc_midpoint = False
         # When True, skip ALL quantization (plain F.linear).
         self.bypass_all = False
         # PACT-style learned activation clip threshold (set from FlatQuantLinear
@@ -373,6 +376,11 @@ class QATLinearADC(nn.Linear):
                     y_int = y_int * noise
             y_adc_codes = floor_ste(y_int / self.delta)
             y_adc_codes = torch.clamp(y_adc_codes, self.na, self.pa)
+            if self.adc_midpoint:
+                # Floor leaves a one-sided error of about delta/2 per
+                # conversion; saturated edge codes keep their edge value.
+                inside = (y_adc_codes > self.na) & (y_adc_codes < self.pa)
+                y_adc_codes = y_adc_codes + 0.5 * inside.to(y_adc_codes.dtype)
             adc_output = y_adc_codes * self.delta
 
         # Kurtosis loss for W-reshape (Paper Equation 6 & 7)
@@ -475,6 +483,11 @@ class TiledLinearADC(nn.Module):
         """Enable/disable ADC bypass for all tiles."""
         for tile in self.tiles:
             tile.bypass_adc = bypass
+
+    def set_adc_midpoint(self, enabled: bool):
+        """Enable/disable midpoint dequantization of ADC codes for all tiles."""
+        for tile in self.tiles:
+            tile.adc_midpoint = enabled
 
     def set_mult_noise_std(self, std: float):
         """Set std of the multiplicative Gaussian noise (before ADC) for all tiles."""

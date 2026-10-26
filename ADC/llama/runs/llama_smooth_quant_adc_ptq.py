@@ -2425,6 +2425,9 @@ def main():
                         choices=["symmetric", "asymmetric"],
                         help="Activation quantization mode")
     parser.add_argument("--mvm_limit", type=int, default=256)
+    parser.add_argument("--adc_midpoint", action="store_true",
+                        help="Dequantize non-saturated ADC codes at the bin centre, "
+                             "(q + 0.5) * delta, instead of q * delta")
     parser.add_argument("--adc_mult_noise_std", type=float, default=0.0,
                         help="Std of multiplicative Gaussian noise injected before the ADC: "
                              "y = (x_int * w_int) * N(1, std^2). 0.0 disables it.")
@@ -2583,6 +2586,14 @@ def main():
             )
     if args.fq_bypass_adc_floor and args.preprocess_method != "flat_quant":
         parser.error("--fq_bypass_adc_floor requires --preprocess_method flat_quant")
+    if args.adc_midpoint:
+        if args.adc_off_eval_only or args.lora_adc_off_control:
+            parser.error("--adc_midpoint needs the converter enabled")
+        if args.lora_rank > 0 and args.lora_mode != "residual":
+            parser.error(
+                "--adc_midpoint requires --lora_mode residual; the pre-ADC "
+                "variant applies its own floor"
+            )
     if args.fq_test_layers:
         if args.preprocess_method != "flat_quant":
             parser.error("--fq_test_layers requires --preprocess_method flat_quant")
@@ -3587,6 +3598,15 @@ def main():
                 module.set_quantizer_mode('fixed')
     logger.info("Quantizers set to 'fixed' mode after calibration")
 
+    if args.adc_midpoint:
+        for module in model.modules():
+            if isinstance(module, TiledLinearADC):
+                module.set_adc_midpoint(True)
+        logger.info(
+            "ADC midpoint reconstruction: non-saturated codes dequantized as "
+            "(q + 0.5) * delta"
+        )
+
     if args.stage_eval and stage_eval_enc is not None:
         logger.info("Stage eval D: bypassing ADC while keeping W4A4 quantization...")
         for _, module in model.named_modules():
@@ -4325,6 +4345,7 @@ def main():
                 "lora_mode":              args.lora_mode,
                 "fq_bypass_adc_floor":    args.fq_bypass_adc_floor,
                 "lora_adc_off_control":   args.lora_adc_off_control,
+                "adc_midpoint":           args.adc_midpoint,
             },
             "results": _record_results,
         }
