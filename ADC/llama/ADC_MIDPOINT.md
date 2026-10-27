@@ -55,3 +55,8 @@ python3 ADC/llama/summarize_adc_midpoint.py \
   the transfer record rather than 26.66. The floor/midpoint comparison itself
   is unaffected.
 - Each run is a single seed (42).
+- `MODE=stage3` for Llama in float16 runs out of memory on an 80 GB A100 at
+  the default LoRA microbatch 4. Use the same effective batch as the other
+  models: `LORA_MICROBATCH_SIZE=2 LORA_GRADIENT_ACCUMULATION_STEPS=2`. Each
+  loader batch of 4 is split into two microbatches whose gradients are
+  accumulated, so the samples per optimizer step are unchanged.

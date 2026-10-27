@@ -26,6 +26,10 @@ DRY_RUN="${DRY_RUN:-0}"
 SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
 # The transfer runs (and their transforms) are bfloat16.
 TORCH_DTYPE="${TORCH_DTYPE:-bfloat16}"
+# Optional override of the per-model LoRA microbatch; set both, and keep
+# their product at the protocol's effective batch of 4.
+LORA_MICROBATCH_SIZE="${LORA_MICROBATCH_SIZE:-}"
+LORA_GRADIENT_ACCUMULATION_STEPS="${LORA_GRADIENT_ACCUMULATION_STEPS:-}"
 GPU0_MODELS="${GPU0_MODELS-llama32_1b tinyllama_11b}"
 GPU1_MODELS="${GPU1_MODELS-smollm2_17b}"
 TRANSFER_CHECKPOINT_ROOT="${TRANSFER_CHECKPOINT_ROOT:-${SCRIPT_DIR}/transfer_results/checkpoints}"
@@ -221,6 +225,8 @@ run_model() {
 
   local micro accum lora_nsamples=1024 lora_epochs=5
   read -r micro accum <<< "$(lora_microbatch_for "${key}")"
+  micro="${LORA_MICROBATCH_SIZE:-${micro}}"
+  accum="${LORA_GRADIENT_ACCUMULATION_STEPS:-${accum}}"
   local -a mode_args=(--pre_lora_ppl_threshold 500)
   if [[ "${SMOKE}" == "1" ]]; then
     micro=1
@@ -264,6 +270,13 @@ case "${MODE}" in
   eval|stage3) ;;
   *) die "MODE must be eval or stage3, got '${MODE}'" ;;
 esac
+
+if [[ -n "${LORA_MICROBATCH_SIZE}${LORA_GRADIENT_ACCUMULATION_STEPS}" ]]; then
+  [[ "${LORA_MICROBATCH_SIZE}" =~ ^[1-9][0-9]*$ && "${LORA_GRADIENT_ACCUMULATION_STEPS}" =~ ^[1-9][0-9]*$ ]] \
+    || die "set both LORA_MICROBATCH_SIZE and LORA_GRADIENT_ACCUMULATION_STEPS to positive integers"
+  (( LORA_MICROBATCH_SIZE * LORA_GRADIENT_ACCUMULATION_STEPS == 4 )) \
+    || die "LORA_MICROBATCH_SIZE x LORA_GRADIENT_ACCUMULATION_STEPS must equal the effective batch 4"
+fi
 
 ACTIVE_LANES=0
 for lane_models in "${GPU0_MODELS}" "${GPU1_MODELS}"; do
