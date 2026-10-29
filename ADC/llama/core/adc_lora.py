@@ -198,7 +198,9 @@ def apply_adc_lora(
     layer_indices: set | None = None,  # None = all layers
 ) -> nn.Module:
     """
-    Replace .linear (TiledLinearADC) inside target FlatQuantLinear modules.
+    Wrap the TiledLinearADC of every target projection: the .linear of a
+    FlatQuantLinear, or the projection itself when the model has no FlatQuant
+    wrappers (--preprocess_method none / smooth_quant).
 
     target_modules: projection name suffixes, e.g. ["down_proj", "o_proj"]
     layer_indices:  which transformer layer indices to apply LoRA to (None = all)
@@ -207,13 +209,18 @@ def apply_adc_lora(
     from .flat_quant import FlatQuantLinear
 
     count = 0
-    for name, module in model.named_modules():
-        attr = name.rsplit(".", 1)[-1] if "." in name else name
+    for name, module in list(model.named_modules()):
+        parent_name, _, attr = name.rpartition(".")
         if attr not in target_modules:
             continue
-        if not isinstance(module, FlatQuantLinear):
+        if isinstance(module, FlatQuantLinear):
+            parent, child = module, "linear"
+        elif isinstance(module, TiledLinearADC):
+            parent, child = model.get_submodule(parent_name), attr
+        else:
             continue
-        if not isinstance(module.linear, TiledLinearADC):
+        tiled_layer = getattr(parent, child)
+        if not isinstance(tiled_layer, TiledLinearADC):
             continue
 
         # Layer index filtering
@@ -223,17 +230,20 @@ def apply_adc_lora(
                 continue
 
         if mode == "residual":
-            module.linear = ResidualLoRATiledLinearADC(
-                module.linear, r=rank, alpha=lora_alpha)
+            wrapper = ResidualLoRATiledLinearADC(tiled_layer, r=rank, alpha=lora_alpha)
         elif mode == "pre_adc":
-            module.linear = PreADCLoRATiledLinearADC(
-                module.linear, r=rank, alpha=lora_alpha)
+            wrapper = PreADCLoRATiledLinearADC(tiled_layer, r=rank, alpha=lora_alpha)
         else:
             raise ValueError(f"Unknown lora mode: {mode!r}. Choose 'residual' or 'pre_adc'.")
+        setattr(parent, child, wrapper)
         count += 1
 
     layer_info = (f"layers={sorted(layer_indices)[:3]}..."
                   if layer_indices is not None else "all layers")
+    if count == 0:
+        raise ValueError(
+            f"No TiledLinearADC found for LoRA targets {target_modules} in {layer_info}"
+        )
     print(f"[ADC-LoRA] Applied {mode} LoRA (r={rank}, α={lora_alpha}) "
           f"to {count} modules in {layer_info}: {target_modules}")
     return model
