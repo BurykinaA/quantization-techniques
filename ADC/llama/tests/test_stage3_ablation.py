@@ -1,11 +1,14 @@
 """Regression tests for Stage 3 on backbones without FlatQuant transforms."""
 
+import sys
+
 import pytest
 import torch
 import torch.nn as nn
 
 from ADC.llama.core.adc_layers import TiledLinearADC
 from ADC.llama.core.adc_lora import ResidualLoRATiledLinearADC, apply_adc_lora
+from ADC.llama.runs import llama_smooth_quant_adc_ptq as runner
 
 
 def _tiled_copy(linear: nn.Linear) -> TiledLinearADC:
@@ -55,3 +58,45 @@ def test_apply_adc_lora_rejects_a_model_without_tiled_projections() -> None:
 
     with pytest.raises(ValueError, match="No TiledLinearADC"):
         apply_adc_lora(model, target_modules=["down_proj"], rank=2, lora_alpha=4.0)
+
+
+def test_bfloat16_residual_starts_from_the_rounded_float32_initialization() -> None:
+    tiled = _tiled_copy(nn.Linear(12, 8, bias=False))
+    torch.manual_seed(13)
+    float32 = ResidualLoRATiledLinearADC(tiled, r=2, alpha=4.0)
+    torch.manual_seed(13)
+    bfloat16 = ResidualLoRATiledLinearADC(tiled, r=2, alpha=4.0, dtype=torch.bfloat16)
+
+    assert bfloat16.lora_A.weight.dtype == torch.bfloat16
+    assert bfloat16.lora_B.weight.dtype == torch.bfloat16
+    torch.testing.assert_close(
+        bfloat16.lora_A.weight, float32.lora_A.weight.to(torch.bfloat16)
+    )
+    inputs = torch.randn(3, 12)
+    with torch.no_grad():
+        torch.testing.assert_close(bfloat16(inputs), tiled(inputs))
+
+
+def test_apply_adc_lora_keeps_pre_adc_lora_in_float32() -> None:
+    model = nn.ModuleDict({"down_proj": _tiled_copy(nn.Linear(12, 8, bias=False))})
+
+    with pytest.raises(ValueError, match="requires mode='residual'"):
+        apply_adc_lora(
+            model,
+            target_modules=["down_proj"],
+            rank=2,
+            lora_alpha=4.0,
+            mode="pre_adc",
+            lora_dtype=torch.bfloat16,
+        )
+
+
+def test_runner_rejects_a_bfloat16_pre_adc_lora(monkeypatch, capsys) -> None:
+    argv = ["--lora_rank", "4", "--lora_mode", "pre_adc", "--lora_dtype", "bfloat16"]
+    monkeypatch.setattr(sys, "argv", ["llama_smooth_quant_adc_ptq", *argv])
+
+    with pytest.raises(SystemExit) as excinfo:
+        runner.main()
+
+    assert excinfo.value.code == 2
+    assert "requires --lora_mode residual" in capsys.readouterr().err

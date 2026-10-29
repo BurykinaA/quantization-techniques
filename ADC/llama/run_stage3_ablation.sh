@@ -35,6 +35,18 @@ GPU1_MODELS="${GPU1_MODELS-llama32_1b tinyllama_11b}"
 LORA_MICROBATCH_SIZE="${LORA_MICROBATCH_SIZE:-2}"
 LORA_GRADIENT_ACCUMULATION_STEPS="${LORA_GRADIENT_ACCUMULATION_STEPS:-2}"
 ABLATION_ROOT="${ABLATION_ROOT:-${SCRIPT_DIR}/stage3_ablation_results}"
+# Overrides the per-model dtype for every run, and LORA_DTYPE the dtype of
+# the Stage 3 residual (weights, arithmetic and optimizer state). Such runs
+# get their own directory, so they never reuse records made in the Table 2
+# setting.
+TORCH_DTYPE="${TORCH_DTYPE:-}"
+LORA_DTYPE="${LORA_DTYPE:-float32}"
+if [[ -n "${TORCH_DTYPE}" ]]; then
+  ABLATION_ROOT="${ABLATION_ROOT}_${TORCH_DTYPE}"
+fi
+if [[ "${LORA_DTYPE}" != "float32" ]]; then
+  ABLATION_ROOT="${ABLATION_ROOT}_lora_${LORA_DTYPE}"
+fi
 
 OUTPUT_ROOT="${ABLATION_ROOT}"
 RUN_SUFFIX=""
@@ -75,8 +87,12 @@ model_id_for() {
 }
 
 # dtype of the model's Table 2 runs: the Llama series is float16, the
-# transfer runs are bfloat16.
+# transfer runs are bfloat16. TORCH_DTYPE overrides it.
 dtype_for() {
+  if [[ -n "${TORCH_DTYPE}" ]]; then
+    echo "${TORCH_DTYPE}"
+    return 0
+  fi
   case "$1" in
     llama32_1b) echo "float16" ;;
     *) echo "bfloat16" ;;
@@ -236,6 +252,7 @@ STAGE3_ARGS=(
   --lora_kl_temperature 2.0
   --lora_microbatch_size "${lora_micro}"
   --lora_gradient_accumulation_steps "${lora_accum}"
+  --lora_dtype "${LORA_DTYPE}"
   --eval_pre_lora
 )
 
@@ -365,6 +382,10 @@ done
   || die "LORA_MICROBATCH_SIZE and LORA_GRADIENT_ACCUMULATION_STEPS must be positive integers"
 (( LORA_MICROBATCH_SIZE * LORA_GRADIENT_ACCUMULATION_STEPS == 4 )) \
   || die "LORA_MICROBATCH_SIZE x LORA_GRADIENT_ACCUMULATION_STEPS must equal the effective batch 4"
+[[ -z "${TORCH_DTYPE}" || "${TORCH_DTYPE}" =~ ^(float16|bfloat16|float32)$ ]] \
+  || die "TORCH_DTYPE must be float16, bfloat16 or float32"
+[[ "${LORA_DTYPE}" =~ ^(float32|bfloat16|float16)$ ]] \
+  || die "LORA_DTYPE must be float32, bfloat16 or float16"
 
 LANES=()
 if arm_enabled stage1 || { arm_enabled no_calib && [[ -n "${GPU0_MODELS// /}" ]]; }; then
@@ -377,7 +398,7 @@ fi
 
 mkdir -p "${RESULTS_DIR}" "${LOG_ROOT}"
 
-log "ARMS=${ARMS} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED}"
+log "ARMS=${ARMS} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED} TORCH_DTYPE=${TORCH_DTYPE:-per model} LORA_DTYPE=${LORA_DTYPE}"
 log "no_calib models: GPU 0: ${GPU0_MODELS:-<none>}; GPU 1: ${GPU1_MODELS:-<none>}"
 log "LoRA microbatch ${lora_micro} x ${lora_accum} accumulation"
 log "Outputs: ${OUTPUT_ROOT}"

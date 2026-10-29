@@ -2359,6 +2359,10 @@ def main():
                         help="Physical LoRA batch on GPU (default: calibration loader batch)")
     parser.add_argument("--lora_gradient_accumulation_steps", type=int, default=1,
                         help="LoRA gradient accumulation steps")
+    parser.add_argument("--lora_dtype", type=str, default="float32",
+                        choices=["float32", "bfloat16", "float16"],
+                        help="dtype of the residual LoRA weights, arithmetic and "
+                             "optimizer state (residual mode only)")
     parser.add_argument("--eval_pre_lora", action="store_true",
                         help="Run WITH-ADC perplexity eval before applying LoRA "
                              "(measures perplexity before vs after LoRA in one run)")
@@ -2586,6 +2590,8 @@ def main():
             )
     if args.fq_bypass_adc_floor and args.preprocess_method != "flat_quant":
         parser.error("--fq_bypass_adc_floor requires --preprocess_method flat_quant")
+    if args.lora_dtype != "float32" and args.lora_mode != "residual":
+        parser.error("--lora_dtype other than float32 requires --lora_mode residual")
     if args.adc_midpoint:
         if args.adc_off_eval_only or args.lora_adc_off_control:
             parser.error("--adc_midpoint needs the converter enabled")
@@ -3769,6 +3775,7 @@ def main():
             lora_alpha=args.lora_alpha,
             mode=args.lora_mode,
             layer_indices=_lora_layer_indices,
+            lora_dtype=getattr(torch, args.lora_dtype),
         )
         _lora_nsamples = args.lora_nsamples if args.lora_nsamples is not None else args.fq_nsamples
         model = calibrate_adc_lora(
@@ -4121,6 +4128,7 @@ def main():
             "lora_targets": list(getattr(args, 'lora_target_modules', None) or []),
             "lora_mode":    getattr(args, 'lora_mode', None),
             "lora_loss":    getattr(args, 'lora_loss', None),
+            "lora_dtype":   getattr(args, 'lora_dtype', None),
             "display_name": getattr(args, 'wandb_run_name', None) or os.path.basename(args.output_dir),
             "results": {
                 "ppl_bypass_wikitext2": float(_all_diag_metrics["wikitext2"]["perplexity"])

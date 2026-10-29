@@ -35,13 +35,16 @@ class ResidualLoRATiledLinearADC(nn.Module):
         y = TiledLinearADC(x)  +  scaling * lora_B(lora_A(x.float()))
 
     lora_B initialized to zero → initial output identical to frozen model.
+    dtype sets the adapter weights and arithmetic (fp32 by default); the
+    initialization is drawn in fp32 and then cast, so it does not depend on it.
     """
 
     def __init__(self,
                  tiled_layer: TiledLinearADC,
                  r: int = 4,
                  alpha: float = 8.0,
-                 dropout: float = 0.0):
+                 dropout: float = 0.0,
+                 dtype: torch.dtype = torch.float32):
         super().__init__()
         self.tiled_layer = tiled_layer
         self.scaling = alpha / r
@@ -53,6 +56,8 @@ class ResidualLoRATiledLinearADC(nn.Module):
                                 bias=False, dtype=torch.float32, device=dev)
         nn.init.kaiming_uniform_(self.lora_A.weight, a=math.sqrt(5))
         nn.init.zeros_(self.lora_B.weight)
+        self.lora_A.to(dtype)
+        self.lora_B.to(dtype)
         self.dropout = nn.Dropout(p=dropout) if dropout > 0 else nn.Identity()
 
         for p in self.tiled_layer.parameters():
@@ -60,7 +65,8 @@ class ResidualLoRATiledLinearADC(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y_base = self.tiled_layer(x)
-        y_lora = self.lora_B(self.lora_A(self.dropout(x.float()))) * self.scaling
+        x_lora = self.dropout(x.to(self.lora_A.weight.dtype))
+        y_lora = self.lora_B(self.lora_A(x_lora)) * self.scaling
         return y_base + y_lora.to(y_base.dtype)
 
     def set_quantizer_mode(self, mode): self.tiled_layer.set_quantizer_mode(mode)
@@ -196,6 +202,7 @@ def apply_adc_lora(
     lora_alpha: float = 8.0,
     mode: str = "residual",        # "residual" or "pre_adc"
     layer_indices: set | None = None,  # None = all layers
+    lora_dtype: torch.dtype = torch.float32,
 ) -> nn.Module:
     """
     Wrap the TiledLinearADC of every target projection: the .linear of a
@@ -205,8 +212,12 @@ def apply_adc_lora(
     target_modules: projection name suffixes, e.g. ["down_proj", "o_proj"]
     layer_indices:  which transformer layer indices to apply LoRA to (None = all)
     mode:           "residual" (post-ADC, default) or "pre_adc" (inside quantization)
+    lora_dtype:     adapter weights and arithmetic; residual mode only
     """
     from .flat_quant import FlatQuantLinear
+
+    if lora_dtype != torch.float32 and mode != "residual":
+        raise ValueError(f"lora_dtype={lora_dtype} requires mode='residual'")
 
     count = 0
     for name, module in list(model.named_modules()):
@@ -230,7 +241,8 @@ def apply_adc_lora(
                 continue
 
         if mode == "residual":
-            wrapper = ResidualLoRATiledLinearADC(tiled_layer, r=rank, alpha=lora_alpha)
+            wrapper = ResidualLoRATiledLinearADC(
+                tiled_layer, r=rank, alpha=lora_alpha, dtype=lora_dtype)
         elif mode == "pre_adc":
             wrapper = PreADCLoRATiledLinearADC(tiled_layer, r=rank, alpha=lora_alpha)
         else:
@@ -244,7 +256,8 @@ def apply_adc_lora(
         raise ValueError(
             f"No TiledLinearADC found for LoRA targets {target_modules} in {layer_info}"
         )
-    print(f"[ADC-LoRA] Applied {mode} LoRA (r={rank}, α={lora_alpha}) "
+    print(f"[ADC-LoRA] Applied {mode} LoRA (r={rank}, α={lora_alpha}, "
+          f"dtype={str(lora_dtype).removeprefix('torch.')}) "
           f"to {count} modules in {layer_info}: {target_modules}")
     return model
 

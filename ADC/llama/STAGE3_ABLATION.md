@@ -59,7 +59,21 @@ Lanes:
   then `llama32_1b_stage12_stage3`. The latter waits for the Stage 1
   transforms from GPU 0 and is skipped if Stage 1 fails.
 
-Outputs go to `ADC/llama/stage3_ablation_results/`. Finished runs are skipped
+Outputs go to `ADC/llama/stage3_ablation_results/`. `TORCH_DTYPE` runs every
+model in one dtype instead of its Table 2 dtype and writes to
+`stage3_ablation_results_<dtype>/`, for example Llama in bfloat16 like the
+other two models:
+
+```bash
+TORCH_DTYPE=bfloat16 ARMS="no_calib" GPU0_MODELS="llama32_1b" GPU1_MODELS="" \
+  bash ADC/llama/run_stage3_ablation.sh
+```
+
+`LORA_DTYPE` (default `float32`) sets the dtype of the Stage 3 residual: its
+weights, arithmetic and AdamW state. Other values append `_lora_<dtype>` to
+the directory. The converter itself is always simulated in float32.
+
+Finished runs are skipped
 (`SKIP_COMPLETED=1`), and the script exits non-zero when any run failed.
 `stage1` and `stage12` can run later on their own; `stage12` needs a finished
 `stage1`.
