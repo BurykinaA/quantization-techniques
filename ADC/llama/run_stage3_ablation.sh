@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# Stage 3 without Stages 1-2 on Llama-3.2-1B: the same post-ADC residual
-# (rank 4, all seven projections, CE + 0.5 KL, 5 epochs) trained on backbones
-# with less pre-ADC calibration, to separate the two calibration stages from
-# the residual itself. Arms (ARMS):
-#   no_calib  no learned transforms (--preprocess_method none), then Stage 3
-#   stage1    Stage 1 only (clean inputs, mu = 0): Stage A with the converter
-#             in the loss and no Stage B, evaluated, then Stage 3 on the
-#             reloaded transforms
-#   stage12   Stage 2 started from the same Stage 1 transforms, then Stage 3:
-#             the same-code counterpart of the Table 2 Stages 1-3 row
+# Stage 3 without Stages 1-2: the same post-ADC residual (rank 4, all seven
+# projections, CE + 0.5 KL, 5 epochs) trained on backbones with less pre-ADC
+# calibration, to separate the two calibration stages from the residual
+# itself. Arms (ARMS):
+#   no_calib  no learned transforms (--preprocess_method none), then Stage 3;
+#             every model in GPU0_MODELS / GPU1_MODELS
+#   stage1    Llama only: Stage 1 alone (clean inputs, mu = 0), Stage A with
+#             the converter in the loss and no Stage B, evaluated, then Stage 3
+#             on the reloaded transforms
+#   stage12   Llama only: Stage 2 started from the same Stage 1 transforms,
+#             then Stage 3; the same-code counterpart of the Table 2 row
 #
-# Stage 1-3 settings follow run_overnight_int4_v8.sh (r4_all_ce_kl), which
-# produced the Table 2 row 26.66 -> 14.03, except the LoRA microbatch: 2 x 2
-# accumulation instead of 4 x 1, which no longer fits in 80 GB with the
-# converter on.
+# Settings follow the runs behind the Table 2 Stages 1-3 rows:
+# run_overnight_int4_v8.sh (r4_all_ce_kl, float16) for Llama and
+# run_multi_arch_transfer.sh (bfloat16) for SmolLM2 and TinyLlama. The LoRA
+# microbatch is 2 x 2 accumulation for every model; Llama's 4 x 1 no longer
+# fits in 80 GB with the converter on.
 #
 # See ADC/llama/STAGE3_ABLATION.md.
 set -euo pipefail
@@ -26,14 +28,13 @@ ARMS="${ARMS:-no_calib stage1 stage12}"
 SMOKE="${SMOKE:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 SKIP_COMPLETED="${SKIP_COMPLETED:-1}"
-# The Table 2 Llama series is float16.
-TORCH_DTYPE="${TORCH_DTYPE:-float16}"
+# Models of the no_calib arm per GPU. GPU 0 also runs stage1 first, GPU 1
+# runs stage12 last.
+GPU0_MODELS="${GPU0_MODELS-smollm2_17b}"
+GPU1_MODELS="${GPU1_MODELS-llama32_1b tinyllama_11b}"
 LORA_MICROBATCH_SIZE="${LORA_MICROBATCH_SIZE:-2}"
 LORA_GRADIENT_ACCUMULATION_STEPS="${LORA_GRADIENT_ACCUMULATION_STEPS:-2}"
 ABLATION_ROOT="${ABLATION_ROOT:-${SCRIPT_DIR}/stage3_ablation_results}"
-
-MODEL_KEY="llama32_1b"
-MODEL_ID="meta-llama/Llama-3.2-1B"
 
 OUTPUT_ROOT="${ABLATION_ROOT}"
 RUN_SUFFIX=""
@@ -44,7 +45,7 @@ fi
 RESULTS_DIR="${OUTPUT_ROOT}/results"
 LOG_ROOT="${OUTPUT_ROOT}/logs"
 
-STAGE1_RUN="${MODEL_KEY}_stage1${RUN_SUFFIX}"
+STAGE1_RUN="llama32_1b_stage1${RUN_SUFFIX}"
 STAGE1_TRANSFORMS="${OUTPUT_ROOT}/checkpoints/${STAGE1_RUN}/flat_quant_transforms.pt"
 # Lane 0 signals lane 1, which runs stage12 from the Stage 1 transforms.
 STAGE1_READY="${OUTPUT_ROOT}/.stage1_ready"
@@ -62,6 +63,24 @@ log() {
 die() {
   log "ERROR: $*" >&2
   exit 1
+}
+
+model_id_for() {
+  case "$1" in
+    llama32_1b) echo "meta-llama/Llama-3.2-1B" ;;
+    smollm2_17b) echo "HuggingFaceTB/SmolLM2-1.7B" ;;
+    tinyllama_11b) echo "TinyLlama/TinyLlama_v1.1" ;;
+    *) return 1 ;;
+  esac
+}
+
+# dtype of the model's Table 2 runs: the Llama series is float16, the
+# transfer runs are bfloat16.
+dtype_for() {
+  case "$1" in
+    llama32_1b) echo "float16" ;;
+    *) echo "bfloat16" ;;
+  esac
 }
 
 arm_enabled() {
@@ -159,9 +178,7 @@ if [[ "${SMOKE}" == "1" ]]; then
 fi
 
 COMMON_ARGS=(
-  --model_name "${MODEL_ID}"
   --no_date_suffix
-  --torch_dtype "${TORCH_DTYPE}"
   --seed 42
   --bx 4
   --bw 4
@@ -223,8 +240,8 @@ STAGE3_ARGS=(
 )
 
 run_runner() {
-  local run_name="$1"
-  shift
+  local key="$1" run_name="$2"
+  shift 2
   if is_completed "${run_name}"; then
     log "skip completed ${run_name}"
     return 0
@@ -233,6 +250,8 @@ run_runner() {
   mkdir -p "${output_dir}"
   run_step "${run_name}" "${LOG_ROOT}/${run_name}.log" \
     "${PYTHON_BIN}" -m ADC.llama.runs.llama_smooth_quant_adc_ptq \
+    --model_name "$(model_id_for "${key}")" \
+    --torch_dtype "$(dtype_for "${key}")" \
     --output_dir "${output_dir}" \
     --wandb_run_name "${run_name}" \
     --results_json_path "${RESULTS_DIR}/${run_name}.json" \
@@ -240,31 +259,31 @@ run_runner() {
     "$@"
 }
 
-# ---------------------------------------------------------------------------
-# Lanes
+run_no_calib() {
+  local key="$1"
+  run_runner "${key}" "${key}_no_calib_stage3${RUN_SUFFIX}" \
+    --preprocess_method none \
+    --fq_nsamples "${fq_nsamples}" \
+    --fq_cali_bsz "${fq_cali_bsz}" \
+    "${STAGE3_ARGS[@]}"
+}
 
-# GPU 0: Stage 1, then Stage 3 on the reloaded Stage 1 transforms.
-lane_stage1() {
-  if ! run_runner "${STAGE1_RUN}" \
+run_stage1() {
+  if ! run_runner llama32_1b "${STAGE1_RUN}" \
       "${STAGE1_ARGS[@]}" \
       --fq_stage_b_epochs 0 \
       --fq_save_transforms \
       --lora_rank 0; then
     touch "${STAGE1_FAILED}"
-    log "lane finished"
     return 1
   fi
   touch "${STAGE1_READY}"
-
-  local failed=0
-  run_runner "${MODEL_KEY}_stage1_stage3${RUN_SUFFIX}" \
+  run_runner llama32_1b "llama32_1b_stage1_stage3${RUN_SUFFIX}" \
     "${STAGE1_ARGS[@]}" \
     --fq_stage_b_epochs 0 \
     --fq_reload_path "${STAGE1_TRANSFORMS}" \
     --fq_skip_stage_b_on_reload \
-    "${STAGE3_ARGS[@]}" || failed=1
-  log "lane finished"
-  return "${failed}"
+    "${STAGE3_ARGS[@]}"
 }
 
 wait_for_stage1() {
@@ -286,27 +305,44 @@ wait_for_stage1() {
   done
 }
 
-# GPU 1: Stage 3 without calibration, then Stages 1-2 + Stage 3.
-lane_other() {
-  local failed=0
+run_stage12() {
+  wait_for_stage1 || return 1
+  run_runner llama32_1b "llama32_1b_stage12_stage3${RUN_SUFFIX}" \
+    "${STAGE1_ARGS[@]}" \
+    "${STAGE2_ARGS[@]}" \
+    --fq_start_stage_b_from "${STAGE1_TRANSFORMS}" \
+    --fq_save_transforms \
+    "${STAGE3_ARGS[@]}"
+}
+
+# ---------------------------------------------------------------------------
+# Lanes
+
+# GPU 0: stage1, then the no_calib arm for GPU0_MODELS.
+lane_gpu0() {
+  local key failed=0
+  if arm_enabled stage1; then
+    run_stage1 || failed=1
+  fi
   if arm_enabled no_calib; then
-    run_runner "${MODEL_KEY}_no_calib_stage3${RUN_SUFFIX}" \
-      --preprocess_method none \
-      --fq_nsamples "${fq_nsamples}" \
-      --fq_cali_bsz "${fq_cali_bsz}" \
-      "${STAGE3_ARGS[@]}" || failed=1
+    for key in ${GPU0_MODELS}; do
+      run_no_calib "${key}" || failed=1
+    done
+  fi
+  log "lane finished"
+  return "${failed}"
+}
+
+# GPU 1: the no_calib arm for GPU1_MODELS, then stage12.
+lane_gpu1() {
+  local key failed=0
+  if arm_enabled no_calib; then
+    for key in ${GPU1_MODELS}; do
+      run_no_calib "${key}" || failed=1
+    done
   fi
   if arm_enabled stage12; then
-    if wait_for_stage1; then
-      run_runner "${MODEL_KEY}_stage12_stage3${RUN_SUFFIX}" \
-        "${STAGE1_ARGS[@]}" \
-        "${STAGE2_ARGS[@]}" \
-        --fq_start_stage_b_from "${STAGE1_TRANSFORMS}" \
-        --fq_save_transforms \
-        "${STAGE3_ARGS[@]}" || failed=1
-    else
-      failed=1
-    fi
+    run_stage12 || failed=1
   fi
   log "lane finished"
   return "${failed}"
@@ -321,6 +357,9 @@ for arm in ${ARMS}; do
     *) die "unknown arm '${arm}'; use no_calib, stage1, stage12" ;;
   esac
 done
+for key in ${GPU0_MODELS} ${GPU1_MODELS}; do
+  model_id_for "${key}" >/dev/null || die "unknown model key '${key}'"
+done
 
 [[ "${LORA_MICROBATCH_SIZE}" =~ ^[1-9][0-9]*$ && "${LORA_GRADIENT_ACCUMULATION_STEPS}" =~ ^[1-9][0-9]*$ ]] \
   || die "LORA_MICROBATCH_SIZE and LORA_GRADIENT_ACCUMULATION_STEPS must be positive integers"
@@ -328,14 +367,18 @@ done
   || die "LORA_MICROBATCH_SIZE x LORA_GRADIENT_ACCUMULATION_STEPS must equal the effective batch 4"
 
 LANES=()
-arm_enabled stage1 && LANES+=("0:lane_stage1")
-if arm_enabled no_calib || arm_enabled stage12; then
-  LANES+=("1:lane_other")
+if arm_enabled stage1 || { arm_enabled no_calib && [[ -n "${GPU0_MODELS// /}" ]]; }; then
+  LANES+=("0:lane_gpu0")
 fi
+if arm_enabled stage12 || { arm_enabled no_calib && [[ -n "${GPU1_MODELS// /}" ]]; }; then
+  LANES+=("1:lane_gpu1")
+fi
+(( ${#LANES[@]} > 0 )) || die "nothing to run: no_calib needs GPU0_MODELS or GPU1_MODELS"
 
 mkdir -p "${RESULTS_DIR}" "${LOG_ROOT}"
 
-log "ARMS=${ARMS} TORCH_DTYPE=${TORCH_DTYPE} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED}"
+log "ARMS=${ARMS} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED}"
+log "no_calib models: GPU 0: ${GPU0_MODELS:-<none>}; GPU 1: ${GPU1_MODELS:-<none>}"
 log "LoRA microbatch ${lora_micro} x ${lora_accum} accumulation"
 log "Outputs: ${OUTPUT_ROOT}"
 

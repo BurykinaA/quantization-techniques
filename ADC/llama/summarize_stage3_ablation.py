@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Stage 3 on Llama-3.2-1B backbones with less pre-ADC calibration.
+"""Stage 3 on backbones with less pre-ADC calibration.
 
 Reads the per-run JSON files written by run_stage3_ablation.sh and reports,
-per corpus, converter-on perplexity before and after the same Stage 3
-residual for: no calibration, Stage 1 only, Stages 1-2 rerun with the same
-code, and the Table 2 Stages 1-3 row. Unfinished runs are shown as "—".
+per corpus and model, converter-on perplexity before and after the same
+Stage 3 residual: without calibration, next to the model's Table 2 Stages
+1-3 row. For Llama it adds Stage 1 only and Stages 1-2 rerun with the
+current code when those runs exist. Unfinished runs are shown as "—".
 """
 
 import argparse
@@ -12,11 +13,20 @@ import json
 from pathlib import Path
 
 
+MODELS = [
+    ("llama32_1b", "Llama-3.2-1B"),
+    ("smollm2_17b", "SmolLM2-1.7B"),
+    ("tinyllama_11b", "TinyLlama-1.1B"),
+]
 DATASETS = (("wikitext2", "WikiText-2"), ("c4", "C4"))
-# Table 2, Llama-3.2-1B: run_overnight_int4_v8.sh r4_all_ce_kl (LoRA microbatch
-# 4 x 1) and the "ADC, no calib." row.
-TABLE2_STAGES12 = {"wikitext2": (26.66, 14.03), "c4": (45.62, 23.20)}
-TABLE2_NO_CALIB = {"wikitext2": 2402.19, "c4": 2614.93}
+# Table 2 Stages 1-2 -> Stages 1-3 rows, (before, after) Stage 3. Llama:
+# run_overnight_int4_v8.sh r4_all_ce_kl; SmolLM2 and TinyLlama:
+# <key>_adc_transfer.
+TABLE2_STAGES12 = {
+    "llama32_1b": {"wikitext2": (26.66, 14.03), "c4": (45.62, 23.20)},
+    "smollm2_17b": {"wikitext2": (14.70, 10.73), "c4": (23.37, 17.64)},
+    "tinyllama_11b": {"wikitext2": (11.62, 10.90), "c4": (20.23, 18.69)},
+}
 # Relative difference above which two evaluations of the same backbone are
 # reported as inconsistent.
 CONSISTENCY_TOLERANCE = 0.005
@@ -55,14 +65,12 @@ def fmt_change(before: float | None, after: float | None) -> str:
 
 
 def build_report(runs: dict[str, dict], suffix: str) -> str:
-    key = "llama32_1b"
-    no_calib = runs.get(f"{key}_no_calib_stage3{suffix}", {})
-    stage1 = runs.get(f"{key}_stage1{suffix}", {})
-    stage1_stage3 = runs.get(f"{key}_stage1_stage3{suffix}", {})
-    stage12_stage3 = runs.get(f"{key}_stage12_stage3{suffix}", {})
+    stage1 = runs.get(f"llama32_1b_stage1{suffix}")
+    stage1_stage3 = runs.get(f"llama32_1b_stage1_stage3{suffix}")
+    stage12_stage3 = runs.get(f"llama32_1b_stage12_stage3{suffix}")
 
     lines = [
-        "# Stage 3 without Stages 1–2, Llama-3.2-1B",
+        "# Stage 3 without Stages 1–2",
         "",
         "Perplexity with the converter on, lower is better. Every row trains the same "
         "Stage 3 residual (rank 4, all seven projections, CE + 0.5 KL, 5 epochs).",
@@ -77,60 +85,44 @@ def build_report(runs: dict[str, dict], suffix: str) -> str:
         status = "OK" if relative <= CONSISTENCY_TOLERANCE else "MISMATCH"
         checks.append(f"- {status}: {label}: {first:.4f} vs {second:.4f}")
 
-    def compare(label: str, measured: float | None, reference: float) -> None:
-        if measured is None:
-            return
-        checks.append(
-            f"- reference: {label}: {measured:.2f} vs {reference:.2f} "
-            f"({fmt_change(reference, measured)})"
-        )
-
     for ds, title in DATASETS:
-        rows = [
-            ("a) No calibration", no_calib.get(f"ppl_adc_prelora_{ds}"),
-             no_calib.get(f"ppl_adc_{ds}")),
-            ("b) Stage 1 only", stage1.get(f"ppl_adc_{ds}"),
-             stage1_stage3.get(f"ppl_adc_{ds}")),
-            ("c) Stages 1–2, same code", stage12_stage3.get(f"ppl_adc_prelora_{ds}"),
-             stage12_stage3.get(f"ppl_adc_{ds}")),
-            ("c) Stages 1–2, Table 2", *TABLE2_STAGES12[ds]),
-        ]
+        rows = []
+        for key, label in MODELS:
+            no_calib = runs.get(f"{key}_no_calib_stage3{suffix}", {})
+            rows.append((label, "a) No calibration",
+                         no_calib.get(f"ppl_adc_prelora_{ds}"), no_calib.get(f"ppl_adc_{ds}")))
+            if key == "llama32_1b" and (stage1 is not None or stage1_stage3 is not None):
+                rows.append((label, "b) Stage 1 only",
+                             (stage1 or {}).get(f"ppl_adc_{ds}"),
+                             (stage1_stage3 or {}).get(f"ppl_adc_{ds}")))
+            if key == "llama32_1b" and stage12_stage3 is not None:
+                rows.append((label, "c) Stages 1–2, current code",
+                             stage12_stage3.get(f"ppl_adc_prelora_{ds}"),
+                             stage12_stage3.get(f"ppl_adc_{ds}")))
+            rows.append((label, "c) Stages 1–2, Table 2", *TABLE2_STAGES12[key][ds]))
+
         lines += [
             f"## {title}",
             "",
-            "| Backbone | Before Stage 3 | After Stage 3 | Change |",
-            "| :-- | --: | --: | --: |",
+            "| Model | Backbone | Before Stage 3 | After Stage 3 | Change |",
+            "| :-- | :-- | --: | --: | --: |",
             *(
-                f"| {label} | {fmt(before)} | {fmt(after)} | {fmt_change(before, after)} |"
-                for label, before, after in rows
+                f"| {label} | {backbone} | {fmt(before)} | {fmt(after)} | "
+                f"{fmt_change(before, after)} |"
+                for label, backbone, before, after in rows
             ),
             "",
         ]
         check(
-            f"{title}: Stage 1 eval vs Stage 1 reloaded before Stage 3",
-            stage1.get(f"ppl_adc_{ds}"),
-            stage1_stage3.get(f"ppl_adc_prelora_{ds}"),
-        )
-        compare(
-            f"{title}: no calibration before Stage 3 vs Table 2 'ADC, no calib.'",
-            no_calib.get(f"ppl_adc_prelora_{ds}"),
-            TABLE2_NO_CALIB[ds],
-        )
-        compare(
-            f"{title}: Stages 1–2 same code vs Table 2, before Stage 3",
-            stage12_stage3.get(f"ppl_adc_prelora_{ds}"),
-            TABLE2_STAGES12[ds][0],
-        )
-        compare(
-            f"{title}: Stages 1–2 same code vs Table 2, after Stage 3",
-            stage12_stage3.get(f"ppl_adc_{ds}"),
-            TABLE2_STAGES12[ds][1],
+            f"Llama-3.2-1B {title}: Stage 1 eval vs Stage 1 reloaded before Stage 3",
+            (stage1 or {}).get(f"ppl_adc_{ds}"),
+            (stage1_stage3 or {}).get(f"ppl_adc_prelora_{ds}"),
         )
 
     lines += [
         "## Checks",
         "",
-        *(checks or ["- no measurements yet"]),
+        *(checks or ["- no overlapping measurements yet"]),
         "",
     ]
     return "\n".join(lines)
