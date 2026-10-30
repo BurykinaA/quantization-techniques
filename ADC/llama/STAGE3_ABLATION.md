@@ -73,10 +73,42 @@ TORCH_DTYPE=bfloat16 ARMS="no_calib" GPU0_MODELS="llama32_1b" GPU1_MODELS="" \
 weights, arithmetic and AdamW state. Other values append `_lora_<dtype>` to
 the directory. The converter itself is always simulated in float32.
 
-Finished runs are skipped
-(`SKIP_COMPLETED=1`), and the script exits non-zero when any run failed.
-`stage1` and `stage12` can run later on their own; `stage12` needs a finished
-`stage1`.
+`LM_EVAL=1` adds the paper's eight downstream tasks (lm-evaluation-harness,
+MMLU 5-shot, the rest 0-shot, batch size `LM_EVAL_BATCH_SIZE`, default 1 as
+in the transfer runs) to every run. With Stage 3 they are measured after the
+residual only: the uncalibrated backbones are collapsed before it, and the
+paper reports no downstream numbers for collapsed rows. The summary gets a
+downstream table next to the Table 2 rows.
+
+`LORA_TEACHER_DEVICE` (default `cuda`) places the CE+KL teacher. The Table 2
+runs kept it on the CPU, where a 1B teacher costs tens of seconds per
+microbatch and dominates the Stage 3 time; on the GPU it needs about 5 GB
+(fp16 weights plus one microbatch of logits) next to the student and runs
+before the student's forward, so its activations are gone at the memory
+peak. Use `cpu` if Stage 3 runs out of memory.
+
+Every Stage 3 run saves its adapters to
+`checkpoints/<run_name>/lora_weights.pt` (about 11 MB for Llama). The runner
+reloads them with `--lora_reload_path <file>` in place of training, so an
+evaluation can be repeated or extended without the hours of Stage 3; the
+model, LoRA flags and `--lora_dtype` must match the saved run.
+
+Finished runs are skipped (`SKIP_COMPLETED=1`), and the script exits non-zero
+when any run failed. `SKIP_COMPLETED=0` reruns them: the results record with
+the same run name is replaced and the previous log is kept with a timestamp
+suffix. `stage1` and `stage12` can run later on their own; `stage12` needs a
+finished `stage1`.
+
+Downstream for the finished `no_calib` arm (the records only had perplexity
+and the adapters were not saved), Llama in bfloat16 with a bfloat16 residual
+and the other two in their Table 2 setting, in two tmux windows:
+
+```bash
+LM_EVAL=1 SKIP_COMPLETED=0 ARMS="no_calib" TORCH_DTYPE=bfloat16 LORA_DTYPE=bfloat16 \
+  GPU0_MODELS="" GPU1_MODELS="llama32_1b" bash ADC/llama/run_stage3_ablation.sh
+LM_EVAL=1 SKIP_COMPLETED=0 ARMS="no_calib" \
+  GPU0_MODELS="smollm2_17b tinyllama_11b" GPU1_MODELS="" bash ADC/llama/run_stage3_ablation.sh
+```
 
 Rebuild the summary at any time:
 

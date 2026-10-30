@@ -5,7 +5,9 @@ Reads the per-run JSON files written by run_stage3_ablation.sh and reports,
 per corpus and model, converter-on perplexity before and after the same
 Stage 3 residual: without calibration, next to the model's Table 2 Stages
 1-3 row. For Llama it adds Stage 1 only and Stages 1-2 rerun with the
-current code when those runs exist. Unfinished runs are shown as "—".
+current code when those runs exist. Runs made with LM_EVAL=1 also get the
+eight-task downstream table next to the Table 2 rows. Unfinished runs are
+shown as "—".
 """
 
 import argparse
@@ -26,6 +28,35 @@ TABLE2_STAGES12 = {
     "llama32_1b": {"wikitext2": (26.66, 14.03), "c4": (45.62, 23.20)},
     "smollm2_17b": {"wikitext2": (14.70, 10.73), "c4": (23.37, 17.64)},
     "tinyllama_11b": {"wikitext2": (11.62, 10.90), "c4": (20.23, 18.69)},
+}
+TASKS = [
+    ("hellaswag", "HSwag"),
+    ("mmlu", "MMLU"),
+    ("winogrande", "WinGr"),
+    ("arc_easy", "ARC-E"),
+    ("arc_challenge", "ARC-C"),
+    ("piqa", "PIQA"),
+    ("openbookqa", "OBQA"),
+    ("boolq", "BoolQ"),
+]
+# Table 2 downstream accuracy (%) in TASKS order, from
+# adc_aware_llm_aaai2027.tex.
+TABLE2_DOWNSTREAM = {
+    "llama32_1b": {
+        "BF16 reference": (64.19, 32.15, 63.06, 61.83, 36.77, 74.70, 37.40, 63.91),
+        "Stages 1–2, Table 2": (40.03, 24.41, 53.43, 42.63, 26.02, 61.70, 27.00, 60.67),
+        "Stages 1–3, Table 2": (49.96, 25.72, 53.67, 54.63, 29.27, 68.06, 34.60, 60.67),
+    },
+    "smollm2_17b": {
+        "BF16 reference": (71.44, 49.99, 65.75, 73.36, 47.27, 77.42, 43.80, 72.39),
+        "Stages 1–2, Table 2": (53.24, 26.86, 54.70, 58.75, 32.25, 68.23, 36.20, 55.23),
+        "Stages 1–3, Table 2": (60.12, 31.23, 60.06, 64.31, 38.57, 71.27, 38.60, 66.09),
+    },
+    "tinyllama_11b": {
+        "BF16 reference": (55.57, 26.16, 49.17, 42.59, 30.12, 70.46, 23.80, 54.77),
+        "Stages 1–2, Table 2": (46.74, 25.48, 52.25, 39.56, 26.45, 62.89, 25.60, 55.54),
+        "Stages 1–3, Table 2": (46.68, 25.42, 51.07, 41.50, 25.43, 63.55, 27.80, 56.15),
+    },
 }
 # Relative difference above which two evaluations of the same backbone are
 # reported as inconsistent.
@@ -62,6 +93,63 @@ def fmt_change(before: float | None, after: float | None) -> str:
     if before is None or after is None:
         return "—"
     return f"{100.0 * (after - before) / before:+.1f}%"
+
+
+def downstream_values(results: dict | None, key: str) -> list[float | None] | None:
+    """Per-task accuracy (%) of results[key] in TASKS order, None when absent."""
+    downstream = (results or {}).get(key) or {}
+    values = [(downstream.get(task) or {}).get("accuracy_pct") for task, _ in TASKS]
+    return None if all(value is None for value in values) else values
+
+
+def fmt_mean(values: list[float | None]) -> str:
+    if any(value is None for value in values):
+        return "—"
+    return f"{sum(values) / len(values):.2f}"
+
+
+def build_downstream(runs: dict[str, dict], suffix: str) -> list[str]:
+    stage1 = runs.get(f"llama32_1b_stage1{suffix}")
+    stage1_stage3 = runs.get(f"llama32_1b_stage1_stage3{suffix}")
+    stage12_stage3 = runs.get(f"llama32_1b_stage12_stage3{suffix}")
+
+    rows = []
+    for key, label in MODELS:
+        # A run without LoRA stores its final downstream under downstream_adc_ptq.
+        measured = [
+            ("a) No calibration + Stage 3",
+             downstream_values(runs.get(f"{key}_no_calib_stage3{suffix}"), "downstream_adc_lora")),
+        ]
+        if key == "llama32_1b":
+            measured += [
+                ("b) Stage 1 only", downstream_values(stage1, "downstream_adc_ptq")),
+                ("b) Stage 1 + Stage 3", downstream_values(stage1_stage3, "downstream_adc_lora")),
+                ("c) Stages 1–2 + Stage 3, current code",
+                 downstream_values(stage12_stage3, "downstream_adc_lora")),
+            ]
+        measured = [(backbone, values) for backbone, values in measured if values is not None]
+        if not measured:
+            continue
+        rows += [(label, backbone, values) for backbone, values in measured]
+        rows += [(label, backbone, list(values)) for backbone, values in TABLE2_DOWNSTREAM[key].items()]
+
+    if not rows:
+        return ["## Downstream", "", "- no downstream results yet (run with LM_EVAL=1)", ""]
+    return [
+        "## Downstream",
+        "",
+        "Accuracy (%), lm-evaluation-harness, MMLU 5-shot and the rest 0-shot, "
+        "measured after Stage 3 only.",
+        "",
+        "| Model | Backbone | " + " | ".join(short for _, short in TASKS) + " | Avg |",
+        "| :-- | :-- | " + " | ".join("--:" for _ in TASKS) + " | --: |",
+        *(
+            f"| {label} | {backbone} | " + " | ".join(fmt(value) for value in values)
+            + f" | {fmt_mean(values)} |"
+            for label, backbone, values in rows
+        ),
+        "",
+    ]
 
 
 def build_report(runs: dict[str, dict], suffix: str) -> str:
@@ -119,6 +207,7 @@ def build_report(runs: dict[str, dict], suffix: str) -> str:
             (stage1_stage3 or {}).get(f"ppl_adc_prelora_{ds}"),
         )
 
+    lines += build_downstream(runs, suffix)
     lines += [
         "## Checks",
         "",

@@ -17,6 +17,10 @@
 # microbatch is 2 x 2 accumulation for every model; Llama's 4 x 1 no longer
 # fits in 80 GB with the converter on.
 #
+# LM_EVAL=1 adds the paper's eight downstream tasks, evaluated after Stage 3
+# only. Every Stage 3 run saves its adapters as
+# checkpoints/<run>/lora_weights.pt for later eval-only reruns.
+#
 # See ADC/llama/STAGE3_ABLATION.md.
 set -euo pipefail
 
@@ -47,6 +51,14 @@ fi
 if [[ "${LORA_DTYPE}" != "float32" ]]; then
   ABLATION_ROOT="${ABLATION_ROOT}_lora_${LORA_DTYPE}"
 fi
+# LM_EVAL=1 adds lm-evaluation-harness on the paper's eight tasks (MMLU
+# 5-shot, the rest 0-shot) after Stage 3; the uncalibrated backbones are
+# collapsed before it. The batch size follows the transfer runs.
+LM_EVAL="${LM_EVAL:-0}"
+LM_EVAL_BATCH_SIZE="${LM_EVAL_BATCH_SIZE:-1}"
+# The CE+KL teacher of Stage 3. On the GPU it needs about 5 GB next to the
+# student; fall back to cpu if Stage 3 runs out of memory.
+LORA_TEACHER_DEVICE="${LORA_TEACHER_DEVICE:-cuda}"
 
 OUTPUT_ROOT="${ABLATION_ROOT}"
 RUN_SUFFIX=""
@@ -142,6 +154,10 @@ run_step() {
 
   local started="${SECONDS}" status=0
   log "START ${label} (log: ${log_path})"
+  # A rerun (SKIP_COMPLETED=0) keeps the previous log.
+  if [[ -f "${log_path}" ]]; then
+    mv "${log_path}" "${log_path}.$(date '+%Y%m%d_%H%M%S')"
+  fi
   {
     printf 'Running:'
     printf ' %q' "$@"
@@ -193,6 +209,19 @@ if [[ "${SMOKE}" == "1" ]]; then
   smoke_args=(--max_eval_windows 8)
 fi
 
+lm_eval_args=()
+if [[ "${LM_EVAL}" == "1" ]]; then
+  lm_eval_args=(
+    --run_lm_eval
+    --lm_eval_tasks hellaswag mmlu winogrande arc_easy arc_challenge piqa openbookqa boolq
+    --lm_eval_batch_size "${LM_EVAL_BATCH_SIZE}"
+    --no_pre_lora_lm_eval
+  )
+  if [[ "${SMOKE}" == "1" ]]; then
+    lm_eval_args+=(--lm_eval_limit 4)
+  fi
+fi
+
 COMMON_ARGS=(
   --no_date_suffix
   --seed 42
@@ -216,6 +245,7 @@ COMMON_ARGS=(
   --disable_visualizations
   --disable_wandb
   ${smoke_args[@]+"${smoke_args[@]}"}
+  ${lm_eval_args[@]+"${lm_eval_args[@]}"}
 )
 
 # Stage 1: clean-input calibration with the converter in the loss, MLP
@@ -254,6 +284,8 @@ STAGE3_ARGS=(
   --lora_gradient_accumulation_steps "${lora_accum}"
   --lora_dtype "${LORA_DTYPE}"
   --eval_pre_lora
+  --save_lora_weights
+  --lora_teacher_device "${LORA_TEACHER_DEVICE}"
 )
 
 run_runner() {
@@ -386,6 +418,10 @@ done
   || die "TORCH_DTYPE must be float16, bfloat16 or float32"
 [[ "${LORA_DTYPE}" =~ ^(float32|bfloat16|float16)$ ]] \
   || die "LORA_DTYPE must be float32, bfloat16 or float16"
+[[ "${LM_EVAL}" =~ ^[01]$ ]] || die "LM_EVAL must be 0 or 1"
+[[ "${LM_EVAL_BATCH_SIZE}" =~ ^(auto|[1-9][0-9]*)$ ]] \
+  || die "LM_EVAL_BATCH_SIZE must be auto or a positive integer"
+[[ "${LORA_TEACHER_DEVICE}" =~ ^(cpu|cuda)$ ]] || die "LORA_TEACHER_DEVICE must be cpu or cuda"
 
 LANES=()
 if arm_enabled stage1 || { arm_enabled no_calib && [[ -n "${GPU0_MODELS// /}" ]]; }; then
@@ -401,6 +437,7 @@ mkdir -p "${RESULTS_DIR}" "${LOG_ROOT}"
 log "ARMS=${ARMS} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED} TORCH_DTYPE=${TORCH_DTYPE:-per model} LORA_DTYPE=${LORA_DTYPE}"
 log "no_calib models: GPU 0: ${GPU0_MODELS:-<none>}; GPU 1: ${GPU1_MODELS:-<none>}"
 log "LoRA microbatch ${lora_micro} x ${lora_accum} accumulation"
+log "LM_EVAL=${LM_EVAL} (batch size ${LM_EVAL_BATCH_SIZE}); Stage 3 teacher on ${LORA_TEACHER_DEVICE}"
 log "Outputs: ${OUTPUT_ROOT}"
 
 if [[ "${DRY_RUN}" != "1" ]] && command -v flock >/dev/null 2>&1; then
@@ -414,7 +451,8 @@ if [[ -z "${THREADS_PER_LANE:-}" ]]; then
   THREADS_PER_LANE=$(( cpu_count / ${#LANES[@]} ))
   (( THREADS_PER_LANE >= 1 )) || THREADS_PER_LANE=1
 fi
-# The CE+KL teacher runs on the CPU; split the cores between lanes.
+# With LORA_TEACHER_DEVICE=cpu the CE+KL teacher runs on these cores; split
+# them between lanes.
 log "CPU threads per lane: ${THREADS_PER_LANE}"
 
 any_failed=0

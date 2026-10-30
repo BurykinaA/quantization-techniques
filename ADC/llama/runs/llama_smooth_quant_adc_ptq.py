@@ -37,7 +37,12 @@ from ADC.llama.core.smooth_quant import (
     calibrate_smooth_scales,
     apply_smooth_quant,
 )
-from ADC.llama.core.adc_lora import apply_adc_lora, calibrate_adc_lora
+from ADC.llama.core.adc_lora import (
+    apply_adc_lora,
+    calibrate_adc_lora,
+    load_adc_lora,
+    save_adc_lora,
+)
 from ADC.llama.core.flat_quant import (
     apply_flatquant_to_model,
     calibrate_flat_quant,
@@ -2363,6 +2368,10 @@ def main():
                         choices=["float32", "bfloat16", "float16"],
                         help="dtype of the residual LoRA weights, arithmetic and "
                              "optimizer state (residual mode only)")
+    parser.add_argument("--lora_teacher_device", type=str, default="cpu",
+                        choices=["cpu", "cuda"],
+                        help="Where the CE+KL teacher runs; cuda needs its fp16 weights "
+                             "and one microbatch of logits on the GPU and is far faster")
     parser.add_argument("--eval_pre_lora", action="store_true",
                         help="Run WITH-ADC perplexity eval before applying LoRA "
                              "(measures perplexity before vs after LoRA in one run)")
@@ -2375,6 +2384,15 @@ def main():
                         help="Matched no-ADC control: bypass only the ADC floor/clamp (tiled W4A4 "
                              "quantization stays active) for the pre-LoRA evaluation, residual "
                              "LoRA training, and the final evaluation")
+    parser.add_argument("--save_lora_weights", action="store_true",
+                        help="Save the trained adapters to <output_dir>/lora_weights.pt "
+                             "(independent of --skip_model_save)")
+    parser.add_argument("--lora_reload_path", type=str, default=None,
+                        help="Load adapters saved with --save_lora_weights instead of training "
+                             "them; the model and LoRA settings must match the saved run")
+    parser.add_argument("--no_pre_lora_lm_eval", action="store_true",
+                        help="With --run_lm_eval and --eval_pre_lora, run the downstream tasks "
+                             "only after LoRA, not on the pre-LoRA model")
 
     parser.add_argument("--fq_save_transforms", action="store_true",
                         help="Save trained FlatQuant transforms to output_dir")
@@ -2588,6 +2606,8 @@ def main():
                 "--lora_adc_off_control cannot be combined with "
                 "--diagnostic_only_after_adc_calibration"
             )
+    if (args.save_lora_weights or args.lora_reload_path) and args.lora_rank <= 0:
+        parser.error("--save_lora_weights and --lora_reload_path require --lora_rank > 0")
     if args.fq_bypass_adc_floor and args.preprocess_method != "flat_quant":
         parser.error("--fq_bypass_adc_floor requires --preprocess_method flat_quant")
     if args.lora_dtype != "float32" and args.lora_mode != "residual":
@@ -3746,7 +3766,12 @@ def main():
                     f"downstream evaluation/LoRA: threshold="
                     f"{args.pre_lora_ppl_threshold}, measured={failed_quality}"
                 )
-        if args.run_lm_eval and not pre_lora_downstream_metrics:
+        if args.run_lm_eval and args.no_pre_lora_lm_eval:
+            logger.info(
+                "Skipping the downstream tasks on the pre-LoRA model "
+                "(--no_pre_lora_lm_eval)"
+            )
+        elif args.run_lm_eval and not pre_lora_downstream_metrics:
             pre_lora_downstream_metrics = run_lm_evaluation(
                 model,
                 tokenizer,
@@ -3778,21 +3803,56 @@ def main():
             lora_dtype=getattr(torch, args.lora_dtype),
         )
         _lora_nsamples = args.lora_nsamples if args.lora_nsamples is not None else args.fq_nsamples
-        model = calibrate_adc_lora(
-            model,
-            dataloader=calibration_loader,
-            device=device,
-            nsamples=_lora_nsamples,
-            cali_bsz=args.fq_cali_bsz,
-            epochs=args.lora_epochs,
-            lora_lr=args.lora_lr,
-            lora_loss=args.lora_loss,
-            teacher_name_or_path=args.model_name if args.lora_loss == "ce_kl" else None,
-            kl_weight=args.lora_kl_weight,
-            kl_temperature=args.lora_kl_temperature,
-            microbatch_size=args.lora_microbatch_size,
-            gradient_accumulation_steps=args.lora_gradient_accumulation_steps,
-        )
+        if args.lora_reload_path:
+            _lora_config = load_adc_lora(model, args.lora_reload_path)
+            for _field in ("model_name", "lora_alpha"):
+                _saved = _lora_config.get(_field)
+                if _saved is not None and _saved != getattr(args, _field):
+                    raise ValueError(
+                        f"--lora_reload_path was trained with {_field}={_saved!r}, "
+                        f"this run uses {getattr(args, _field)!r}"
+                    )
+            logger.info(
+                f"[LoRA] Loaded adapters from {args.lora_reload_path} "
+                f"(run {_lora_config.get('run_name')}, backbone "
+                f"{_lora_config.get('preprocess_method')}); skipping training"
+            )
+            model.eval()
+        else:
+            model = calibrate_adc_lora(
+                model,
+                dataloader=calibration_loader,
+                device=device,
+                nsamples=_lora_nsamples,
+                cali_bsz=args.fq_cali_bsz,
+                epochs=args.lora_epochs,
+                lora_lr=args.lora_lr,
+                lora_loss=args.lora_loss,
+                teacher_name_or_path=args.model_name if args.lora_loss == "ce_kl" else None,
+                kl_weight=args.lora_kl_weight,
+                kl_temperature=args.lora_kl_temperature,
+                microbatch_size=args.lora_microbatch_size,
+                gradient_accumulation_steps=args.lora_gradient_accumulation_steps,
+                teacher_device=device if args.lora_teacher_device == "cuda" else "cpu",
+            )
+        if args.save_lora_weights:
+            os.makedirs(args.output_dir, exist_ok=True)
+            _lora_path = os.path.join(args.output_dir, "lora_weights.pt")
+            _n_lora_tensors = save_adc_lora(model, _lora_path, {
+                "run_name":            getattr(args, "wandb_run_name", None),
+                "model_name":          args.model_name,
+                "torch_dtype":         args.torch_dtype,
+                "preprocess_method":   args.preprocess_method,
+                "fq_reload_path":      args.fq_reload_path,
+                "lora_mode":           args.lora_mode,
+                "lora_rank":           args.lora_rank,
+                "lora_alpha":          args.lora_alpha,
+                "lora_target_modules": list(args.lora_target_modules),
+                "lora_layer_indices":  (list(args.lora_layer_indices)
+                                        if args.lora_layer_indices else None),
+                "lora_dtype":          args.lora_dtype,
+            })
+            logger.info(f"[LoRA] Saved {_n_lora_tensors} adapter tensors to {_lora_path}")
         if use_wandb:
             wandb.log({
                 "lora_rank": args.lora_rank,
@@ -4354,6 +4414,10 @@ def main():
                 "fq_bypass_adc_floor":    args.fq_bypass_adc_floor,
                 "lora_adc_off_control":   args.lora_adc_off_control,
                 "adc_midpoint":           args.adc_midpoint,
+                "lora_reload_path":       args.lora_reload_path,
+                "save_lora_weights":      args.save_lora_weights,
+                "no_pre_lora_lm_eval":    args.no_pre_lora_lm_eval,
+                "lora_teacher_device":    args.lora_teacher_device,
             },
             "results": _record_results,
         }

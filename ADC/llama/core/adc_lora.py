@@ -280,12 +280,18 @@ def calibrate_adc_lora(
     kl_temperature: float = 2.0,
     microbatch_size: int | None = None,
     gradient_accumulation_steps: int = 1,
+    teacher_device: "str | torch.device" = "cpu",
+    teacher_model: nn.Module | None = None,
 ) -> nn.Module:
     """
     Fine-tune LoRA adapters.
 
     lora_loss="ce"     — standard LM cross-entropy
     lora_loss="ce_kl"  — CE + λ·KL(FP_teacher || student); requires teacher_name_or_path
+                         or a preloaded teacher_model
+    teacher_device     — where the teacher runs. On the CPU a 1B teacher costs tens of
+                         seconds per microbatch; on the GPU it needs its fp16 weights
+                         plus the logits of one microbatch.
     """
     # Freeze everything except LoRA adapters
     for n, p in model.named_parameters():
@@ -304,21 +310,25 @@ def calibrate_adc_lora(
 
     optimizer = torch.optim.AdamW(lora_params, lr=lora_lr)
 
-    # Load teacher for KL loss (on CPU to save GPU memory)
+    # Teacher for the KL loss
     teacher = None
+    teacher_device = torch.device(teacher_device)
     if lora_loss == "ce_kl":
-        if teacher_name_or_path is None:
+        if teacher_model is not None:
+            teacher = teacher_model
+        elif teacher_name_or_path is None:
             print("[ADC-LoRA] Warning: ce_kl requested but teacher_name_or_path=None → "
                   "falling back to ce")
             lora_loss = "ce"
         else:
             from transformers import AutoModelForCausalLM
-            print(f"[ADC-LoRA] Loading FP teacher on CPU: {teacher_name_or_path}")
+            print(f"[ADC-LoRA] Loading FP teacher on {teacher_device}: {teacher_name_or_path}")
             teacher = AutoModelForCausalLM.from_pretrained(
                 teacher_name_or_path,
                 torch_dtype=torch.float16,
-                device_map="cpu",
-            ).eval()
+            )
+        if teacher is not None:
+            teacher = teacher.to(teacher_device).eval()
             for p in teacher.parameters():
                 p.requires_grad_(False)
 
@@ -379,6 +389,23 @@ def calibrate_adc_lora(
                 if attention_mask is not None:
                     labels[attention_mask == 0] = -100
 
+                # The teacher runs first, so its activations are freed before
+                # the student's graph is built.
+                teacher_logits = None
+                if lora_loss == "ce_kl" and teacher is not None:
+                    with torch.no_grad():
+                        t_out = teacher(
+                            input_ids=batch_input_ids[start:end].to(teacher_device),
+                            attention_mask=(
+                                batch_attention_mask[start:end].to(teacher_device)
+                                if batch_attention_mask is not None
+                                else None
+                            ),
+                            use_cache=False,
+                        )
+                        teacher_logits = t_out.logits.to(device).float()
+                        del t_out
+
                 outputs = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -387,18 +414,7 @@ def calibrate_adc_lora(
                 )
                 ce_loss = outputs.loss
 
-                if lora_loss == "ce_kl" and teacher is not None:
-                    with torch.no_grad():
-                        t_out = teacher(
-                            input_ids=batch_input_ids[start:end],
-                            attention_mask=(
-                                batch_attention_mask[start:end]
-                                if batch_attention_mask is not None
-                                else None
-                            ),
-                            use_cache=False,
-                        )
-                        teacher_logits = t_out.logits.to(device).float()
+                if teacher_logits is not None:
                     student_logits = outputs.logits.float()
                     kl = F.kl_div(
                         F.log_softmax(student_logits / kl_temperature, dim=-1),
@@ -417,8 +433,9 @@ def calibrate_adc_lora(
                     optimizer.zero_grad(set_to_none=True)
 
                 del input_ids, attention_mask, labels, outputs, ce_loss, loss
-                if lora_loss == "ce_kl" and teacher is not None:
-                    del t_out, teacher_logits, student_logits, kl
+                if teacher_logits is not None:
+                    del student_logits, kl
+                del teacher_logits
 
         if microbatch_count % gradient_accumulation_steps != 0:
             optimizer.step()
@@ -435,3 +452,62 @@ def calibrate_adc_lora(
         model.config.use_cache = use_cache
     model.eval()
     return model
+
+
+# ============================================================
+#  Saving and reloading adapters
+# ============================================================
+
+def adc_lora_state_dict(model: nn.Module) -> dict[str, torch.Tensor]:
+    """The lora_A / lora_B tensors of every adapter, keyed as in model.state_dict()."""
+    return {
+        name: tensor.detach().cpu().clone()
+        for name, tensor in model.state_dict().items()
+        if ".lora_A." in name or ".lora_B." in name
+    }
+
+
+def save_adc_lora(model: nn.Module, path: str, config: dict) -> int:
+    """Save the adapters with the settings they were trained under.
+
+    Returns the number of saved tensors. The frozen backbone is not saved;
+    it is rebuilt by the same conversion and calibration on reload.
+    """
+    tensors = adc_lora_state_dict(model)
+    if not tensors:
+        raise ValueError("No ADC-LoRA adapters found in the model")
+    torch.save({"config": dict(config), "state_dict": tensors}, path)
+    return len(tensors)
+
+
+def load_adc_lora(model: nn.Module, path: str) -> dict:
+    """Load adapters saved by save_adc_lora into an identically wrapped model.
+
+    The model must already carry adapters of the same targets, rank, mode and
+    dtype; any difference raises. Returns the saved config.
+    """
+    payload = torch.load(path, map_location="cpu")
+    saved = payload["state_dict"]
+    expected = adc_lora_state_dict(model)
+    missing = sorted(set(expected) - set(saved))
+    unexpected = sorted(set(saved) - set(expected))
+    if missing or unexpected:
+        raise ValueError(
+            f"Adapter keys in {path} do not match the model: {len(missing)} missing, "
+            f"{len(unexpected)} unexpected, e.g. {(missing + unexpected)[:3]}"
+        )
+    for name, tensor in saved.items():
+        if tensor.shape != expected[name].shape:
+            raise ValueError(
+                f"{name}: saved shape {tuple(tensor.shape)} != model shape "
+                f"{tuple(expected[name].shape)}"
+            )
+        if tensor.dtype != expected[name].dtype:
+            raise ValueError(
+                f"{name}: saved dtype {tensor.dtype} != model dtype {expected[name].dtype}; "
+                "use the same --lora_dtype as the saved run"
+            )
+    # strict=False only tolerates the absent backbone; every adapter key was
+    # checked above.
+    model.load_state_dict(saved, strict=False)
+    return payload.get("config", {})
