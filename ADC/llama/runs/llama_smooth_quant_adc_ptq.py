@@ -29,7 +29,7 @@ from transformers import (
     AutoModelForCausalLM,
     set_seed,
 )
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from datetime import datetime
 
 from ADC.llama.core.adc_layers import TiledLinearADC, QATLinearADC
@@ -704,6 +704,23 @@ class ADCCalibrator:
 
         logger.info(f"Updated {updated_act} activation quantizers and {updated_w} weight quantizers")
         logger.info("NOTE: ADC delta values remain as hardware-defined constants")
+
+
+def build_lora_dataloader(dataset, batch_size: int, collate_fn, data_seed: "int | None"):
+    """Loader of the Stage 3 residual's calibration data.
+
+    Without a seed the residual trains on the first ``nsamples / cali_bsz``
+    batches of the pool in corpus order, the Table 2 protocol. With a seed
+    the pool is permuted once by a generator seeded with it, so another seed
+    trains on another subset in another order, while every epoch still sees
+    the same sequences. The global seed is not touched.
+    """
+    if data_seed is None:
+        return DataLoader(dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+    generator = torch.Generator().manual_seed(int(data_seed))
+    order = torch.randperm(len(dataset), generator=generator).tolist()
+    return DataLoader(Subset(dataset, order), batch_size=batch_size, shuffle=False,
+                      collate_fn=collate_fn)
 
 
 # =========================================================================
@@ -2372,6 +2389,10 @@ def main():
                         choices=["cpu", "cuda"],
                         help="Where the CE+KL teacher runs; cuda needs its fp16 weights "
                              "and one microbatch of logits on the GPU and is far faster")
+    parser.add_argument("--lora_data_seed", type=int, default=None,
+                        help="Permute the residual's calibration pool with this seed, so the "
+                             "training sequences and their order change with it; default: the "
+                             "first batches of the pool in corpus order, as in Table 2")
     parser.add_argument("--eval_pre_lora", action="store_true",
                         help="Run WITH-ADC perplexity eval before applying LoRA "
                              "(measures perplexity before vs after LoRA in one run)")
@@ -3573,6 +3594,18 @@ def main():
         shuffle=False,
         collate_fn=calibration_collator,
     )
+    # The Stage 3 residual trains on the same pool; --lora_data_seed permutes it.
+    lora_loader = build_lora_dataloader(
+        calibration_dataset,
+        batch_size=args.calibration_batch_size,
+        collate_fn=calibration_collator,
+        data_seed=args.lora_data_seed,
+    )
+    if args.lora_data_seed is not None:
+        logger.info(
+            "[LoRA] Residual data: %d-sample pool permuted with --lora_data_seed %d",
+            len(calibration_dataset), args.lora_data_seed,
+        )
 
     # =========================================================================
     # STEP 2: ADC Calibration
@@ -3821,7 +3854,7 @@ def main():
         else:
             model = calibrate_adc_lora(
                 model,
-                dataloader=calibration_loader,
+                dataloader=lora_loader,
                 device=device,
                 nsamples=_lora_nsamples,
                 cali_bsz=args.fq_cali_bsz,
@@ -3851,6 +3884,8 @@ def main():
                 "lora_layer_indices":  (list(args.lora_layer_indices)
                                         if args.lora_layer_indices else None),
                 "lora_dtype":          args.lora_dtype,
+                "seed":                args.seed,
+                "lora_data_seed":      args.lora_data_seed,
             })
             logger.info(f"[LoRA] Saved {_n_lora_tensors} adapter tensors to {_lora_path}")
         if use_wandb:
@@ -4418,6 +4453,7 @@ def main():
                 "save_lora_weights":      args.save_lora_weights,
                 "no_pre_lora_lm_eval":    args.no_pre_lora_lm_eval,
                 "lora_teacher_device":    args.lora_teacher_device,
+                "lora_data_seed":         args.lora_data_seed,
             },
             "results": _record_results,
         }
