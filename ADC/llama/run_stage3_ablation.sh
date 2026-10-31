@@ -59,6 +59,11 @@ LM_EVAL_BATCH_SIZE="${LM_EVAL_BATCH_SIZE:-1}"
 # The CE+KL teacher of Stage 3. On the GPU it needs about 5 GB next to the
 # student; fall back to cpu if Stage 3 runs out of memory.
 LORA_TEACHER_DEVICE="${LORA_TEACHER_DEVICE:-cuda}"
+# REUSE_LORA=1 loads a run's saved adapters (checkpoints/<run>/lora_weights.pt)
+# instead of training them, so a finished Stage 3 can be re-evaluated, for
+# example with LM_EVAL=1 or another LM_EVAL_BATCH_SIZE. Runs without the file
+# train as usual.
+REUSE_LORA="${REUSE_LORA:-0}"
 
 OUTPUT_ROOT="${ABLATION_ROOT}"
 RUN_SUFFIX=""
@@ -297,6 +302,11 @@ run_runner() {
   fi
   local output_dir="${OUTPUT_ROOT}/checkpoints/${run_name}"
   mkdir -p "${output_dir}"
+  local -a reuse_args=()
+  if [[ "${REUSE_LORA}" == "1" && -f "${output_dir}/lora_weights.pt" ]]; then
+    reuse_args=(--lora_reload_path "${output_dir}/lora_weights.pt")
+    log "reusing saved adapters of ${run_name}"
+  fi
   run_step "${run_name}" "${LOG_ROOT}/${run_name}.log" \
     "${PYTHON_BIN}" -m ADC.llama.runs.llama_smooth_quant_adc_ptq \
     --model_name "$(model_id_for "${key}")" \
@@ -305,7 +315,8 @@ run_runner() {
     --wandb_run_name "${run_name}" \
     --results_json_path "${RESULTS_DIR}/${run_name}.json" \
     "${COMMON_ARGS[@]}" \
-    "$@"
+    "$@" \
+    ${reuse_args[@]+"${reuse_args[@]}"}
 }
 
 run_no_calib() {
@@ -422,6 +433,7 @@ done
 [[ "${LM_EVAL_BATCH_SIZE}" =~ ^(auto|[1-9][0-9]*)$ ]] \
   || die "LM_EVAL_BATCH_SIZE must be auto or a positive integer"
 [[ "${LORA_TEACHER_DEVICE}" =~ ^(cpu|cuda)$ ]] || die "LORA_TEACHER_DEVICE must be cpu or cuda"
+[[ "${REUSE_LORA}" =~ ^[01]$ ]] || die "REUSE_LORA must be 0 or 1"
 
 LANES=()
 if arm_enabled stage1 || { arm_enabled no_calib && [[ -n "${GPU0_MODELS// /}" ]]; }; then
@@ -437,7 +449,7 @@ mkdir -p "${RESULTS_DIR}" "${LOG_ROOT}"
 log "ARMS=${ARMS} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED} TORCH_DTYPE=${TORCH_DTYPE:-per model} LORA_DTYPE=${LORA_DTYPE}"
 log "no_calib models: GPU 0: ${GPU0_MODELS:-<none>}; GPU 1: ${GPU1_MODELS:-<none>}"
 log "LoRA microbatch ${lora_micro} x ${lora_accum} accumulation"
-log "LM_EVAL=${LM_EVAL} (batch size ${LM_EVAL_BATCH_SIZE}); Stage 3 teacher on ${LORA_TEACHER_DEVICE}"
+log "LM_EVAL=${LM_EVAL} (batch size ${LM_EVAL_BATCH_SIZE}); Stage 3 teacher on ${LORA_TEACHER_DEVICE}; REUSE_LORA=${REUSE_LORA}"
 log "Outputs: ${OUTPUT_ROOT}"
 
 if [[ "${DRY_RUN}" != "1" ]] && command -v flock >/dev/null 2>&1; then

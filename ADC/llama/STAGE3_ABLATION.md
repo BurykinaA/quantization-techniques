@@ -91,7 +91,13 @@ Every Stage 3 run saves its adapters to
 `checkpoints/<run_name>/lora_weights.pt` (about 11 MB for Llama). The runner
 reloads them with `--lora_reload_path <file>` in place of training, so an
 evaluation can be repeated or extended without the hours of Stage 3; the
-model, LoRA flags and `--lora_dtype` must match the saved run.
+model, LoRA flags and `--lora_dtype` must match the saved run. In the script,
+`REUSE_LORA=1` does this for every run whose file exists (runs without one
+train as usual), for example to add downstream or change
+`LM_EVAL_BATCH_SIZE` afterwards. lm-evaluation-harness at batch 1 is bound by
+the kernel launches of the tiled simulation (about 2 requests/s, a day per
+model for the eight tasks); batch 16 is roughly ten times faster and changes
+the scores only by padding arithmetic.
 
 Finished runs are skipped (`SKIP_COMPLETED=1`), and the script exits non-zero
 when any run failed. `SKIP_COMPLETED=0` reruns them: the results record with
