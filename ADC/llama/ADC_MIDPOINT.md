@@ -6,8 +6,11 @@ and dequantization returns its lower edge q·Δ. That leaves an error of about
 out across the tiles of a projection (supplement, Appendix A). Midpoint
 reconstruction (`--adc_midpoint`) returns (q + 0.5)·Δ for every non-saturated
 code. Saturated edge codes keep their edge value. It is a constant digital
-offset, free in hardware, and is applied only at dequantization; calibration
-and the integer MVM are unchanged.
+offset, free in hardware, applied at dequantization; the ADC scale
+calibration and the integer MVM are unchanged. When FlatQuant transforms are
+trained in the same run, the Stage A/B calibration loss reads codes at the
+midpoint too (`run_table2_seeds.sh`, see `TABLE2_SEEDS.md`); the runs below
+reload floor-calibrated transforms, which the flag does not change.
 
 `run_adc_midpoint.sh` reloads the final Stage 1-2 transforms of the transfer
 run (`transfer_results/checkpoints/<key>/adc_transfer/flat_quant_transforms.pt`,

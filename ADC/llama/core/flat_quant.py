@@ -535,7 +535,8 @@ class FlatQuantLinear(nn.Module):
           1. Quantize activations → integer codes
           2. Quantize weights → integer codes (per output channel)
           3. Integer MVM in code domain
-          4. ADC quantization: floor(y / Δ).clamp(na, pa) * Δ  (Eq 2-3)
+          4. ADC quantization: floor(y / Δ).clamp(na, pa) * Δ  (Eq 2-3); with
+             adc_config["midpoint"] non-saturated codes read (q + 0.5) * Δ
           5. Dequantize: multiply by activation and weight scales
         """
         cfg = self._adc_config
@@ -549,6 +550,11 @@ class FlatQuantLinear(nn.Module):
         # MVM, but skip the floor_ste/clamp ADC step so the transforms are
         # calibrated without a converter (matches TiledLinearADC bypass_adc).
         bypass_floor: bool = cfg.get("bypass_floor_ste", False)
+        # Midpoint reconstruction: non-saturated codes dequantize at
+        # (q + 0.5) * delta, as TiledLinearADC does after set_adc_midpoint(True),
+        # so transforms trained with --adc_midpoint see the converter they run
+        # with. Saturated edge codes keep their edge value.
+        midpoint: bool = cfg.get("midpoint", False)
 
         # Quantization bounds (matching QATLinearADC)
         if signed:
@@ -645,7 +651,11 @@ class FlatQuantLinear(nn.Module):
             if bypass_floor:
                 y_adc = y_int
             else:
-                y_adc = floor_ste(y_int / delta).clamp(na, pa) * delta  # [B, out]
+                codes = floor_ste(y_int / delta).clamp(na, pa)           # [B, out]
+                if midpoint:
+                    inside = (codes > na) & (codes < pa)
+                    codes = codes + 0.5 * inside.to(codes.dtype)
+                y_adc = codes * delta
 
             # Accumulate penalties (only when enabled)
             if self._penalty_enabled or self._band_enabled or self._penalty_lambda_center > 0:
@@ -1078,6 +1088,9 @@ def apply_flatquant_to_model(
 
             Optional ``bypass_floor_ste=True`` keeps the tiled integer MVM
             but skips the floor/clamp, giving a converter-free calibration.
+            Optional ``midpoint=True`` dequantizes non-saturated codes at the
+            bin centre, (q + 0.5) * delta, matching
+            ``TiledLinearADC.set_adc_midpoint(True)`` at inference.
     """
     layout = validate_model_layout(model)
     logger.info(

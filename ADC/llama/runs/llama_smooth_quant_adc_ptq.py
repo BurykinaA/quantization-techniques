@@ -3213,12 +3213,21 @@ def main():
                 "mvm_limit": args.mvm_limit,
                 "signed_activations": fq_signed,
                 "bypass_floor_ste": args.fq_bypass_adc_floor,
+                # The calibration loss reads codes the way the converter will
+                # at inference: at the bin centre with --adc_midpoint.
+                "midpoint": args.adc_midpoint,
             }
             if args.fq_bypass_adc_floor:
                 logger.info(
                     "FlatQuant: ADC floor/clamp DISABLED in the calibration loss "
                     "(--fq_bypass_adc_floor); tiling, INT codes, and the integer "
                     "MVM are kept"
+                )
+            if args.adc_midpoint:
+                logger.info(
+                    "FlatQuant: ADC midpoint reconstruction in the calibration "
+                    "loss (--adc_midpoint); newly trained transforms are "
+                    "calibrated against codes read at (q + 0.5) * delta"
                 )
             logger.info(
                 f"FlatQuant ADC config: bx={fq_adc_config['bx']}, bw={fq_adc_config['bw']}, "
