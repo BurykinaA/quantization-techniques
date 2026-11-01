@@ -223,6 +223,10 @@ def build_report(runs: dict[str, dict], suffix: str) -> str:
         "(MMLU 5-shot, the rest 0-shot). std is the sample standard deviation.",
         "",
     ]
+    if suffix == "_smoke":
+        lines += ["**Smoke run:** truncated corpora, one epoch on two sequences and four "
+                  "examples per task. The numbers only show that the pipeline runs; they are "
+                  "not comparable with Table 2.", ""]
     for key, label in MODELS:
         lines += build_model_section(key, label, runs_by_model[key])
     lines += ["## Checks", "", *build_checks(runs_by_model), ""]

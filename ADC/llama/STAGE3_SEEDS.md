@@ -34,9 +34,11 @@ Deviations from the Table 2 runs, all shared by every seed: the CE+KL teacher
 runs on the GPU (`LORA_TEACHER_DEVICE=cuda`), the LoRA microbatch is 2 × 2
 for every model (Llama's 4 × 1 no longer fits with the converter on), and
 lm-evaluation-harness runs at batch 16 (`LM_EVAL_BATCH_SIZE`; batch 1 takes
-about a day per model). Adapters are saved to
+about a day per model). `LM_EVAL=0` skips the downstream tasks, which cuts a
+seed from about 3 hours to about 45 minutes. Adapters are saved to
 `checkpoints/<run>/lora_weights.pt`; `REUSE_LORA=1` reloads them instead of
-training.
+training, so the downstream tasks can be added later for any seed with
+`REUSE_LORA=1 LM_EVAL=1`.
 
 ## Commands
 
@@ -64,6 +66,31 @@ replaced and the old log kept with a timestamp.
 Per seed on one A100: about 20 minutes of calibration and perplexity, 15–20
 minutes of Stage 3, and about 2 hours of downstream at batch 16; the
 `PRE_LORA_LM_EVAL_SEED` run adds a second downstream pass on the backbone.
+
+## Another backbone
+
+The same script trains the Table 2 Stage 3 residual on any saved transforms:
+point `TRANSFORMS_<KEY>` at them, give the run its own `SEEDS_ROOT`, and
+disable the reload guard, which otherwise aborts a run whose converter-on
+perplexity before Stage 3 exceeds 500 (`PRE_LORA_PPL_THRESHOLD`, empty for
+no guard). Example, the Stage 3 ablation arm b): plain FlatQuant transforms
+calibrated without the converter by `run_matched_lora_control.sh`
+(`matched_control_results{,_float16}/checkpoints/<key>/flat_quant_transforms.pt`),
+evaluated with the converter on and then adapted:
+
+```bash
+SEEDS="42" LM_EVAL=0 PRE_LORA_PPL_THRESHOLD="" \
+  SEEDS_ROOT=ADC/llama/stage3_flatquant_results \
+  TRANSFORMS_LLAMA32_1B=ADC/llama/matched_control_results_float16/checkpoints/llama32_1b/flat_quant_transforms.pt \
+  TRANSFORMS_SMOLLM2_17B=ADC/llama/matched_control_results/checkpoints/smollm2_17b/flat_quant_transforms.pt \
+  TRANSFORMS_TINYLLAMA_11B=ADC/llama/matched_control_results/checkpoints/tinyllama_11b/flat_quant_transforms.pt \
+  GPU0_MODELS="" GPU1_MODELS="tinyllama_11b smollm2_17b llama32_1b" \
+  bash ADC/llama/run_stage3_seeds.sh
+```
+
+The summary then labels the backbone "Stages 1–2" and compares with Table 2;
+read the before and after perplexities from the table and ignore those
+labels.
 
 ## Summary
 

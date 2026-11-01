@@ -42,6 +42,11 @@ read -r -a SEED_LIST <<< "${SEEDS}"
 # measured once; the other seeds pass --no_pre_lora_lm_eval.
 PRE_LORA_LM_EVAL_SEED="${PRE_LORA_LM_EVAL_SEED:-${SEED_LIST[0]:-}}"
 DATA_SEED="${DATA_SEED:-1}"
+# The run aborts before Stage 3 when the backbone's converter-on perplexity
+# exceeds this value (a guard against a wrong reload). Empty disables the
+# guard, for a backbone that is expected to be poor with the converter on,
+# such as plain FlatQuant transforms.
+PRE_LORA_PPL_THRESHOLD="${PRE_LORA_PPL_THRESHOLD-500}"
 # Empty: the model's Table 2 dtype (Llama float16, the transfer models
 # bfloat16). A value runs every model in that dtype and suffixes the output
 # directory.
@@ -306,8 +311,8 @@ run_seed() {
     seed_args+=(--lora_data_seed "${seed}")
   fi
   local -a protocol_args=()
-  if [[ "${SMOKE}" != "1" ]]; then
-    protocol_args+=(--pre_lora_ppl_threshold 500)
+  if [[ "${SMOKE}" != "1" && -n "${PRE_LORA_PPL_THRESHOLD}" ]]; then
+    protocol_args+=(--pre_lora_ppl_threshold "${PRE_LORA_PPL_THRESHOLD}")
   fi
   # The transfer protocol check accepts only bfloat16.
   if [[ "${dtype}" == "bfloat16" ]]; then
@@ -382,6 +387,8 @@ done
   || die "TORCH_DTYPE must be empty, float16, bfloat16 or float32, got '${TORCH_DTYPE}'"
 [[ "${LORA_DTYPE}" =~ ^(float32|bfloat16|float16)$ ]] \
   || die "LORA_DTYPE must be float32, bfloat16 or float16, got '${LORA_DTYPE}'"
+[[ -z "${PRE_LORA_PPL_THRESHOLD}" || "${PRE_LORA_PPL_THRESHOLD}" =~ ^[0-9]+(\.[0-9]+)?$ ]] \
+  || die "PRE_LORA_PPL_THRESHOLD must be empty or a number, got '${PRE_LORA_PPL_THRESHOLD}'"
 [[ "${LORA_TEACHER_DEVICE}" =~ ^(cpu|cuda)$ ]] \
   || die "LORA_TEACHER_DEVICE must be cpu or cuda, got '${LORA_TEACHER_DEVICE}'"
 [[ "${LORA_MICROBATCH_SIZE}" =~ ^[1-9][0-9]*$ && "${LORA_GRADIENT_ACCUMULATION_STEPS}" =~ ^[1-9][0-9]*$ ]] \
@@ -405,7 +412,7 @@ LANES=()
 
 mkdir -p "${RESULTS_DIR}" "${LOG_ROOT}"
 
-log "SEEDS=${SEEDS} DATA_SEED=${DATA_SEED} PRE_LORA_LM_EVAL_SEED=${PRE_LORA_LM_EVAL_SEED} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED} REUSE_LORA=${REUSE_LORA}"
+log "SEEDS=${SEEDS} DATA_SEED=${DATA_SEED} PRE_LORA_LM_EVAL_SEED=${PRE_LORA_LM_EVAL_SEED} SMOKE=${SMOKE} DRY_RUN=${DRY_RUN} SKIP_COMPLETED=${SKIP_COMPLETED} REUSE_LORA=${REUSE_LORA} PRE_LORA_PPL_THRESHOLD=${PRE_LORA_PPL_THRESHOLD:-off}"
 log "GPU 0: ${GPU0_MODELS:-<idle>} x seeds ${GPU0_SEEDS}; GPU 1: ${GPU1_MODELS:-<idle>} x seeds ${GPU1_SEEDS}"
 log "TORCH_DTYPE=${TORCH_DTYPE:-per model} LORA_DTYPE=${LORA_DTYPE}; LoRA microbatch ${lora_micro} x ${lora_accum}; teacher on ${LORA_TEACHER_DEVICE}"
 log "LM_EVAL=${LM_EVAL} (batch size ${LM_EVAL_BATCH_SIZE})"
